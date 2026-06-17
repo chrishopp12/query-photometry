@@ -1,0 +1,40 @@
+# -----------------------
+# Python cache / artifacts
+# -----------------------
+__pycache__/
+*.pyc
+
+# -----------------------
+# OS-specific junk
+# -----------------------
+.DS_Store
+
+# -----------------------
+# Data products (images, catalogs, tables)
+# -----------------------
+*.fits
+*.fit
+*.jpg
+*.csv
+*.ecsv
+*.json
+*.txt
+
+# -----------------------
+# Plots and figures
+# -----------------------
+*.png
+*.pdf
+
+# -----------------------
+# Cache / output directories
+# -----------------------
+hst_cache/
+*_output/
+*_output_*/
+
+# -----------------------
+# Local configuration / credentials
+# -----------------------
+.env
+config.*
