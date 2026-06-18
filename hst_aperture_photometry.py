@@ -674,8 +674,8 @@ def plot_curve_of_growth(results, output_path, reference_fluxes=None):
     fig, axes = plt.subplots(1, n_filters, figsize=(5.5 * n_filters, 4.5),
                              squeeze=False)
 
-    colors = {"F475W": "#2166ac", "F606W": "#b2182b", "F814W": "#4dac26",
-              "F435W": "#542788", "F555W": "#d6604d", "F775W": "#878787"}
+    colors = {"F475W": "tab:blue", "F606W": "tab:red", "F814W": "tab:green",
+              "F435W": "tab:purple", "F555W": "tab:orange", "F775W": "tab:gray"}
 
     for i, (filt, data) in enumerate(sorted(results.items())):
         ax = axes[0, i]
@@ -683,7 +683,7 @@ def plot_curve_of_growth(results, output_path, reference_fluxes=None):
         radii = np.array([m["radius_arcsec"] for m in meas])
         fluxes = np.array([m["f_nu_uJy"] for m in meas])
         flux_errs = np.array([m.get("f_nu_uJy_err", 0.0) for m in meas])
-        color = colors.get(filt, "#333333")
+        color = colors.get(filt, "black")
 
         # Data with error bars
         ax.errorbar(radii, fluxes, yerr=flux_errs, fmt="o-", color=color,
@@ -699,7 +699,7 @@ def plot_curve_of_growth(results, output_path, reference_fluxes=None):
 
         # External references
         if reference_fluxes:
-            ref_colors = ["#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"]
+            ref_colors = ["tab:green", "tab:orange", "tab:purple", "tab:brown"]
             for j, (label, flux) in enumerate(reference_fluxes.items()):
                 ax.axhline(flux, color=ref_colors[j % len(ref_colors)],
                            ls=":", lw=1.0, alpha=0.8,

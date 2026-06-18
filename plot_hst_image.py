@@ -61,15 +61,15 @@ from astroquery.mast import Observations
 # Marker styles per catalog source - open symbols for academic look
 CATALOG_STYLES = {
     'Legacy_DR10':     dict(marker='s', facecolors='none', s=70, linewidths=1.4,
-                            edgecolors='#FF6B35', label='Legacy DR10'),
+                            edgecolors='tab:orange', label='Legacy DR10'),
     'PanSTARRS_DR1':   dict(marker='^', facecolors='none', s=80, linewidths=1.4,
-                            edgecolors='#00BFFF', label='Pan-STARRS DR1'),
+                            edgecolors='tab:blue', label='Pan-STARRS DR1'),
     'HST_HAP_segment': dict(marker='o', facecolors='none', s=70, linewidths=1.4,
-                            edgecolors='#76FF03', label='HST HAP (segment)'),
+                            edgecolors='tab:green', label='HST HAP (segment)'),
     'HST_HAP_point':   dict(marker='D', facecolors='none', s=55, linewidths=1.4,
-                            edgecolors='#AEEA00', label='HST HAP (point)'),
+                            edgecolors='tab:olive', label='HST HAP (point)'),
     'HST_HAP':         dict(marker='o', facecolors='none', s=70, linewidths=1.4,
-                            edgecolors='#76FF03', label='HST HAP'),
+                            edgecolors='tab:green', label='HST HAP'),
 }
 DEFAULT_STYLE = dict(marker='D', facecolors='none', s=55, linewidths=1.2,
                      edgecolors='yellow', label='Other')
