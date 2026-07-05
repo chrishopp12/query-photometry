@@ -453,6 +453,7 @@ def run_spherex(
         sersic_from: str | None = None,
         sersic_seeing: float | None = None,
         bkg_size: float = 15.0,
+        mjd_range: list[float] | None = None,
         poll: float = 5.0,
         timeout: float = 3600.0,
         cutout_arcsec: float = 120.0,
@@ -476,7 +477,10 @@ def run_spherex(
     sersic_seeing : float, optional
         PSF FWHM of the shape-fit band (see run_measure).
     bkg_size : float
-        Tool BKG_REGION_SIZE in arcsec. [default: 15]
+        Tool BKG_REGION_SIZE in pixels. [default: 15]
+    mjd_range : [float, float], optional
+        Restrict to visits in this MJD window (the IRSA workaround for
+        broken-metadata epochs).
 
     Returns
     -------
@@ -525,8 +529,9 @@ def run_spherex(
         tool_model = spherex_mod.sersic_from_shape(shape_sky)
 
     result = spherex_mod.fetch(coord, out_dir=out_dir, model=tool_model,
-                               bkg_region_size=bkg_size, poll=poll,
-                               timeout=timeout)
+                               bkg_region_size=bkg_size,
+                               mjd_range=tuple(mjd_range) if mjd_range else None,
+                               poll=poll, timeout=timeout)
     print(f"\n  spherex {result.status}: {result.message}")
     return result
 

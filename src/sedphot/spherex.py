@@ -133,11 +133,17 @@ def _table_id() -> str:
 
 
 def build_server_request(ra, dec, model=None, bkg_region_size=15,
-                         tbl_id=None, job_id=None, ff_session_id=None):
+                         mjd_range=None, tbl_id=None, job_id=None,
+                         ff_session_id=None):
     """Build the Firefly ServerRequest dict for SpectrophotometryProcessor.
 
     model=None -> point-source forced photometry (shapeFit=false); a Sersic
-    -> elliptical model with the shape fields the GUI sends.
+    -> elliptical model with the shape fields the GUI sends. mjd_range
+    (start, end) limits the visits used -- the GUI's "Time Range / MJD
+    values" fields (startTime/endTime, sniffed from the live GUI
+    2026-07-05), which map to the UWS TIME parameter. The IRSA helpdesk's
+    prescribed workaround for the 2026-06/07 missing-metadata pipeline
+    failures is exactly such a cut to the "good" MJD window.
     """
     tbl_id = tbl_id or _table_id()
     req = {
@@ -154,6 +160,10 @@ def build_server_request(ra, dec, model=None, bkg_region_size=15,
         "tbl_id": tbl_id,
         "META_INFO": {"title": "Spectrophotometry Targets", "tbl_id": tbl_id},
     }
+    if mjd_range is not None:
+        start, end = sorted(float(v) for v in mjd_range)
+        req["startTime"] = f"{start:.7f}".rstrip('0').rstrip('.')
+        req["endTime"] = f"{end:.7f}".rstrip('0').rstrip('.')
     if model is not None:
         req.update({
             "shapeFit": "true",
@@ -192,7 +202,7 @@ def make_session(bootstrap=True):
 
 
 def submit_firefly(session, ra, dec, model=None, bkg_region_size=15,
-                   ff_session_id=None):
+                   mjd_range=None, ff_session_id=None):
     """Submit a spectrophotometry job via Firefly.
 
     Returns (firefly_job_id, uws_url_or_None): the submit response either
@@ -201,6 +211,7 @@ def submit_firefly(session, ra, dec, model=None, bkg_region_size=15,
     """
     req = build_server_request(ra, dec, model=model,
                                bkg_region_size=bkg_region_size,
+                               mjd_range=mjd_range,
                                ff_session_id=ff_session_id)
     resp = session.post(
         CMDSRV_ASYNC,
@@ -338,8 +349,9 @@ def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None):
 
 
 def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
-                            out_csv=None, session=None, ff_session_id=None,
-                            poll=5, timeout=3600, verbose=True):
+                            mjd_range=None, out_csv=None, session=None,
+                            ff_session_id=None, poll=5, timeout=3600,
+                            verbose=True):
     """End-to-end: submit -> wait -> download the per-exposure table.
 
     Returns a DataFrame (also written to out_csv if given).
@@ -352,6 +364,7 @@ def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
 
     fjob, uws_url = submit_firefly(session, ra, dec, model=model,
                                    bkg_region_size=bkg_region_size,
+                                   mjd_range=mjd_range,
                                    ff_session_id=ff_session_id)
     log("submitted; firefly job", fjob)
 
@@ -394,7 +407,7 @@ def elliptical_param(ra, dec, model):
 
 
 def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
-                      token=None):
+                      mjd_range=None, token=None):
     """Create a job straight on the UWS service. Returns the job URL.
 
     Gated: a direct POST returns 403 for guests; supply token once IRSA
@@ -406,6 +419,9 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
         data["ELLIPTICAL"] = elliptical_param(ra, dec, model)
     else:
         data["POINT"] = f"{ra},{dec}"
+    if mjd_range is not None:
+        start, end = sorted(float(v) for v in mjd_range)
+        data["TIME"] = f"{start},{end}"
     response = session.post(UWS_ASYNC, data=data, headers=headers,
                             allow_redirects=True, timeout=60)
     response.raise_for_status()
@@ -416,12 +432,19 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
 # Provider-style wrapper
 # ------------------------------------
 def fetch(coord, *, out_dir, model: Sersic | None = None,
-          bkg_region_size: float = 15, poll: float = 5,
-          timeout: float = 3600) -> ProviderResult:
+          bkg_region_size: float = 15, mjd_range: tuple | None = None,
+          poll: float = 5, timeout: float = 3600) -> ProviderResult:
     """Fetch the raw SPHEREx table into <out_dir>/Photometry/SPHEREx/.
 
     Refuses to overwrite an existing table (raw tables may be irreplaceable
     hand downloads); prints the manual-GUI recipe on service failure.
+
+    Parameters
+    ----------
+    mjd_range : (float, float), optional
+        Restrict to visits in this MJD window (the GUI's Time Range). The
+        IRSA-prescribed workaround for pipeline failures on files with
+        broken metadata is a cut to the known-good window.
 
     Returns
     -------
@@ -442,8 +465,8 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
     try:
         df = fetch_spectrophotometry(
             float(coord.ra.deg), float(coord.dec.deg), model=model,
-            bkg_region_size=bkg_region_size, out_csv=str(out_csv),
-            poll=poll, timeout=timeout)
+            bkg_region_size=bkg_region_size, mjd_range=mjd_range,
+            out_csv=str(out_csv), poll=poll, timeout=timeout)
     except Exception as e:
         print(f"  [spherex] fetch failed: {type(e).__name__}: {e}")
         print(f"  [spherex] {MANUAL_RECIPE}")
@@ -456,7 +479,8 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         "model": ("point" if model is None else
                   {"type": "sersic", "n": model.n, "axis_ratio": model.axis_ratio,
                    "pa_deg": model.pa_deg, "reff_arcsec": model.reff_arcsec}),
-        "bkg_region_size_arcsec": bkg_region_size,
+        "bkg_region_size_px": int(round(float(bkg_region_size))),
+        "mjd_range": list(mjd_range) if mjd_range else None,
         "service": UWS_BASE,
         "n_rows": len(df),
         "columns": list(df.columns),

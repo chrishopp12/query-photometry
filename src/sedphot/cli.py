@@ -108,6 +108,7 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
         sersic_from=args.sersic_from,
         sersic_seeing=args.sersic_seeing,
         bkg_size=args.bkg_size,
+        mjd_range=args.mjd_range,
         poll=args.poll,
         timeout=args.timeout,
         legacy_dr=args.legacy_dr,
@@ -270,7 +271,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_spherex.add_argument('--sersic-seeing', type=float, default=None,
                            help="PSF FWHM (arcsec) of the shape-fit band")
     p_spherex.add_argument('--bkg-size', type=float, default=15.0,
-                           help="Background estimation region, arcsec [default: 15]")
+                           help="Background estimation region, pixels [default: 15]")
+    p_spherex.add_argument('--mjd-range', nargs=2, type=float, default=None,
+                           metavar=('MJD_START', 'MJD_END'),
+                           help="Restrict to visits in this MJD window (the IRSA "
+                                "workaround for broken-metadata epochs)")
     p_spherex.add_argument('--poll', type=float, default=5.0,
                            help="Job poll interval, seconds [default: 5]")
     p_spherex.add_argument('--timeout', type=float, default=3600.0,
