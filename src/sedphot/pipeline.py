@@ -33,7 +33,7 @@ from .images import IMAGE_PROVIDERS
 from .measure.aperture import measure_aperture, measurement_to_row
 from .measure.masks import load_user_mask
 from .provenance import write_sidecar
-from .qa import plot_growth_curves, qa_band_figure
+from .qa import plot_growth_curves, qa_band_figure, qa_forced_figure
 from .results import (
     STATUS_ERROR,
     STATUS_OK,
@@ -150,12 +150,81 @@ def run_catalogs(
 # ------------------------------------
 # Measurement driver
 # ------------------------------------
+def _resolve_shape(products, coord, *, sersic_from, sersic_params,
+                   sky_in, sky_out, cutout_half_arcsec, user_mask,
+                   protect_radius, sersic_seeing=None):
+    """Resolve the sky-frame Sersic shape for forced mode.
+
+    Explicit --sersic-params wins; otherwise the shape is fit on the
+    requested band ('z' or 'Legacy_z'), defaulting to the reddest available
+    optical band (the A1925 convention was a frozen z-band fit).
+    """
+    from .measure.aperture import prepare_stamp
+    from .measure.sersic import SERSIC_N_MAX, fit_sersic_shape, pa_east_of_north
+
+    if sersic_params is not None:
+        n, axis_ratio, pa_deg, reff_arcsec = [float(v) for v in sersic_params]
+        if axis_ratio < 1.0:
+            raise ValueError("--sersic-params axis_ratio is a/b >= 1")
+        shape_sky = dict(n=n, reff_arcsec=reff_arcsec,
+                         ellip=1.0 - 1.0 / axis_ratio, pa_deg=pa_deg % 180.0)
+        return shape_sky, {'source': 'explicit parameters'}
+
+    if not products:
+        raise ValueError("sersic mode needs at least one fetched image "
+                         "(or --sersic-params)")
+
+    if sersic_from is not None:
+        wanted = sersic_from.lower()
+        matches = [p for p in products
+                   if p.band.lower() == wanted
+                   or f"{p.instrument}_{p.band}".lower() == wanted]
+        if not matches:
+            available = [f"{p.instrument}_{p.band}" for p in products]
+            raise ValueError(f"--sersic-from {sersic_from!r} matches none of "
+                             f"the fetched images: {available}")
+        shape_product = matches[0]
+    else:
+        preference = ['z', 'y', 'i', 'r', 'g', 'u']
+        ranked = sorted(products,
+                        key=lambda p: preference.index(p.band.lower())
+                        if p.band.lower() in preference else 99)
+        shape_product = ranked[0]
+
+    seeing = sersic_seeing if sersic_seeing is not None else shape_product.seeing_arcsec
+    if sersic_seeing is None:
+        print(f"  WARNING shape fit assumes PSF FWHM = {seeing:.2f}\" (a typical "
+              f"value, not measured) -- n and r_eff are PSF-sensitive; supply "
+              f"--sersic-seeing, or --sersic-params from a trusted fit")
+    prep = prepare_stamp(shape_product, coord,
+                         cutout_half_arcsec=cutout_half_arcsec,
+                         sky_in=sky_in, sky_out=sky_out, user_mask=user_mask,
+                         protect_radius=protect_radius)
+    fit = fit_sersic_shape(prep['stamp'], prep['sky_std'], prep['cx'], prep['cy'],
+                           prep['pixscale'], seeing,
+                           mask=prep['mask'])
+    if not fit['success']:
+        print("  WARNING shape fit did not converge cleanly; inspect the QA")
+    if fit['n'] >= SERSIC_N_MAX - 0.05:
+        print(f"  WARNING fitted n={fit['n']:.2f} sits at the fit bound")
+    pa_deg = pa_east_of_north(prep['stamp_wcs'], fit['xc'], fit['yc'], fit['theta'])
+    shape_sky = dict(n=fit['n'], reff_arcsec=fit['reff_arcsec'],
+                     ellip=fit['ellip'], pa_deg=pa_deg)
+    origin = {'source': f"fit on {shape_product.instrument}_{shape_product.band} "
+                        f"(redchi2 {fit['redchi2']:.2f})",
+              'band': f"{shape_product.instrument}_{shape_product.band}",
+              'assumed_seeing_arcsec': seeing,
+              'redchi2': round(fit['redchi2'], 3)}
+    return shape_sky, origin
+
+
 def run_measure(
         coord: SkyCoord,
         label: str,
         out_dir: str | Path,
         *,
         instruments: list[str],
+        mode: str = 'aperture',
         bands: list[str] | None = None,
         aperture_arcsec: float = 10.0,
         sky_in: float = 30.0,
@@ -165,6 +234,9 @@ def run_measure(
         mask_file: str | None = None,
         mask_ref: str | None = None,
         protect_radius: float = 4.0,
+        sersic_from: str | None = None,
+        sersic_params: list[float] | None = None,
+        sersic_seeing: float | None = None,
         legacy_dr: str = 'dr9',
         legacy_bricks: bool = False,
         target_name: str | None = None,
@@ -181,10 +253,13 @@ def run_measure(
         Galaxy directory; images cache under <out_dir>/Photometry/<Inst>/.
     instruments : list[str]
         Provider names from images.IMAGE_PROVIDERS.
+    mode : str
+        'aperture' (curve-of-growth aperture flux) or 'sersic' (forced
+        single-Sersic amplitude with one shared sky shape). [default: 'aperture']
     bands : list[str], optional
         Band subset applied to every provider. [default: provider defaults]
     aperture_arcsec : float
-        Aperture radius. [default: 10.0]
+        Aperture radius (aperture mode). [default: 10.0]
     sky_in, sky_out : float
         Background annulus (arcsec); must clear the source envelope.
         [default: 30-45]
@@ -198,6 +273,12 @@ def run_measure(
         Reference image whose WCS an .npz mask's grid is defined on.
     protect_radius : float
         Auto-mask protection radius around the target. [default: 4.0]
+    sersic_from : str, optional
+        Sersic mode: fit the shape on this band ('z' or 'Legacy_z').
+        [default: reddest available optical band]
+    sersic_params : list of float, optional
+        Sersic mode: explicit shape [n, axis_ratio(a/b), pa_deg(E of N),
+        reff_arcsec] -- skips the fit.
     legacy_dr : str
         Legacy release for the image provider. [default: 'dr9']
     legacy_bricks : bool
@@ -231,6 +312,8 @@ def run_measure(
     measurements: list[dict] = []
     rows: list[dict] = []
 
+    # Phase 1 -- fetch every provider's images.
+    fetched_products: list[tuple[str, list[ImageProduct]]] = []
     for name in instruments:
         print(f"=== {name} images ===")
         cache_dir = phot_dir / instrument_dirs.get(name, name)
@@ -244,34 +327,64 @@ def run_measure(
         except Exception as e:
             fetched = ProviderResult(provider=name, status=STATUS_ERROR,
                                      message=f"{type(e).__name__}: {e}")
-
         if isinstance(fetched, ProviderResult):
             results.append(fetched)
-            print(f"  {fetched.status}: {fetched.message}\n")
-            continue
+            print(f"  {fetched.status}: {fetched.message}")
+        else:
+            fetched_products.append((name, fetched))
+            print(f"  {len(fetched)} band image(s) ready")
+    print()
 
-        products: list[ImageProduct] = fetched
+    # Phase 2 -- sersic mode: resolve the one sky shape all bands share.
+    shape_sky = None
+    shape_origin = None
+    if mode == 'sersic':
+        all_products = [p for _, products in fetched_products for p in products]
+        shape_sky, shape_origin = _resolve_shape(
+            all_products, coord, sersic_from=sersic_from,
+            sersic_params=sersic_params, sky_in=sky_in, sky_out=sky_out,
+            cutout_half_arcsec=cutout_arcsec / 2.0, user_mask=user_mask,
+            protect_radius=protect_radius, sersic_seeing=sersic_seeing)
+        print(f"Forced shape: n={shape_sky['n']:.2f}, "
+              f"reff={shape_sky['reff_arcsec']:.2f}\", "
+              f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
+              f"({shape_origin['source']})\n")
+
+    # Phase 3 -- measure every band.
+    for name, products in fetched_products:
+        cache_dir = phot_dir / instrument_dirs.get(name, name)
         provider_rows: list[dict] = []
         measured_bands: list[str] = []
         for product in products:
             try:
-                measurement = measure_aperture(
-                    product, coord,
-                    aperture_arcsec=aperture_arcsec,
-                    sky_in=sky_in, sky_out=sky_out,
-                    cutout_half_arcsec=cutout_arcsec / 2.0,
-                    rgrid=np.asarray(rgrid, dtype=float) if rgrid else None,
-                    user_mask=user_mask,
-                    protect_radius=protect_radius,
-                )
+                if mode == 'sersic':
+                    from .measure.sersic import forced_to_row, measure_forced
+                    measurement = measure_forced(
+                        product, coord, shape_sky,
+                        sky_in=sky_in, sky_out=sky_out,
+                        cutout_half_arcsec=cutout_arcsec / 2.0,
+                        user_mask=user_mask, protect_radius=protect_radius,
+                        rgrid=np.asarray(rgrid, dtype=float) if rgrid else None)
+                    row = forced_to_row(measurement)
+                    figure = qa_forced_figure(measurement, cache_dir / "QA")
+                else:
+                    measurement = measure_aperture(
+                        product, coord,
+                        aperture_arcsec=aperture_arcsec,
+                        sky_in=sky_in, sky_out=sky_out,
+                        cutout_half_arcsec=cutout_arcsec / 2.0,
+                        rgrid=np.asarray(rgrid, dtype=float) if rgrid else None,
+                        user_mask=user_mask,
+                        protect_radius=protect_radius)
+                    row = measurement_to_row(measurement)
+                    figure = qa_band_figure(measurement, cache_dir / "QA")
             except Exception as e:
                 print(f"  {product.instrument} {product.band} FAILED: "
                       f"{type(e).__name__}: {e}")
                 continue
             measurements.append(measurement)
-            provider_rows.append(measurement_to_row(measurement))
+            provider_rows.append(row)
             measured_bands.append(product.band)
-            figure = qa_band_figure(measurement, cache_dir / "QA")
             print(f"  {product.instrument} {product.band}: "
                   f"{measurement['flux_ujy']:.1f} +/- "
                   f"{measurement['flux_err_ujy']:.1f} uJy "
@@ -298,11 +411,13 @@ def run_measure(
     out_csv = phot_dir / f"{label}_measured.csv"
     measured_df.to_csv(out_csv, index=False)
     write_sidecar(out_csv, {
-        "kind": "aperture_photometry",
+        "kind": f"{mode}_photometry",
         "target": {"name": target_name, "label": label,
                    "ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
         "instruments": instruments,
-        "aperture_arcsec": aperture_arcsec,
+        "mode": mode,
+        "aperture_arcsec": aperture_arcsec if mode == 'aperture' else None,
+        "sersic_shape": {**shape_sky, **shape_origin} if shape_sky else None,
         "sky_annulus_arcsec": [sky_in, sky_out],
         "cutout_arcsec": cutout_arcsec,
         "mask": {"mode": "user" if mask_file else "auto",

@@ -102,14 +102,14 @@ def _cmd_catalogs(args: argparse.Namespace) -> None:
 def _cmd_measure(args: argparse.Namespace) -> None:
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
-    if args.mode != 'aperture':
-        print("error: --mode sersic lands with the forced-Sersic milestone; "
-              "only 'aperture' is available", file=sys.stderr)
-        sys.exit(2)
     run_measure(
         coord, label, args.out_dir,
         instruments=instruments,
+        mode=args.mode,
         bands=args.bands,
+        sersic_from=args.sersic_from,
+        sersic_params=args.sersic_params,
+        sersic_seeing=args.sersic_seeing,
         aperture_arcsec=args.aperture,
         sky_in=args.sky_in,
         sky_out=args.sky_out,
@@ -191,6 +191,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_measure.add_argument('--protect-radius', type=float, default=4.0,
                            help="Auto-mask: radius never masked around the "
                                 "target, arcsec [default: 4.0]")
+    p_measure.add_argument('--sersic-from', type=str, default=None,
+                           help="Sersic mode: fit the shape on this band "
+                                "('z' or 'Legacy_z') [default: reddest optical]")
+    p_measure.add_argument('--sersic-params', nargs=4, type=float, default=None,
+                           metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
+                           help="Sersic mode: explicit shape (n, a/b >= 1, "
+                                "PA deg E of N, r_eff arcsec) -- skips the fit")
+    p_measure.add_argument('--sersic-seeing', type=float, default=None,
+                           help="PSF FWHM (arcsec) of the shape-fit band; the "
+                                "fitted n and r_eff are PSF-sensitive "
+                                "[default: the provider's typical value, warned]")
     p_measure.add_argument('--legacy-dr', type=str, default='dr9',
                            choices=('dr10', 'dr9'),
                            help="Legacy release for images [default: dr9]")
