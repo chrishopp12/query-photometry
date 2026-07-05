@@ -1,54 +1,110 @@
-# photometry
+# sedphot
 
-Source photometry tools for archival survey and HST data: multi-archive
-retrieval for SED fitting, HST aperture curve-of-growth measurement, and
-overlay verification plots. Each script is a standalone command-line tool.
-
-## Scripts
-
-### `phot_coord_search.py`
-
-Retrieve archival photometry for a single sky position from Legacy Survey DR10
-(grz + WISE W1/W2), Pan-STARRS DR1 (grizy), and HST HAP (per-band), converted
-to a common flux unit (uJy) and AB magnitude. Writes one CSV row per band,
-intended as input for SED fitting (e.g. Prospector).
+Galaxy in, SED photometry out. Give it a name or a position and it retrieves
+catalog photometry from the common archives, fetches images and measures
+uniform aperture (or forced single-Sersic) fluxes, optionally pulls SPHEREx
+spectrophotometry, and writes SED-ready tables with QA figures and provenance
+sidecars.
 
 ```bash
-python phot_coord_search.py --ra 150.0 --dec 2.2 --radius 2.0 --out target.csv
-python phot_coord_search.py --ra 150.0 --dec 2.2 --no-panstarrs
+pip install -e .
+
+# resolve a name
+sedphot resolve --name "SDSS J142800.81+570046.3"
+
+# catalog photometry from every archive, with graceful per-provider fallback
+sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87
+
+# fetch images and measure every band with one identical aperture recipe
+sedphot measure --ra 216.988087 --dec 56.9878 --instruments cfht legacy \
+    --aperture 25.5 --sky-in 30 --sky-out 43 --legacy-dr dr9
+
+# the flagship: everything, then a combined SED plot
+sedphot run --name "SDSS J142800.81+570046.3" --out-dir Galaxies/control_0
 ```
 
-### `hst_aperture_photometry.py`
+## Verbs
 
-Curve-of-growth aperture photometry on HST ACS/WFC drizzled (DRC) images, with
-comparison to the HAP point and segment catalog values. Queries MAST, downloads
-the DRC science and weight images, measures circular-aperture flux at a range of
-radii with sigma-clipped annulus background subtraction, and writes a
-curve-of-growth plot and a summary table.
+| Verb | What it does |
+|---|---|
+| `resolve`  | Name -> ICRS position (Sesame -> NED -> SIMBAD) + output label |
+| `catalogs` | Closest-source photometry from the catalog archives -> `<label>_catalog.csv` |
+| `measure`  | Fetch images, measure every band -> `<label>_measured.csv` + QA figures |
+| `spherex`  | Raw SPHEREx spectrophotometry table (IRSA), PSF or forced-Sersic model |
+| `sed`      | Combined flux-vs-wavelength figure from the tables in `out-dir` |
+| `run`      | catalogs -> measure -> SPHEREx (opt-in) -> SED plot |
 
-```bash
-python hst_aperture_photometry.py 150.0 2.2 --proposal-id 12345
+## Providers
+
+Catalogs: `legacy` (Tractor via Datalab TAP; optical + unWISE-forced WISE,
+MW transmission carried per band, dr9/dr10), `panstarrs` (VizieR),
+`sdss` (DR17 cModel + native extinction), `galex` (GUVcat_AIS via VizieR),
+`jplus` (DR3 PSFCOR via the CEFCA TAP), `allwise` (IRSA, Vega->AB),
+`hst` (HAP point/segment catalogs via MAST).
+
+Images (for `measure`): `legacy` (viewer cutouts, or NERSC bricks with real
+inverse variance via `--legacy-bricks`), `panstarrs` (fitscut stacks),
+`sdss` (frames), `cfht` (MegaPipe stacks via CADC SODA), `hst` (HAP drizzled
+mosaics, any instrument, DRC/DRZ).
+
+Every provider reports `ok / no_coverage / no_match / error` into
+`coverage_*.json` and the run continues -- one dead service never kills a
+fetch-all.
+
+## Output conventions
+
+```
+<out-dir>/Photometry/
+    <label>_catalog.csv  (+ .provenance.json)
+    <label>_measured.csv (+ .provenance.json)
+    <label>_sed.png
+    coverage_catalogs.json / coverage_measure.json
+    Legacy/ PanSTARRS/ SDSS/ CFHT/ HST/     cached images + QA/ figures
+    SPHEREx/table_photometry.csv            raw per-visit x channel table, verbatim
 ```
 
-### `plot_hst_image.py`
+Tables share one schema (the v1 `OUT_COLS` plus `retrieved`,
+`mw_transmission`, `dered_applied`): `band, flux_uJy, flux_err_uJy, mag_AB,
+mag_err, target_ra, target_dec, match_ra, match_dec, sep_arcsec, flags,
+source, ...`. Fluxes are microjansky, AB throughout; errors are statistical
+only (error floors belong to the SED fitter); negative catalog fluxes are
+legitimate non-detections and are preserved; fluxes are as-measured unless
+`--dered` is passed (per-row corrections recorded). Band labels are
+`<Instrument>_<filter>`; measurement provenance lives in `source` (unWISE
+vs AllWISE both label their bands `WISE_Wn` and differ in `source`).
 
-Overlay matched photometry positions (from `phot_coord_search.py` CSVs) on the
-HAP color composite image, with a wide context panel and a zoomed detail panel
-per target, for visual verification of the matches.
+## Measurement recipe
 
-```bash
-python plot_hst_image.py photometry.csv [more_photometry.csv ...]
-```
+One recipe for every instrument: stamp at the target -> neighbor mask ->
+sigma-clipped annulus sky (with matched-filter rejection of bright annulus
+sources) -> azimuthal-profile fill of masked pixels -> curve of growth ->
+aperture flux. Errors use the archive's inverse variance when it exists
+(Legacy bricks, HST weights), sky rms otherwise.
+
+The auto-mask subtracts the target's own elliptical-median profile and
+detects neighbors on the residual, so it does not eat the galaxy's envelope;
+for pathological targets (bright asymmetric cD envelopes) pass a custom
+`--mask` (`.npz` staged masks pair with `--mask-ref` for their WCS). A
+warning fires when more than 20% of the aperture is masked.
+
+`--mode sersic` forces one sky-frame Sersic shape (from `--sersic-params`,
+or fit on a band with `--sersic-from`) across all bands and solves only the
+amplitude -- profile-matched photometry, the convention behind the SPHEREx
+work. Fitted n and r_eff are PSF-sensitive: supply `--sersic-seeing`, or
+use `--sersic-params` from a trusted fit.
+
+## Legacy scripts
+
+`phot_coord_search.py`, `hst_aperture_photometry.py`, and
+`plot_hst_image.py` remain standalone and untouched; `sedphot catalogs`
+reproduces `phot_coord_search.py` row-for-row (validated 2026-07-05), and
+the HST curve-of-growth workflow lives on in `hst_aperture_photometry.py`
+until its specialized outputs are folded in.
 
 ## Requirements
 
-Python 3.9+, with: numpy, scipy, pandas, matplotlib, astropy, astroquery,
-photutils, pillow.
-
-## Outputs
-
-All data products (CSVs, FITS, catalogs, plots, cache directories) are written
-to the working directory and are gitignored; only the code is tracked.
+Python 3.11+; numpy, scipy, pandas, astropy, astroquery, photutils,
+matplotlib, requests, defusedxml (see `pyproject.toml`).
 
 ## License
 

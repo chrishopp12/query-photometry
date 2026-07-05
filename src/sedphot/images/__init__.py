@@ -14,11 +14,12 @@ error) instead of raising when the archive has nothing here.
 """
 from __future__ import annotations
 
-from . import cfht, legacy, panstarrs, sdss
+from . import cfht, hst, legacy, panstarrs, sdss
 
 IMAGE_PROVIDERS = {
     'sdss': sdss.fetch,
     'panstarrs': panstarrs.fetch,
     'legacy': legacy.fetch,
     'cfht': cfht.fetch,
+    'hst': hst.fetch,
 }

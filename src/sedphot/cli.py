@@ -33,7 +33,7 @@ import sys
 
 from .catalogs import CATALOG_PROVIDERS
 from .images import IMAGE_PROVIDERS
-from .pipeline import run_catalogs, run_measure
+from .pipeline import run_all, run_catalogs, run_measure, run_sed, run_spherex
 from .resolve import resolve_target
 
 
@@ -99,6 +99,47 @@ def _cmd_catalogs(args: argparse.Namespace) -> None:
     )
 
 
+def _cmd_spherex(args: argparse.Namespace) -> None:
+    coord, label = _resolve_from_args(args)
+    run_spherex(
+        coord, label, args.out_dir,
+        model=args.model,
+        sersic_params=args.sersic_params,
+        sersic_from=args.sersic_from,
+        sersic_seeing=args.sersic_seeing,
+        bkg_size=args.bkg_size,
+        poll=args.poll,
+        timeout=args.timeout,
+        legacy_dr=args.legacy_dr,
+        target_name=args.name,
+    )
+
+
+def _cmd_sed(args: argparse.Namespace) -> None:
+    run_sed(args.label, args.out_dir)
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    coord, label = _resolve_from_args(args)
+    run_all(
+        coord, label, args.out_dir,
+        skip=args.skip,
+        radius_arcsec=args.radius,
+        dered=args.dered,
+        aperture_arcsec=args.aperture,
+        sky_in=args.sky_in,
+        sky_out=args.sky_out,
+        cutout_arcsec=args.cutout_size,
+        mask_file=args.mask,
+        mask_ref=args.mask_ref,
+        spherex_model=args.spherex,
+        sersic_params=args.sersic_params,
+        legacy_dr=args.legacy_dr,
+        legacy_bricks=args.legacy_bricks,
+        target_name=args.name,
+    )
+
+
 def _cmd_measure(args: argparse.Namespace) -> None:
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
@@ -120,6 +161,7 @@ def _cmd_measure(args: argparse.Namespace) -> None:
         protect_radius=args.protect_radius,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )
 
@@ -208,7 +250,79 @@ def build_parser() -> argparse.ArgumentParser:
     p_measure.add_argument('--legacy-bricks', action='store_true',
                            help="Fetch NERSC brick coadds (image + invvar; "
                                 "real per-pixel errors, ~40 MB/file)")
+    p_measure.add_argument('--hst-proposal-id', type=str, default=None,
+                           help="Restrict the HST provider to one program")
     p_measure.set_defaults(func=_cmd_measure)
+
+    p_spherex = subparsers.add_parser(
+        "spherex", help="Fetch the raw SPHEREx spectrophotometry table (IRSA)")
+    _add_target_args(p_spherex)
+    p_spherex.add_argument('--model', type=str, default='psf',
+                           choices=('psf', 'sersic'),
+                           help="Forced-photometry source model [default: psf]")
+    p_spherex.add_argument('--sersic-params', nargs=4, type=float, default=None,
+                           metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
+                           help="Sersic mode: explicit shape (n<=6, a/b >= 1, "
+                                "PA deg E of N, r_eff arcsec)")
+    p_spherex.add_argument('--sersic-from', type=str, default=None,
+                           help="Sersic mode: fit the shape on this band first "
+                                "('Legacy_z' or 'z') [default: Legacy z]")
+    p_spherex.add_argument('--sersic-seeing', type=float, default=None,
+                           help="PSF FWHM (arcsec) of the shape-fit band")
+    p_spherex.add_argument('--bkg-size', type=float, default=15.0,
+                           help="Background estimation region, arcsec [default: 15]")
+    p_spherex.add_argument('--poll', type=float, default=5.0,
+                           help="Job poll interval, seconds [default: 5]")
+    p_spherex.add_argument('--timeout', type=float, default=3600.0,
+                           help="Job timeout, seconds [default: 3600]")
+    p_spherex.add_argument('--legacy-dr', type=str, default='dr9',
+                           choices=('dr10', 'dr9'),
+                           help="Legacy release for a shape-fit image [default: dr9]")
+    p_spherex.set_defaults(func=_cmd_spherex)
+
+    p_sed = subparsers.add_parser(
+        "sed", help="Combined SED plot from the tables already in out-dir")
+    p_sed.add_argument('--out-dir', type=str, default=".",
+                       help="Galaxy directory [default: .]")
+    p_sed.add_argument('--label', type=str, default=None,
+                       help="Output stem [default: inferred when unambiguous]")
+    p_sed.set_defaults(func=_cmd_sed)
+
+    all_providers = sorted(set(CATALOG_PROVIDERS) | set(IMAGE_PROVIDERS))
+    p_run = subparsers.add_parser(
+        "run", help="Galaxy in, SED photometry out: catalogs + measurement "
+                    "+ optional SPHEREx + SED plot")
+    _add_target_args(p_run)
+    p_run.add_argument('--skip', nargs='+', default=None, choices=all_providers,
+                       help="Providers to leave out")
+    p_run.add_argument('--radius', type=float, default=2.0,
+                       help="Catalog search radius, arcsec [default: 2.0]")
+    p_run.add_argument('--dered', action='store_true',
+                       help="Apply MW dereddening to catalog fluxes")
+    p_run.add_argument('--aperture', type=float, default=10.0,
+                       help="Aperture radius, arcsec [default: 10.0]")
+    p_run.add_argument('--sky-in', type=float, default=30.0,
+                       help="Sky annulus inner radius, arcsec [default: 30]")
+    p_run.add_argument('--sky-out', type=float, default=45.0,
+                       help="Sky annulus outer radius, arcsec [default: 45]")
+    p_run.add_argument('--cutout-size', type=float, default=120.0,
+                       help="Stamp width, arcsec [default: 120]")
+    p_run.add_argument('--mask', type=str, default=None,
+                       help="User mask file instead of the auto-mask")
+    p_run.add_argument('--mask-ref', type=str, default=None,
+                       help="Reference image for an .npz mask's WCS")
+    p_run.add_argument('--spherex', type=str, default='off',
+                       choices=('off', 'psf', 'sersic'),
+                       help="Also fetch SPHEREx spectrophotometry [default: off]")
+    p_run.add_argument('--sersic-params', nargs=4, type=float, default=None,
+                       metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
+                       help="Shape for --spherex sersic")
+    p_run.add_argument('--legacy-dr', type=str, default='dr9',
+                       choices=('dr10', 'dr9'),
+                       help="Legacy Surveys data release [default: dr9]")
+    p_run.add_argument('--legacy-bricks', action='store_true',
+                       help="Fetch NERSC bricks instead of viewer cutouts")
+    p_run.set_defaults(func=_cmd_run)
 
     return parser
 

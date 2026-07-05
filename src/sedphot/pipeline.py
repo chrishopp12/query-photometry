@@ -239,6 +239,7 @@ def run_measure(
         sersic_seeing: float | None = None,
         legacy_dr: str = 'dr9',
         legacy_bricks: bool = False,
+        hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> pd.DataFrame:
     """Fetch images from the requested providers and measure every band.
@@ -307,7 +308,7 @@ def run_measure(
           f"(aperture {aperture_arcsec:g}\", sky {sky_in:g}-{sky_out:g}\")\n")
 
     instrument_dirs = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
-                      'sdss': 'SDSS', 'cfht': 'CFHT'}
+                      'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
     results: list[ProviderResult] = []
     measurements: list[dict] = []
     rows: list[dict] = []
@@ -322,6 +323,8 @@ def run_measure(
                          'cache_dir': cache_dir}
         if name == 'legacy':
             options.update(dr=legacy_dr, use_bricks=legacy_bricks)
+        if name == 'hst' and hst_proposal_id:
+            options.update(proposal_id=hst_proposal_id)
         try:
             fetched = fetch(coord, **options)
         except Exception as e:
@@ -435,3 +438,201 @@ def run_measure(
     print(measured_df.to_string(index=False))
 
     return measured_df
+
+
+# ------------------------------------
+# SPHEREx driver
+# ------------------------------------
+def run_spherex(
+        coord: SkyCoord,
+        label: str,
+        out_dir: str | Path,
+        *,
+        model: str = 'psf',
+        sersic_params: list[float] | None = None,
+        sersic_from: str | None = None,
+        sersic_seeing: float | None = None,
+        bkg_size: float = 15.0,
+        poll: float = 5.0,
+        timeout: float = 3600.0,
+        cutout_arcsec: float = 120.0,
+        sky_in: float = 30.0,
+        sky_out: float = 45.0,
+        legacy_dr: str = 'dr9',
+        target_name: str | None = None,
+):
+    """Fetch the raw SPHEREx spectrophotometry table for the target.
+
+    Parameters
+    ----------
+    model : str
+        'psf' (point source) or 'sersic' (elliptical forced model).
+    sersic_params : list of float, optional
+        [n, axis_ratio(a/b), pa_deg, reff_arcsec] -- explicit shape.
+    sersic_from : str, optional
+        Fit the shape on this band first ('Legacy_z' fetches the Legacy z
+        image; plain 'z' assumes Legacy). [default when model='sersic' and
+        no params: Legacy z, the A1925 convention]
+    sersic_seeing : float, optional
+        PSF FWHM of the shape-fit band (see run_measure).
+    bkg_size : float
+        Tool BKG_REGION_SIZE in arcsec. [default: 15]
+
+    Returns
+    -------
+    result : ProviderResult
+        ok with the table path, or error with the manual-GUI recipe.
+    """
+    from . import spherex as spherex_mod
+
+    print(f"\nTarget: RA={coord.ra.deg:.6f}, Dec={coord.dec.deg:+.6f}  "
+          f"(SPHEREx {model} model)\n")
+
+    tool_model = None
+    if model == 'sersic':
+        if sersic_params is not None:
+            shape_sky, origin = _resolve_shape(
+                [], coord, sersic_from=None, sersic_params=sersic_params,
+                sky_in=sky_in, sky_out=sky_out,
+                cutout_half_arcsec=cutout_arcsec / 2.0, user_mask=None,
+                protect_radius=4.0)
+        else:
+            spec = sersic_from or 'z'
+            instrument = spec.split('_')[0].lower() if '_' in spec else 'legacy'
+            if instrument not in IMAGE_PROVIDERS:
+                raise ValueError(f"--sersic-from {spec!r}: unknown instrument "
+                                 f"{instrument!r}; known: {sorted(IMAGE_PROVIDERS)}")
+            band = spec.split('_')[-1]
+            cache_dir = Path(out_dir) / "Photometry" / instrument.capitalize()
+            options: dict = {'bands': (band,), 'size_arcsec': cutout_arcsec,
+                             'cache_dir': cache_dir}
+            if instrument == 'legacy':
+                cache_dir = Path(out_dir) / "Photometry" / "Legacy"
+                options.update(cache_dir=cache_dir, dr=legacy_dr)
+            fetched = IMAGE_PROVIDERS[instrument](coord, **options)
+            if isinstance(fetched, ProviderResult):
+                raise RuntimeError(f"could not fetch the shape-fit image: "
+                                   f"{fetched.message}")
+            shape_sky, origin = _resolve_shape(
+                fetched, coord, sersic_from=band, sersic_params=None,
+                sky_in=sky_in, sky_out=sky_out,
+                cutout_half_arcsec=cutout_arcsec / 2.0, user_mask=None,
+                protect_radius=4.0, sersic_seeing=sersic_seeing)
+        print(f"Forced shape: n={shape_sky['n']:.2f}, "
+              f"reff={shape_sky['reff_arcsec']:.2f}\", "
+              f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
+              f"({origin['source']})\n")
+        tool_model = spherex_mod.sersic_from_shape(shape_sky)
+
+    result = spherex_mod.fetch(coord, out_dir=out_dir, model=tool_model,
+                               bkg_region_size=bkg_size, poll=poll,
+                               timeout=timeout)
+    print(f"\n  spherex {result.status}: {result.message}")
+    return result
+
+
+# ------------------------------------
+# Combined SED plot
+# ------------------------------------
+def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
+    """Combined SED figure from whatever schema tables exist in out_dir.
+
+    Parameters
+    ----------
+    label : str, optional
+        Output stem; inferred when exactly one <stem>_catalog.csv or
+        <stem>_measured.csv family exists.
+    out_dir : str or Path
+        Galaxy directory.
+
+    Returns
+    -------
+    figure_path : Path or None
+        The written PNG, or None when no tables were found.
+    """
+    from .qa import plot_sed
+
+    phot_dir = Path(out_dir) / "Photometry"
+    if label is None:
+        stems = {p.name.rsplit('_', 1)[0]
+                 for p in list(phot_dir.glob("*_catalog.csv"))
+                 + list(phot_dir.glob("*_measured.csv"))}
+        if len(stems) != 1:
+            raise ValueError(f"cannot infer --label in {phot_dir}: "
+                             f"found stems {sorted(stems)}")
+        label = stems.pop()
+
+    frames = {}
+    for kind in ("catalog", "measured"):
+        path = phot_dir / f"{label}_{kind}.csv"
+        if path.exists():
+            frames[kind] = pd.read_csv(path)
+    if not frames:
+        print(f"  [sed] no tables for {label!r} in {phot_dir}")
+        return None
+
+    out = plot_sed(frames, phot_dir / f"{label}_sed.png", title=label)
+    print(f"  [sed] wrote {out}")
+    return out
+
+
+# ------------------------------------
+# The flagship: galaxy in, SED photometry out
+# ------------------------------------
+def run_all(
+        coord: SkyCoord,
+        label: str,
+        out_dir: str | Path,
+        *,
+        skip: list[str] | None = None,
+        radius_arcsec: float = 2.0,
+        dered: bool = False,
+        aperture_arcsec: float = 10.0,
+        sky_in: float = 30.0,
+        sky_out: float = 45.0,
+        cutout_arcsec: float = 120.0,
+        mask_file: str | None = None,
+        mask_ref: str | None = None,
+        spherex_model: str = 'off',
+        sersic_params: list[float] | None = None,
+        legacy_dr: str = 'dr9',
+        legacy_bricks: bool = False,
+        target_name: str | None = None,
+) -> None:
+    """Everything: catalogs -> images + aperture measurement -> SPHEREx
+    (opt-in) -> combined SED plot, with per-provider graceful fallback.
+
+    Parameters
+    ----------
+    skip : list[str], optional
+        Provider names to leave out (catalog and image registries share
+        names where they overlap).
+    spherex_model : str
+        'off' (default), 'psf', or 'sersic' (with sersic_params).
+    Other parameters as in run_catalogs / run_measure.
+    """
+    skip = set(skip or [])
+    catalog_set = [name for name in CATALOG_PROVIDERS if name not in skip]
+    image_set = [name for name in IMAGE_PROVIDERS if name not in skip]
+
+    print(f"\n===== catalogs =====")
+    run_catalogs(coord, label, out_dir, instruments=catalog_set,
+                 radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
+                 dered=dered, target_name=target_name)
+
+    print(f"\n===== images + measurement =====")
+    run_measure(coord, label, out_dir, instruments=image_set,
+                aperture_arcsec=aperture_arcsec, sky_in=sky_in,
+                sky_out=sky_out, cutout_arcsec=cutout_arcsec,
+                mask_file=mask_file, mask_ref=mask_ref,
+                legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                target_name=target_name)
+
+    if spherex_model != 'off':
+        print(f"\n===== SPHEREx =====")
+        run_spherex(coord, label, out_dir, model=spherex_model,
+                    sersic_params=sersic_params, legacy_dr=legacy_dr,
+                    target_name=target_name)
+
+    print(f"\n===== SED =====")
+    run_sed(label, out_dir)
