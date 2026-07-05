@@ -23,6 +23,7 @@ import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from .catalogs import CATALOG_PROVIDERS
+from .dered import apply_dereddening
 from .provenance import write_sidecar
 from .results import (
     STATUS_ERROR,
@@ -44,6 +45,7 @@ def run_catalogs(
         instruments: list[str],
         radius_arcsec: float = 2.0,
         legacy_dr: str = 'dr10',
+        dered: bool = False,
         target_name: str | None = None,
 ) -> pd.DataFrame:
     """Query the requested catalog providers and write the combined table.
@@ -62,6 +64,8 @@ def run_catalogs(
         Starting search radius per provider. [default: 2.0]
     legacy_dr : str
         Legacy data release ('dr10' or 'dr9'). [default: 'dr10']
+    dered : bool
+        Apply MW dereddening (see dered.py tiers). [default: False]
     target_name : str, optional
         Original name string, recorded in the sidecar.
 
@@ -108,6 +112,11 @@ def run_catalogs(
         print("\nNo photometry retrieved from any catalog.")
         return catalog_df
 
+    dered_meta = None
+    if dered:
+        print("\nApplying MW dereddening:")
+        catalog_df, dered_meta = apply_dereddening(catalog_df, coord)
+
     out_csv = phot_dir / f"{label}_catalog.csv"
     catalog_df.to_csv(out_csv, index=False)
     write_sidecar(out_csv, {
@@ -117,6 +126,7 @@ def run_catalogs(
         "radius_arcsec": radius_arcsec,
         "instruments": instruments,
         "legacy_dr": legacy_dr if 'legacy' in instruments else None,
+        "dereddening": dered_meta,
         "providers": {r.provider: {"status": r.status, "message": r.message, **r.meta}
                       for r in results},
     })

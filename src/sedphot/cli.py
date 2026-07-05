@@ -93,6 +93,7 @@ def _cmd_catalogs(args: argparse.Namespace) -> None:
         instruments=instruments,
         radius_arcsec=args.radius,
         legacy_dr=args.legacy_dr,
+        dered=args.dered,
         target_name=args.name,
     )
 
@@ -125,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_catalogs.add_argument('--legacy-dr', type=str, default='dr10',
                             choices=('dr10', 'dr9'),
                             help="Legacy Surveys data release [default: dr10]")
+    p_catalogs.add_argument('--dered', action='store_true',
+                            help="Apply MW dereddening (default: as-measured; "
+                                 "corrections recorded per row)")
     p_catalogs.set_defaults(func=_cmd_catalogs)
 
     return parser
