@@ -38,3 +38,10 @@ hst_cache/
 # -----------------------
 .env
 config.*
+
+# -----------------------
+# Packaging artifacts
+# -----------------------
+*.egg-info/
+build/
+dist/

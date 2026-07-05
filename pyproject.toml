@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sedphot"
+version = "0.2.0"
+description = "Galaxy in, SED photometry out: multi-archive catalog retrieval, image cutouts, and aperture / forced-Sersic photometry."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "astropy>=5.3",
+    "astroquery>=0.4.10",
+    "photutils>=1.8",
+    "matplotlib>=3.7",
+    "requests",
+]
+
+[project.scripts]
+sedphot = "sedphot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
