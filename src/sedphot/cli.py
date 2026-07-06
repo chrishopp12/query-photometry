@@ -48,6 +48,7 @@ from .catalogs import CATALOG_PROVIDERS
 from .images import IMAGE_PROVIDERS
 from .pipeline import run_all, run_catalogs, run_measure, run_sed, run_spherex
 from .resolve import resolve_target
+from .results import STATUS_OK
 
 
 # ------------------------------------
@@ -114,7 +115,7 @@ def _cmd_catalogs(args: argparse.Namespace) -> None:
 
 def _cmd_spherex(args: argparse.Namespace) -> None:
     coord, label = _resolve_from_args(args)
-    run_spherex(
+    result = run_spherex(
         coord, label, args.out_dir,
         model=args.model,
         sersic_params=args.sersic_params,
@@ -127,6 +128,8 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
         legacy_dr=args.legacy_dr,
         target_name=args.name,
     )
+    if result.status != STATUS_OK:
+        sys.exit(1)
 
 
 def _cmd_sed(args: argparse.Namespace) -> None:
