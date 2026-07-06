@@ -199,3 +199,102 @@ def query(coord: SkyCoord, radius_arcsec: float, *, dr: str = 'dr10') -> Provide
                 f"footprint try --legacy-dr {other}",
         meta={'endpoint': LEGACY_URL, 'table': LEGACY_TABLES[dr]},
     )
+
+
+# ------------------------------------
+# Morphology (forced-model shapes)
+# ------------------------------------
+# Tractor profile types carrying a usable galaxy shape, with the Sersic index
+# fixed by type where the fit did not free it.
+_TYPE_N = {'SER': None, 'DEV': 4.0, 'EXP': 1.0, 'REX': 1.0}
+
+
+def shape_from_tractor(type_: str, sersic_n: float, shape_r: float,
+                       e1: float, e2: float) -> dict | None:
+    """Tractor morphology columns -> sky-frame Sersic shape, or None.
+
+    Parameters
+    ----------
+    type_ : str
+        Tractor profile type (SER/DEV/EXP/REX yield a shape; PSF/DUP do not).
+    sersic_n : float
+        The `sersic` column; consumed only for type SER.
+    shape_r : float
+        Half-light radius, arcsec.
+    e1, e2 : float
+        Ellipticity components; |e| = (a-b)/(a+b), PA = atan2(e2, e1)/2
+        east of north.
+
+    Returns
+    -------
+    shape_sky : dict or None
+        {'n', 'ellip' (1 - b/a), 'pa_deg', 'reff_arcsec'}, or None when the
+        type or shape parameters cannot define an extended model.
+    """
+    typ = str(type_).strip().upper()
+    if typ not in _TYPE_N:
+        return None
+    n = _TYPE_N[typ]
+    if n is None:
+        n = float(sersic_n)
+        if not np.isfinite(n) or n <= 0:
+            return None
+    if not np.isfinite(shape_r) or shape_r <= 0:
+        return None
+    e = float(np.hypot(e1, e2))
+    if e >= 1:
+        return None
+    ba = (1.0 - e) / (1.0 + e)
+    pa_deg = float(np.degrees(0.5 * np.arctan2(e2, e1)) % 180.0)
+    return {'n': n, 'ellip': 1.0 - ba, 'pa_deg': pa_deg,
+            'reff_arcsec': float(shape_r)}
+
+
+def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
+                dr: str = 'dr9') -> tuple[dict, dict] | None:
+    """Closest-source Tractor shape for a forced source model.
+
+    One-shot cone query (no radius expansion: a shape grabbed from a wider
+    search risks the wrong source). Callers fall back to an image-domain
+    fit when this returns None.
+
+    Returns
+    -------
+    (shape_sky, origin) : tuple or None
+        shape_from_tractor() dict plus an origin dict whose 'source' string
+        names the table, profile type, and match separation.
+    """
+    table = LEGACY_TABLES[dr]
+    ra = float(coord.ra.deg)
+    dec = float(coord.dec.deg)
+    query = f"""
+    SELECT ra, dec, type, sersic, shape_r, shape_e1, shape_e2
+    FROM {table}
+    WHERE brick_primary = 1
+      AND 't' = q3c_radial_query(ra, dec, {ra:.8f}, {dec:.8f},
+                                 {radius_arcsec / 3600.0:.8f})
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tap = TapPlus(url=LEGACY_URL)
+            job = tap.launch_job(query)
+            result = job.get_results().to_pandas()
+    except Exception as e:
+        print(f"  [Legacy shape] Query error: {e}")
+        return None
+    if result.empty:
+        print(f"  [Legacy shape] no {table} source within {radius_arcsec:.1f}\"")
+        return None
+
+    src_coords = SkyCoord(result['ra'].values, result['dec'].values, unit=u.deg)
+    idx, sep, _ = match_coordinates_sky(coord, src_coords)
+    src = result.iloc[int(idx)]
+    shape_sky = shape_from_tractor(src['type'], src['sersic'], src['shape_r'],
+                                   src['shape_e1'], src['shape_e2'])
+    typ = str(src['type']).strip().upper()
+    if shape_sky is None:
+        print(f"  [Legacy shape] {table} source is type {typ}; no extended shape")
+        return None
+    origin = {'source': f"{table} {typ}, sep {float(sep.arcsec[0]):.2f}\""}
+    return shape_sky, origin

@@ -467,7 +467,7 @@ def run_spherex(
         label: str,
         out_dir: str | Path,
         *,
-        model: str = 'psf',
+        model: str = 'sersic',
         sersic_params: list[float] | None = None,
         sersic_from: str | None = None,
         sersic_seeing: float | None = None,
@@ -486,13 +486,16 @@ def run_spherex(
     Parameters
     ----------
     model : str
-        'psf' (point source) or 'sersic' (elliptical forced model).
+        'sersic' (elliptical forced model) or 'psf' (point source; carries
+        a chromatic bias for extended sources).
     sersic_params : list of float, optional
         [n, axis_ratio(a/b), pa_deg, reff_arcsec] -- explicit shape.
     sersic_from : str, optional
-        Fit the shape on this band first ('Legacy_z' fetches the Legacy z
-        image; plain 'z' assumes Legacy). [default when model='sersic' and
-        no params: Legacy z]
+        Fit the shape on this band's image instead of the default Tractor
+        catalog lookup ('Legacy_z' fetches the Legacy z image; plain 'z'
+        assumes Legacy). [default when model='sersic' and no params: the
+        ls_dr9/dr10.tractor shape, falling back to a Legacy z image fit
+        when the lookup yields nothing usable]
     sersic_seeing : float, optional
         PSF FWHM of the shape-fit band (see run_measure).
     bkg_size : float
@@ -507,19 +510,29 @@ def run_spherex(
         ok with the table path, or error with the manual-GUI recipe.
     """
     from . import spherex as spherex_mod
+    from .catalogs.legacy import query_shape
 
     print(f"\nTarget: RA={coord.ra.deg:.6f}, Dec={coord.dec.deg:+.6f}  "
           f"(SPHEREx {model} model)\n")
 
     tool_model = None
+    shape_origin = None
     if model == 'sersic':
+        shape_sky = origin = None
         if sersic_params is not None:
             shape_sky, origin = _resolve_shape(
                 [], coord, sersic_from=None, sersic_params=sersic_params,
                 sky_in=sky_in, sky_out=sky_out,
                 cutout_half_arcsec=cutout_arcsec / 2.0, user_mask=None,
                 protect_radius=4.0)
-        else:
+        elif sersic_from is None:
+            looked = query_shape(coord, dr=legacy_dr)
+            if looked is not None:
+                shape_sky, origin = looked
+            else:
+                print("  [spherex] no usable Tractor shape; "
+                      "fitting the Legacy z image instead")
+        if shape_sky is None:
             spec = sersic_from or 'z'
             instrument = spec.split('_')[0].lower() if '_' in spec else 'legacy'
             if instrument not in IMAGE_PROVIDERS:
@@ -546,11 +559,13 @@ def run_spherex(
               f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
               f"({origin['source']})\n")
         tool_model = spherex_mod.sersic_from_shape(shape_sky)
+        shape_origin = origin['source']
 
     result = spherex_mod.fetch(coord, out_dir=out_dir, model=tool_model,
                                bkg_region_size=bkg_size,
                                mjd_range=tuple(mjd_range) if mjd_range else None,
-                               poll=poll, timeout=timeout)
+                               poll=poll, timeout=timeout,
+                               shape_origin=shape_origin)
     print(f"\n  spherex {result.status}: {result.message}")
     return result
 

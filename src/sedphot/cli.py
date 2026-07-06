@@ -272,16 +272,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_spherex = subparsers.add_parser(
         "spherex", help="Fetch the raw SPHEREx spectrophotometry table (IRSA)")
     _add_target_args(p_spherex)
-    p_spherex.add_argument('--model', type=str, default='psf',
+    p_spherex.add_argument('--model', type=str, default='sersic',
                            choices=('psf', 'sersic'),
-                           help="Forced-photometry source model [default: psf]")
+                           help="Forced-photometry source model; psf carries a "
+                                "chromatic bias for extended sources "
+                                "[default: sersic]")
     p_spherex.add_argument('--sersic-params', nargs=4, type=float, default=None,
                            metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
                            help="Sersic mode: explicit shape (n<=6, a/b >= 1, "
                                 "PA deg E of N, r_eff arcsec)")
     p_spherex.add_argument('--sersic-from', type=str, default=None,
-                           help="Sersic mode: fit the shape on this band first "
-                                "('Legacy_z' or 'z') [default: Legacy z]")
+                           help="Sersic mode: fit the shape on this band's "
+                                "image ('Legacy_z' or 'z') instead of the "
+                                "default Tractor catalog lookup")
     p_spherex.add_argument('--sersic-seeing', type=float, default=None,
                            help="PSF FWHM (arcsec) of the shape-fit band")
     p_spherex.add_argument('--bkg-size', type=float, default=15.0,

@@ -505,7 +505,8 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
 # ------------------------------------
 def fetch(coord, *, out_dir, model: Sersic | None = None,
           bkg_region_size: float = 15, mjd_range: tuple | None = None,
-          poll: float = 5, timeout: float = 3600) -> ProviderResult:
+          poll: float = 5, timeout: float = 3600,
+          shape_origin: str | None = None) -> ProviderResult:
     """Fetch the raw SPHEREx table into <out_dir>/Photometry/SPHEREx/.
 
     Refuses to overwrite an existing table (raw tables may be irreplaceable
@@ -530,6 +531,9 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         Poll interval, seconds. [default: 5]
     timeout : float
         Give up after this many seconds. [default: 3600]
+    shape_origin : str, optional
+        Provenance of the Sersic shape (e.g. Tractor table + type, or the
+        image fit); recorded in the sidecar's model block.
 
     Returns
     -------
@@ -563,7 +567,8 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         "target": {"ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
         "model": ("point" if model is None else
                   {"type": "sersic", "n": model.n, "axis_ratio": model.axis_ratio,
-                   "pa_deg": model.pa_deg, "reff_arcsec": model.reff_arcsec}),
+                   "pa_deg": model.pa_deg, "reff_arcsec": model.reff_arcsec,
+                   "shape_origin": shape_origin}),
         "bkg_region_size_px": int(round(float(bkg_region_size))),
         "mjd_range": list(mjd_range) if mjd_range else None,
         "service": UWS_BASE,
