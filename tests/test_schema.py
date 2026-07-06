@@ -23,7 +23,7 @@ def _row(**overrides):
     return make_row(**base)
 
 
-def test_base_cols_are_v1_contract():
+def test_base_cols_are_frozen_contract():
     # The first twelve columns are the legacy retrieval-script column set in
     # their original order -- existing consumers key on this. Never reorder;
     # append only.
