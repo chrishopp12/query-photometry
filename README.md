@@ -19,6 +19,9 @@ sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87
 sedphot measure --ra 216.988087 --dec 56.9878 --instruments cfht legacy \
     --aperture 25.5 --sky-in 30 --sky-out 43 --legacy-dr dr9
 
+# SPHEREx forced photometry; the Sersic shape comes from the Tractor catalog
+sedphot spherex --ra 217.32297 --dec 56.72999 --out-dir Galaxies/control_6
+
 # the flagship: everything, then a combined SED plot
 sedphot run --name "SDSS J142800.81+570046.3" --out-dir Galaxies/control_0
 ```
@@ -30,7 +33,7 @@ sedphot run --name "SDSS J142800.81+570046.3" --out-dir Galaxies/control_0
 | `resolve`  | Name -> ICRS position (Sesame -> NED -> SIMBAD) + output label |
 | `catalogs` | Closest-source photometry from the catalog archives -> `<label>_catalog.csv` |
 | `measure`  | Fetch images, measure every band -> `<label>_measured.csv` + QA figures |
-| `spherex`  | Raw SPHEREx spectrophotometry table (IRSA), PSF or forced-Sersic model |
+| `spherex`  | Raw SPHEREx spectrophotometry table (IRSA), forced-Sersic (default) or PSF model |
 | `sed`      | Combined flux-vs-wavelength figure from the tables in `out-dir` |
 | `run`      | catalogs -> measure -> SPHEREx (opt-in) -> SED plot |
 
@@ -92,6 +95,27 @@ or fit on a band with `--sersic-from`) across all bands and solves only the
 amplitude -- profile-matched photometry, the convention behind the SPHEREx
 work. Fitted n and r_eff are PSF-sensitive: supply `--sersic-seeing`, or
 use `--sersic-params` from a trusted fit.
+
+## SPHEREx
+
+`sedphot spherex` submits an IRSA forced-photometry job and writes the raw
+per-visit x channel table verbatim (quality cuts belong downstream). The
+source model defaults to a forced Sersic -- a PSF model carries a chromatic
+bias for extended sources -- with the shape resolved in order:
+
+1. `--sersic-params N AXRATIO PA REFF` -- explicit, used as given
+2. `--sersic-from <band>` -- fit on that band's image
+3. default: the Legacy Tractor catalog shape (`type`, `sersic`, `shape_r`,
+   `e1`/`e2` -> n, b/a, PA east of north; SER keeps its fitted index,
+   DEV/EXP/REX fix n = 4/1/1), falling back to a Legacy z image fit when
+   the source is unresolved (PSF/DUP) or the lookup fails
+
+The shape's origin is recorded in the sidecar's model block. An existing
+table is never overwritten (raw tables can be irreplaceable manual
+downloads); move it aside deliberately to re-fetch. `--mjd-range` restricts
+the job to a known-good visit window (the IRSA workaround for
+broken-metadata epochs). The verb exits nonzero when the fetch fails, so
+shell chains can trust `$?`.
 
 ## Legacy scripts
 
