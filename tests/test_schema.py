@@ -9,8 +9,11 @@ sedphot.schema.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from sedphot.schema import ALL_COLS, BASE_COLS, EXTRA_COLS, make_row, rows_to_frame
+from sedphot.schema import (
+    ALL_COLS, BASE_COLS, EXTRA_COLS, SOURCE_PREFIXES, make_row, rows_to_frame,
+)
 
 
 def _row(**overrides):
@@ -61,4 +64,35 @@ def test_rows_to_frame_empty_and_order():
     assert list(rows_to_frame([]).columns) == ALL_COLS
     frame = rows_to_frame([_row(), _row(band='Legacy_r')])
     assert list(frame.columns) == ALL_COLS
+    assert len(frame) == 2
+
+
+def test_source_prefixes_are_frozen_contract():
+    # Downstream consumers (the sed_fitting roster's provider tokens) select
+    # rows by these prefixes -- append new kinds; never rename an entry.
+    assert SOURCE_PREFIXES == {
+        'legacy': 'Legacy_', 'unwise': 'unWISE_Legacy_', 'allwise': 'AllWISE',
+        'galex': 'GALEX_', 'sdss': 'SDSS_', 'panstarrs': 'PanSTARRS_',
+        'jplus': 'JPLUS_', 'hst': 'HST_HAP_',
+        'aperture': 'sedphot_aperture_', 'sersic': 'sedphot_sersic_',
+    }
+
+
+def test_source_prefixes_are_prefix_free():
+    # startswith matching is unambiguous only while no entry is a prefix of
+    # another ('Legacy_' must never match 'unWISE_Legacy_*' rows).
+    prefixes = list(SOURCE_PREFIXES.values())
+    for i, first in enumerate(prefixes):
+        for second in prefixes[i + 1:]:
+            assert not first.startswith(second)
+            assert not second.startswith(first)
+
+
+def test_rows_to_frame_rejects_duplicate_band_source():
+    with pytest.raises(ValueError, match=r"duplicate \(band, source\)"):
+        rows_to_frame([_row(), _row()])
+    # The same band from two different measurements is legitimate (provenance
+    # is not identity): unWISE and AllWISE both emit WISE_Wn.
+    frame = rows_to_frame([_row(band='WISE_W1', source='unWISE_Legacy_DR9'),
+                           _row(band='WISE_W1', source='AllWISE')])
     assert len(frame) == 2

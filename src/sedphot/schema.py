@@ -68,6 +68,30 @@ ALL_COLS = BASE_COLS + EXTRA_COLS
 
 
 # ------------------------------------
+# Source-string vocabulary
+# ------------------------------------
+# Leading prefixes of the `source` strings each measurement kind emits -- the
+# machine half of the stable-API promise above. Downstream consumers select
+# rows by these prefixes (the sed_fitting roster's provider tokens key on
+# them), so the set is a frozen contract: append new kinds, never rename an
+# existing prefix. The set must stay prefix-free -- no entry may be a prefix
+# of another -- so startswith matching is unambiguous ('Legacy_' must never
+# match 'unWISE_Legacy_*' rows).
+SOURCE_PREFIXES = {
+    'legacy':    'Legacy_',            # Tractor optical (Legacy_DR9 / Legacy_DR10)
+    'unwise':    'unWISE_Legacy_',     # Tractor-forced unWISE (legacy provider)
+    'allwise':   'AllWISE',
+    'galex':     'GALEX_',
+    'sdss':      'SDSS_',
+    'panstarrs': 'PanSTARRS_',
+    'jplus':     'JPLUS_',
+    'hst':       'HST_HAP_',
+    'aperture':  'sedphot_aperture_',  # measure --mode aperture
+    'sersic':    'sedphot_sersic_',    # measure --mode sersic
+}
+
+
+# ------------------------------------
 # Row builder
 # ------------------------------------
 def make_row(
@@ -140,7 +164,18 @@ def make_row(
 
 
 def rows_to_frame(rows: list[dict]) -> pd.DataFrame:
-    """Assemble row dicts into a DataFrame with the full column schema."""
+    """Assemble row dicts into a DataFrame with the full column schema.
+
+    Enforces the table invariant downstream row selection depends on: no two
+    rows may share (band, source). The same band from two different
+    measurements (unWISE vs AllWISE WISE_W1) is legitimate; the same band
+    from the same measurement twice is a provider bug.
+    """
     if not rows:
         return pd.DataFrame(columns=ALL_COLS)
-    return pd.DataFrame(rows, columns=ALL_COLS)
+    frame = pd.DataFrame(rows, columns=ALL_COLS)
+    dup = frame.duplicated(subset=['band', 'source'], keep=False)
+    if dup.any():
+        pairs = sorted(set(zip(frame.loc[dup, 'band'], frame.loc[dup, 'source'])))
+        raise ValueError(f"duplicate (band, source) rows: {pairs}")
+    return frame
