@@ -4,9 +4,9 @@ galex.py
 GALEX GUVcat Catalog Provider
 ---------------------------------------------------------
 Closest-source FUV/NUV photometry from GUVcat_AIS (Bianchi et al. 2017, the
-All-sky Imaging Survey tier) via VizieR catalog II/335/galex_ais -- the
-service combination validated for A1925 (the MAST GALEX catalog endpoint
-errored there; VizieR answered).
+All-sky Imaging Survey tier) via VizieR catalog II/335/galex_ais. The
+catalog is queried through VizieR rather than the MAST GALEX endpoint,
+which can error where VizieR answers.
 
 The catalog's own E(B-V) (SFD at the source position) is converted to a
 per-band MW transmission carried in the mw_transmission column, using
@@ -33,6 +33,7 @@ from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
 from ..retry import query_vizier_mirrors, with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
+
 
 # ------------------------------------
 # Constants

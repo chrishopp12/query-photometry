@@ -3,13 +3,15 @@ panstarrs.py
 
 Pan-STARRS Image Provider
 ---------------------------------------------------------
-PS1 stack cutouts via the ps1filenames.py listing service plus fitscut.cgi,
-ported from a1925_nbcg/morphology/s02_fetch_data.fetch_ps1_cutouts. Stack
-pixels are linear DN/s with ZP = 25 + 2.5 log10(EXPTIME) -- the 'ps1' calib
-key; EXPTIME rides in the returned header.
+PS1 stack cutouts via the ps1filenames.py listing service plus fitscut.cgi.
+Stack pixels are linear DN/s with ZP = 25 + 2.5 log10(EXPTIME) -- the 'ps1'
+calib key; EXPTIME rides in the returned header.
+
+Data products (cached in cache_dir, the target's Photometry/PanSTARRS/):
+    ps1_<band>.fits    stack cutout, one file per band
 
 Requirements:
-    numpy, requests, astropy
+    requests, astropy
 
 Notes:
     Coverage is Dec > -30. fitscut occasionally serves a cutout with NaN
@@ -61,6 +63,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     Returns
     -------
     products or result : list[ImageProduct] | ProviderResult
+        Image products on success; a no_coverage/error result otherwise.
     """
     bands = tuple(bands) if bands else DEFAULT_BANDS
     cache_dir = Path(cache_dir)

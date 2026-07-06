@@ -3,15 +3,16 @@ qa.py
 
 QA and SED Figures
 ---------------------------------------------------------
+
 The diagnostic figures every image extraction writes, and the combined SED
-plot. Figure conventions ported from a1925_nbcg/photometry/uniform_phot.py
-(qa_band_figure, plot_curves): asinh/ZScale grayscale stamps, cyan aperture,
-gold sky annulus, wavelength-ordered colors.
+plot. Shared conventions across the figures: asinh/ZScale grayscale stamps,
+cyan aperture markings, gold sky annulus, wavelength-ordered point colors.
 
 Data products:
-    QA/<inst>_<band>.png       per-band: cutout | masked + regions | growth curve
-    QA/growth_curves.png       enclosed flux vs radius, all bands
-    <label>_sed.png            combined SED (catalog + measured points)
+    QA/<inst>_<band>.png          per-band: cutout | masked + regions | growth curve
+    QA/<inst>_<band>_sersic.png   forced mode: data | model | residual | model growth
+    QA/growth_curves.png          enclosed flux vs radius, all bands
+    <label>_sed.png               combined SED (catalog + measured points)
 
 Requirements:
     numpy, pandas, matplotlib, astropy
@@ -24,6 +25,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 
+# Headless backend: figures are only ever written to disk.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from astropy.visualization import AsinhStretch, ImageNormalize, ZScaleInterval
@@ -31,11 +33,17 @@ from matplotlib.patches import Circle
 
 from .bands import wave_um
 
+# ------------------------------------
+# Constants
+# ------------------------------------
 # Line style per instrument in the growth-curve overlay.
 INSTRUMENT_STYLE = {"Legacy": "-", "SDSS": "--", "CFHT": ":", "PS1": "-.",
                     "PanSTARRS": "-.", "HST": "-"}
 
 
+# ------------------------------------
+# Helpers
+# ------------------------------------
 def _wave_color(wave: float) -> tuple:
     """Wavelength -> color, blue at 0.15 um through red at 25 um (log scale)."""
     if not np.isfinite(wave):
@@ -188,8 +196,12 @@ def qa_forced_figure(measurement: dict, out_dir: str | Path) -> Path:
 # ------------------------------------
 # Combined SED
 # ------------------------------------
-def plot_sed(frames: dict[str, pd.DataFrame], outpath: str | Path,
-             *, title: str = "") -> Path:
+def plot_sed(
+        frames: dict[str, pd.DataFrame],
+        outpath: str | Path,
+        *,
+        title: str = "",
+) -> Path:
     """Combined SED: flux vs wavelength for every table given.
 
     Parameters

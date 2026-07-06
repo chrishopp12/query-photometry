@@ -9,21 +9,25 @@ Two routes to Legacy Surveys pixels:
                       sized to the request, nanomaggy units, but serves NO
                       inverse variance (errors fall back to sky rms).
     bricks            the NERSC brick coadds -- full 0.25 deg bricks,
-                      image + invvar per band (real per-pixel noise), tens
-                      of MB per file. The brick is resolved from the Tractor
-                      catalog at the target position.
+                      image + invvar per band, tens of MB per file. The
+                      brick is resolved from the Tractor catalog at the
+                      target position. Because the cutout service serves
+                      no inverse variance, bricks are the only route to
+                      real per-pixel noise.
 
-Ported from a1925_nbcg: dumbbell_lib.fetch_brick (generalized -- the brick
-name is resolved per target instead of hardcoded) and
-morphology/s02_fetch_data.fetch_legacy_cutouts.
+Data products (cached in cache_dir, the target's Photometry/Legacy/):
+    legacy_<layer>_<band>.fits                   viewer cutout plane (nmgy)
+    legacysurvey-<brick>-image-<band>.fits.fz    brick coadd image
+    legacysurvey-<brick>-invvar-<band>.fits.fz   brick inverse variance
 
 Requirements:
-    numpy, requests, astropy
+    requests, astropy; astroquery (brick route only)
 
 Notes:
     The viewer layer and coadd hemisphere follow the data release and the
     Dec 32.375 deg north/south boundary; on a miss the other hemisphere is
-    tried (the overlap strip exists in both).
+    tried (the overlap strip exists in both). A cutout that comes back
+    blank (all-zero) is treated as no coverage for that layer.
 """
 from __future__ import annotations
 

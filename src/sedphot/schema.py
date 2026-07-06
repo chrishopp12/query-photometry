@@ -4,9 +4,9 @@ schema.py
 Output Table Schema and Row Builder
 ---------------------------------------------------------
 The one table contract every catalog provider and measurement writes. The
-first twelve columns are the v1 phot_coord_search OUT_COLS, kept in order so
-existing consumers (plot_hst_image overlays, RMJ0019 notebooks) read new
-tables unchanged; the appended columns carry retrieval provenance.
+first twelve columns are the legacy retrieval-script column set, kept in
+order so existing consumers (plot_hst_image overlays, analysis notebooks)
+read new tables unchanged; the appended columns carry retrieval provenance.
 
 Column conventions:
     band            <Instrument>_<filter>  (Legacy_g, PS1_g, GALEX_FUV, HST_F475W)
@@ -40,7 +40,8 @@ import pandas as pd
 # ------------------------------------
 # Column schema
 # ------------------------------------
-# v1 OUT_COLS -- order is a compatibility contract, do not reorder.
+# Legacy retrieval-script column set -- order is a compatibility contract,
+# do not reorder.
 BASE_COLS = [
     'band',
     'flux_uJy',

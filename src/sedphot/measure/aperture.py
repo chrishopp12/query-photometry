@@ -3,6 +3,7 @@ aperture.py
 
 Curve-of-Growth Aperture Photometry
 ---------------------------------------------------------
+
 The one aperture recipe, applied identically to every instrument:
 
     1. cut a stamp at the target position;
@@ -15,23 +16,19 @@ The one aperture recipe, applied identically to every instrument:
     5. return the enclosed-flux curve of growth and the aperture flux, in
        microjanskys.
 
-Ported from a1925_nbcg/photometry/uniform_phot.py (measure), with the
-staged-mask dependency replaced by the self-contained auto-mask and an
-optional inverse-variance error model from hst_aperture_photometry.py.
-
 Requirements:
     numpy, astropy
 
 Notes:
     Two error models, chosen by data availability:
-      'skyrms'  sky_std * sqrt(N_aper) * cf -- the v1 uniform_phot model,
-                used when no inverse-variance map exists.
+      'skyrms'  sky_std * sqrt(N_aper) * cf -- used when no
+                inverse-variance map exists.
       'ivm'     sqrt(sum 1/wht + N_aper^2 * sky_std^2 / N_sky) * cf -- adds
                 the per-pixel noise where the archive serves real weights
                 (Legacy bricks, HST); the second term is the sky-level
                 uncertainty.
     Masked aperture pixels contribute their azimuthal-fill values; their
-    noise is not separately inflated (v1 behavior).
+    noise is not separately inflated.
 """
 from __future__ import annotations
 
@@ -47,6 +44,9 @@ from .calibrate import calib_factor, load_image, pixel_scale_arcsec
 from .masks import neighbor_mask, radii_arcsec, reproject_mask
 from .sky import annulus_sky
 
+# ------------------------------------
+# Constants
+# ------------------------------------
 # Curve-of-growth radius grid (arcsec).
 DEFAULT_RGRID = np.arange(2.0, 30.0, 1.0)
 

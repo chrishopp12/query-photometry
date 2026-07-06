@@ -3,22 +3,25 @@ hst.py
 
 HST HAP Image Provider
 ---------------------------------------------------------
-Drizzled HAP single-visit mosaics from MAST, generalized from
-hst_aperture_photometry.py (the RMJ0019 pipeline): the visit-group ranking
-(closest pointing, then most filters, then deepest) is ported intact, and
-three ACS-only assumptions are removed --
+Drizzled HAP-SVM single-visit mosaics from MAST. The best visit group
+covering the position is selected by ranking: closest pointing center,
+then most filters, then deepest total exposure. Product handling:
 
-    - any HST imaging instrument (ACS/WFC, WFC3/UVIS, WFC3/IR, ...) unless
-      restricted with instruments=;
-    - DRC and DRZ products both accepted (WFC3/IR mosaics are DRZ);
-    - SCI/WHT extensions located by EXTNAME, not fixed indices.
+    - any HST imaging instrument (ACS/WFC, WFC3/UVIS, WFC3/IR, ...) is
+      accepted unless restricted with instruments=;
+    - DRC and DRZ products are both accepted (WFC3/IR mosaics are DRZ);
+    - SCI/WHT extensions are located by EXTNAME, not fixed indices.
 
 Each mosaic is split into plain sci/wht FITS files in the cache so the
 measurement engine's ImageProduct contract (separate image + inverse
 variance paths) applies unchanged. The WHT extension of a drizzled HAP
 product is an inverse-variance (IVM) map; drizzle correlates neighboring
-pixels, so IVM-summed errors underestimate the true noise by ~1.5-2x (the
-original pipeline's documented caveat -- it rides along here).
+pixels, so IVM-summed errors underestimate the true noise by ~1.5-2x.
+
+Data products (cached in cache_dir, the target's Photometry/HST/):
+    hst_<FILTER>_sci.fits    science plane split from the mosaic
+    hst_<FILTER>_wht.fits    weight (IVM) plane, when the mosaic has one
+    mastDownload/...         the MAST mosaic downloads, kept as fetched
 
 Requirements:
     numpy, astropy, astroquery
@@ -26,8 +29,7 @@ Requirements:
 Notes:
     HST pixel scales are 0.03-0.13 arcsec; the measure defaults (10 arcsec
     aperture, 30-45 arcsec sky) are galaxy-survey-sized. For compact HST
-    targets pass e.g. --aperture 1 --sky-in 3 --sky-out 4.5 --cutout-size 20
-    (the RMJ0019 conventions).
+    targets pass e.g. --aperture 1 --sky-in 3 --sky-out 4.5 --cutout-size 20.
 """
 from __future__ import annotations
 
@@ -43,21 +45,23 @@ from astropy.io import fits
 from ..bands import wave_um
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 
+# ------------------------------------
+# Constants
+# ------------------------------------
 SEEING = 0.1                       # arcsec; detection-kernel scale for HST
 _FILTER_IN_NAME = re.compile(r"_(f\d{3,4}(?:w|lp|m|n))[_.]", re.IGNORECASE)
 
 
 # ------------------------------------
-# Observation selection (ported group ranking)
+# Observation selection
 # ------------------------------------
 def _select_group(coord: SkyCoord, *, proposal_id=None, instruments=None,
                   search_radius_arcmin=5.0, max_sep_arcsec=10.0):
     """Pick the best HAP-SVM visit group covering the position.
 
     Ranking: closest pointing center, then most filters, then deepest
-    total exposure (ported from hst_aperture_photometry.query_mast_hap).
-    Returns the observation table for the selected group, or None when
-    nothing covers the position.
+    total exposure. Returns the observation table for the selected group,
+    or None when nothing covers the position.
     """
     from astroquery.mast import Observations
 
@@ -176,6 +180,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     Returns
     -------
     products or result : list[ImageProduct] | ProviderResult
+        Image products on success; a no_coverage/error result otherwise.
     """
     from astroquery.mast import Observations
 
@@ -196,7 +201,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
             for row in products_table]]
 
         # Combined per-filter mosaics have the shortest obs_id per filter
-        # (individual exposures carry a trailing suffix) -- ported heuristic.
+        # (individual exposures carry a trailing suffix).
         per_filter: dict[str, tuple] = {}
         for row in drizzled:
             band = _band_of(row["productFilename"])

@@ -1,4 +1,11 @@
-"""Unit-conversion invariants: AB zeropoint, round trips, error propagation."""
+"""
+test_units.py
+
+Unit-Conversion Invariants
+---------------------------------------------------------
+AB zeropoint identity, magnitude/flux round trips, error propagation, and
+NaN guards for sedphot.units.
+"""
 from __future__ import annotations
 
 import numpy as np

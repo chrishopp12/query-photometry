@@ -3,30 +3,33 @@ cfht.py
 
 CFHT MegaPipe Image Provider
 ---------------------------------------------------------
-MegaPipe deep-stack cutouts via the CADC SODA service, following the recipe
-validated for A1925 (archival inventory 2026-06-01 sections 11.2-11.5):
+MegaPipe deep-stack cutouts via the CADC SODA service:
 
     Cadc().query_region(coord, collection='CFHTMEGAPIPE')
         -> filter to calibrated image planes
         -> get_image_list(...) SODA cutout URLs
         -> download per band
 
-Pinned pitfalls (all observed):
-    - The deep optical stacks are collection CFHTMEGAPIPE. 'CFHTLS' returns
-      ZERO planes at positions the MegaPipe stacks cover.
-    - astroquery.cadc resolves its endpoints through the CADC registry
-      (argus); a registry 503 blocks everything -- transient, retry later.
-    - The data host flaps occasionally (404/503/timeout on valid URLs);
-      transport retries wrap every call.
-    - ugriz stacks carry PHOTZP = 30.0 (AB) -- the 'photzp' calib key reads
-      it from the header.
+Data products (cached in cache_dir, the target's Photometry/CFHT/):
+    cfht_megapipe_<band>.fits    SODA stack cutout (renamed *.nophotzp.fits
+                                 and skipped when PHOTZP is absent)
 
 Requirements:
-    numpy, requests, astropy, astroquery
+    requests, astropy, astroquery
 
 Notes:
-    Band identity is parsed from the MegaCam filter name in the plane
-    metadata (u.MP9302 -> u). WIRCam products are not handled here.
+    - The deep optical stacks are collection CFHTMEGAPIPE; 'CFHTLS' returns
+      ZERO planes at positions the MegaPipe stacks cover.
+    - astroquery.cadc resolves its endpoints through the CADC registry
+      (argus), so a registry 503 blocks everything -- transient, retry later.
+    - The data host has transient failures (404/503/timeout on valid URLs);
+      transport retries wrap every call.
+    - ugriz stacks carry PHOTZP = 30.0 (AB); the 'photzp' calib key reads
+      it from the header.
+    - HiPS pixels are display-normalized and unusable for photometry; only
+      SODA cutouts of the calibrated stacks are fetched.
+    - Band identity is parsed from the MegaCam filter name in the plane
+      metadata (u.MP9302 -> u). WIRCam products are not handled here.
 """
 from __future__ import annotations
 
@@ -48,7 +51,7 @@ SEEING = 0.8
 WAVE_UM = {'u': 0.355, 'g': 0.475, 'r': 0.640, 'i': 0.776, 'z': 0.925}
 
 # MegaCam filter names look like 'u.MP9301', 'r.MP9601', 'gri.MP9605' (the
-# last is a chihuahua-rare combined filter -- skipped by the single-letter rule).
+# last is a rare combined filter -- excluded by the single-letter rule).
 _FILTER_RE = re.compile(r"^([ugriz])\.MP\d+$", re.IGNORECASE)
 
 
@@ -78,6 +81,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     Returns
     -------
     products or result : list[ImageProduct] | ProviderResult
+        Image products on success; a no_coverage/error result otherwise.
     """
     import astropy.units as u
     from astroquery.cadc import Cadc

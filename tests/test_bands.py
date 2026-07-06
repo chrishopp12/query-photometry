@@ -1,4 +1,11 @@
-"""Band wavelength lookup, including the HST filter-name parser."""
+"""
+test_bands.py
+
+Band Wavelength Lookup
+---------------------------------------------------------
+Tabulated effective wavelengths and the HST filter-name parser in
+sedphot.bands.
+"""
 from __future__ import annotations
 
 import math

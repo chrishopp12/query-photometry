@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-# Provider status vocabulary.
+# ------------------------------------
+# Provider status vocabulary
+# ------------------------------------
 STATUS_OK = "ok"                    # rows returned
 STATUS_NO_COVERAGE = "no_coverage"  # footprint does not include the target
 STATUS_NO_MATCH = "no_match"        # covered, but nothing within the search radius

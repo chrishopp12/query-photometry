@@ -16,9 +16,9 @@ Requirements:
 
 Notes:
     SDSS photometry deblends aggressively; bright extended galaxies can be
-    shredded into pieces (the reason catalog SDSS was dropped from the A1925
-    BCG work in favor of frame-level measurement). Inspect sep_arcsec and
-    compare against another catalog before trusting a bright-galaxy total.
+    shredded into pieces, in which case the catalog magnitude is a fragment,
+    not a galaxy total. Inspect sep_arcsec and compare against another
+    catalog before trusting a bright-galaxy total.
     Sentinel magnitudes (-9999) are skipped per band.
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
 from ..retry import with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
+
 
 # ------------------------------------
 # Constants

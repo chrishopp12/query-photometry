@@ -3,24 +3,27 @@ sersic.py
 
 Single-Sersic Shape Fit and Forced Photometry
 ---------------------------------------------------------
+
 The forced-Sersic measurement mode: fit one Sersic profile's shape on a
-chosen band (or accept explicit parameters), then force that fixed shape at
-the target position in every band and solve only the amplitude -- so every
-band shares one consistent profile-weighted aperture (the recipe behind the
-A1925 SPHEREx work).
-
-Ported pieces: moffat_psf and sersic_basis from a1925_nbcg/common/
-dumbbell_lib.py; forced_photometry_single from a1925_nbcg/photometry/
-forced_phot.py. New: fit_sersic_shape -- a scipy least-squares fit of
-(amplitude, center, r_eff, n, ellip, theta), deliberately NOT pysersic
-(no jax dependency; posterior widths are not needed for a frozen shape).
-
-Position angles cross the module boundary as degrees east of north,
-converted to/from pixel theta through the image WCS -- so shapes fit on one
-instrument transfer correctly to any other orientation.
+chosen band (or accept explicit parameters), then force that fixed shape
+at the target position in every band and solve only the amplitude -- so
+every band shares one consistent profile-weighted aperture.
 
 Requirements:
     numpy, scipy, astropy
+
+Notes:
+    The forced flux is profile-matched photometry: the total flux of the
+    fixed-shape model. For a band whose light distribution differs from
+    the shape band (color gradients), it is a profile-weighted amplitude,
+    NOT that band's total flux.
+    Position angles cross the module boundary as degrees east of north
+    and convert to/from pixel-frame theta through each image's WCS, so a
+    shape fit on one instrument transfers correctly to any other
+    orientation.
+    Fitted n and r_eff are PSF-sensitive -- errors in the assumed seeing
+    map directly into them -- so explicit, trusted shape parameters are
+    the precision path.
 """
 from __future__ import annotations
 
@@ -31,15 +34,23 @@ from astropy.wcs import WCS
 from scipy.optimize import least_squares
 from scipy.signal import fftconvolve
 
+# ------------------------------------
+# Constants
+# ------------------------------------
 MOFFAT_BETA = 3.0
-SERSIC_N_MAX = 8.0        # fit bound; the SPHEREx tool caps at 6 (bridge clips)
+SERSIC_N_MAX = 8.0        # fit bound; the SPHEREx tool caps n at 6
 
 
 # ------------------------------------
-# PSF and basis (ports)
+# PSF and basis
 # ------------------------------------
-def moffat_psf(fwhm_arcsec: float, pixscale: float, *,
-               beta: float = MOFFAT_BETA, size: int = 25) -> np.ndarray:
+def moffat_psf(
+        fwhm_arcsec: float,
+        pixscale: float,
+        *,
+        beta: float = MOFFAT_BETA,
+        size: int = 25,
+) -> np.ndarray:
     """Unit-sum Moffat PSF stamp at the image pixel scale."""
     fwhm_pix = fwhm_arcsec / pixscale
     gamma = fwhm_pix / (2 * np.sqrt(2 ** (1 / beta) - 1))
@@ -48,8 +59,14 @@ def moffat_psf(fwhm_arcsec: float, pixscale: float, *,
     return psf / psf.sum()
 
 
-def sersic_basis(shape: dict, fwhm_arcsec: float, pixscale: float,
-                 stamp_shape: tuple, *, oversample: int = 3) -> np.ndarray:
+def sersic_basis(
+        shape: dict,
+        fwhm_arcsec: float,
+        pixscale: float,
+        stamp_shape: tuple,
+        *,
+        oversample: int = 3,
+) -> np.ndarray:
     """Unit-flux, PSF-convolved Sersic basis image (matched aperture).
 
     Renders the fixed-shape Sersic with pixel-area integration (oversample +
@@ -83,10 +100,22 @@ def sersic_basis(shape: dict, fwhm_arcsec: float, pixscale: float,
     return convolved / convolved.sum()
 
 
-def forced_photometry_single(stamp: np.ndarray, weight: np.ndarray, shape: dict,
-                             center_px: tuple, fwhm: float, pixscale: float, *,
-                             fit_mask: np.ndarray | None = None):
+def forced_photometry_single(
+        stamp: np.ndarray,
+        weight: np.ndarray,
+        shape: dict,
+        center_px: tuple,
+        fwhm: float,
+        pixscale: float,
+        *,
+        fit_mask: np.ndarray | None = None,
+):
     """Single-component forced flux: fixed shape and position, amplitude only.
+
+    The amplitude is the weighted least-squares scale of the unit-flux
+    basis, so the returned flux is the model total -- profile-matched
+    photometry, not the band's own total where its light distribution
+    differs from the shape.
 
     Returns
     -------
@@ -117,8 +146,7 @@ def forced_photometry_single(stamp: np.ndarray, weight: np.ndarray, shape: dict,
 # ------------------------------------
 # Position-angle transfer through the WCS
 # ------------------------------------
-def pa_east_of_north(stamp_wcs: WCS, cx: float, cy: float,
-                     theta_rad: float) -> float:
+def pa_east_of_north(stamp_wcs: WCS, cx: float, cy: float, theta_rad: float) -> float:
     """Sky position angle (deg E of N) of a pixel-frame major axis."""
     here = stamp_wcs.pixel_to_world(cx, cy)
     there = stamp_wcs.pixel_to_world(cx + 10 * np.cos(theta_rad),
@@ -137,15 +165,23 @@ def theta_from_pa(stamp_wcs: WCS, cx: float, cy: float, pa_deg: float) -> float:
 # ------------------------------------
 # Shape fit
 # ------------------------------------
-def fit_sersic_shape(stamp: np.ndarray, sky_std: float, cx: float, cy: float,
-                     pixscale: float, seeing_arcsec: float, *,
-                     mask: np.ndarray | None = None,
-                     fit_radius_arcsec: float = 12.0) -> dict:
+def fit_sersic_shape(
+        stamp: np.ndarray,
+        sky_std: float,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        seeing_arcsec: float,
+        *,
+        mask: np.ndarray | None = None,
+        fit_radius_arcsec: float = 12.0,
+) -> dict:
     """Least-squares single-Sersic shape fit on one band.
 
     Fits (amplitude, xc, yc, r_eff, n, ellip, theta) on a sub-stamp around
     the target; the amplitude is discarded (the forced solve re-fits it per
-    band) and the shape is what transfers.
+    band) and the shape is what transfers. The fitted n and r_eff are
+    PSF-sensitive: an error in seeing_arcsec maps directly into them.
 
     Parameters
     ----------
@@ -208,11 +244,18 @@ def fit_sersic_shape(stamp: np.ndarray, sky_std: float, cx: float, cy: float,
 # ------------------------------------
 # Forced measurement (one band, fixed sky shape)
 # ------------------------------------
-def measure_forced(product, coord, shape_sky: dict, *, sky_in: float,
-                   sky_out: float, cutout_half_arcsec: float,
-                   user_mask: tuple | None = None,
-                   protect_radius: float = 4.0,
-                   rgrid=None) -> dict:
+def measure_forced(
+        product,
+        coord,
+        shape_sky: dict,
+        *,
+        sky_in: float,
+        sky_out: float,
+        cutout_half_arcsec: float,
+        user_mask: tuple | None = None,
+        protect_radius: float = 4.0,
+        rgrid=None,
+) -> dict:
     """Forced single-Sersic flux for one band.
 
     Parameters

@@ -3,12 +3,10 @@ units.py
 
 Photometric Unit Conversions
 ---------------------------------------------------------
-Pure conversion helpers shared by every provider and the measurement engine:
-nanomaggies and AB magnitudes to microjanskys and back, with error propagation.
-All magnitudes are AB; the AB zeropoint in microjanskys is 23.9 (3631 Jy).
-
-Ported verbatim from phot_coord_search.py (the v1 retrieval script); these
-functions are the package's numeric core and must not drift.
+Pure conversion helpers: nanomaggies and AB magnitudes to microjanskys and
+back, with error propagation. All magnitudes are AB; the AB zeropoint in
+microjanskys is 23.9 (3631 Jy). These conversions are the package's numeric
+core; every provider and the measurement engine share them.
 
 Requirements:
     numpy

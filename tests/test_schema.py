@@ -1,4 +1,11 @@
-"""Schema contract: column order stability, NaN guards, frame assembly."""
+"""
+test_schema.py
+
+Output Schema Contract
+---------------------------------------------------------
+Column order stability, NaN guards, defaults, and frame assembly for
+sedphot.schema.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -17,8 +24,9 @@ def _row(**overrides):
 
 
 def test_base_cols_are_v1_contract():
-    # The first twelve columns are the v1 OUT_COLS in their original order --
-    # existing consumers key on this. Never reorder; append only.
+    # The first twelve columns are the legacy retrieval-script column set in
+    # their original order -- existing consumers key on this. Never reorder;
+    # append only.
     assert BASE_COLS == [
         'band', 'flux_uJy', 'flux_err_uJy', 'mag_AB', 'mag_err',
         'target_ra', 'target_dec', 'match_ra', 'match_dec',

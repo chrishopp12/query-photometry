@@ -3,16 +3,15 @@ retry.py
 
 Query Retry Helpers
 ---------------------------------------------------------
-Two orthogonal retry policies used by the providers:
+Three retry policies used by the providers:
 
     with_expanding_radius   no-match handling -- re-run a cone search with a
-                            doubled radius (ported from phot_coord_search.py)
+                            doubled radius
     retry_transient         transport handling -- exponential backoff around a
                             flaky HTTP/TAP call (CADC, IRSA)
-    query_vizier_mirrors    VizieR-specific: fall back across mirror servers
-                            when one returns nothing (the CDS default was
-                            observed returning empty for every catalog on
-                            2026-07-05 while the CfA mirror answered normally)
+    query_vizier_mirrors    VizieR-specific: fall back across mirror servers,
+                            because a VizieR outage can present as empty
+                            results rather than errors
 
 Providers wrap their public query in with_expanding_radius and, where a
 service is known to flap, wrap the transport call itself in retry_transient.
@@ -38,8 +37,8 @@ MAX_RETRIES = 5        # max radius expansions before giving up on a catalog
 TRANSIENT_ATTEMPTS = 3     # transport retries
 TRANSIENT_BASE_DELAY = 2.0  # seconds; doubles each attempt
 
-# Tried in order by query_vizier_mirrors; the CDS original comes first so the
-# mirror only answers when the default is empty or erroring.
+# Tried in order by query_vizier_mirrors; the primary CDS server comes first
+# so the mirror only answers when the primary is empty or erroring.
 VIZIER_MIRRORS = (
     "vizier.cds.unistra.fr",
     "vizier.cfa.harvard.edu",
@@ -94,13 +93,34 @@ def with_expanding_radius(
     return []
 
 
-def final_radius(radius_arcsec: float, n_rows: int, *,
-                 max_retries: int = MAX_RETRIES,
-                 expand_factor: float = EXPAND_FACTOR) -> float:
+def final_radius(
+        radius_arcsec: float,
+        n_rows: int,
+        *,
+        max_retries: int = MAX_RETRIES,
+        expand_factor: float = EXPAND_FACTOR,
+) -> float:
     """Upper bound on the radius with_expanding_radius could have reached.
 
     Recorded in coverage reports so a match found only after expansion is
     visible downstream.
+
+    Parameters
+    ----------
+    radius_arcsec : float
+        Starting search radius.
+    n_rows : int
+        Number of rows the query returned.
+    max_retries : int
+        Attempts with_expanding_radius makes. [default: 5]
+    expand_factor : float
+        Radius multiplier per attempt. [default: 2.0]
+
+    Returns
+    -------
+    radius : float
+        radius_arcsec when rows were found, else the largest radius the
+        expansion could have tried.
     """
     if n_rows > 0:
         return radius_arcsec
@@ -113,7 +133,7 @@ def query_vizier_mirrors(query_fn: Callable[[], object], label: str):
     An empty result from one mirror may be a genuine no-match, so the next
     mirror is asked before concluding; the cost is one redundant query in the
     true-no-match case, and the benefit is surviving a mirror outage that
-    silently returns empty (observed on the CDS default, 2026-07-05).
+    presents as empty results rather than errors.
 
     Parameters
     ----------

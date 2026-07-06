@@ -9,8 +9,6 @@ target position via MAST. Prefers the segment catalog's MagSegment
 extended sources such as lensed arcs); falls back to the point catalog's
 MagAp2 (0.15" aperture) with a warning only when no segment catalog exists.
 
-Ported unchanged from phot_coord_search.py.
-
 Requirements:
     numpy, pandas, astropy, astroquery
 
@@ -72,7 +70,7 @@ def _fetch_hap_catalog(filename: str) -> pd.DataFrame | None:
     return cat
 
 
-def _discover_hst_catalogs(coord: SkyCoord, radius_arcsec: float) -> dict[str, dict[str, str]]:
+def _discover_hst_catalogs(coord: SkyCoord, radius_arcsec: float) -> dict[str, dict[str, str | None]]:
     """Map {filter: {'point': filename, 'segment': filename}} for HAP products here.
 
     Either filename may be None when that catalog type does not exist for a

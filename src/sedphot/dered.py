@@ -17,7 +17,7 @@ Three tiers, per row:
        (dered_applied stays False) -- never a crash.
 
 Requirements:
-    numpy, pandas, astroquery (IRSA dust, tier 2 only)
+    numpy, pandas, astropy; astroquery (IRSA dust, tier 2 only)
 
 Notes:
     Coefficients are Schlafly & Finkbeiner 2011 (R_V = 3.1) for the optical
@@ -32,6 +32,7 @@ import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from .units import ujy_to_mag
+
 
 # ------------------------------------
 # A_band / E(B-V) coefficients (tier 2)
@@ -72,7 +73,7 @@ def fetch_ebv_sfd(coord: SkyCoord) -> float:
 # Application
 # ------------------------------------
 def apply_dereddening(df: pd.DataFrame, coord: SkyCoord) -> tuple[pd.DataFrame, dict]:
-    """Deredden a schema table in place of its as-measured fluxes.
+    """Apply MW dereddening to a schema table, returning a corrected copy.
 
     Parameters
     ----------

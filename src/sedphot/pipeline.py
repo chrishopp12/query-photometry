@@ -3,18 +3,21 @@ pipeline.py
 
 Retrieval and Measurement Drivers
 ---------------------------------------------------------
+
 Orchestration only: resolve the target once, run the requested providers,
 assemble the schema table, and write products + provenance. No science lives
 here -- providers and the measurement engine own their own behavior.
 
 Data products (under <out_dir>/Photometry/):
     <label>_catalog.csv               combined catalog photometry
-    <label>_measured.csv              image-based aperture measurements
+    <label>_measured.csv              image measurements (aperture or forced Sersic)
+    <label>_sed.png                   combined SED figure
     <label>_*.provenance.json         provenance sidecars
     coverage_catalogs.json            per-provider status, catalog run
     coverage_measure.json             per-provider status, measurement run
     <Instrument>/                     cached images + QA/ per-band figures
     QA/growth_curves.png              all measured bands, one overlay
+    SPHEREx/table_photometry.csv      raw spectrophotometry (run_spherex)
 
 Requirements:
     numpy, pandas, astropy
@@ -150,14 +153,24 @@ def run_catalogs(
 # ------------------------------------
 # Measurement driver
 # ------------------------------------
-def _resolve_shape(products, coord, *, sersic_from, sersic_params,
-                   sky_in, sky_out, cutout_half_arcsec, user_mask,
-                   protect_radius, sersic_seeing=None):
+def _resolve_shape(
+        products,
+        coord,
+        *,
+        sersic_from,
+        sersic_params,
+        sky_in,
+        sky_out,
+        cutout_half_arcsec,
+        user_mask,
+        protect_radius,
+        sersic_seeing=None,
+):
     """Resolve the sky-frame Sersic shape for forced mode.
 
     Explicit --sersic-params wins; otherwise the shape is fit on the
     requested band ('z' or 'Legacy_z'), defaulting to the reddest available
-    optical band (the A1925 convention was a frozen z-band fit).
+    optical band.
     """
     from .measure.aperture import prepare_stamp
     from .measure.sersic import SERSIC_N_MAX, fit_sersic_shape, pa_east_of_north
@@ -280,10 +293,16 @@ def run_measure(
     sersic_params : list of float, optional
         Sersic mode: explicit shape [n, axis_ratio(a/b), pa_deg(E of N),
         reff_arcsec] -- skips the fit.
+    sersic_seeing : float, optional
+        PSF FWHM (arcsec) assumed by the shape fit; fitted n and r_eff
+        are PSF-sensitive. [default: the provider's typical value, with
+        a warning]
     legacy_dr : str
         Legacy release for the image provider. [default: 'dr9']
     legacy_bricks : bool
         Fetch NERSC bricks (image + invvar) instead of viewer cutouts.
+    hst_proposal_id : str, optional
+        Restrict the HST image provider to one program.
     target_name : str, optional
         Original name string for the sidecar.
 
@@ -308,7 +327,7 @@ def run_measure(
           f"(aperture {aperture_arcsec:g}\", sky {sky_in:g}-{sky_out:g}\")\n")
 
     instrument_dirs = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
-                      'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
+                       'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
     results: list[ProviderResult] = []
     measurements: list[dict] = []
     rows: list[dict] = []
@@ -473,7 +492,7 @@ def run_spherex(
     sersic_from : str, optional
         Fit the shape on this band first ('Legacy_z' fetches the Legacy z
         image; plain 'z' assumes Legacy). [default when model='sersic' and
-        no params: Legacy z, the A1925 convention]
+        no params: Legacy z]
     sersic_seeing : float, optional
         PSF FWHM of the shape-fit band (see run_measure).
     bkg_size : float
@@ -620,12 +639,12 @@ def run_all(
     catalog_set = [name for name in CATALOG_PROVIDERS if name not in skip]
     image_set = [name for name in IMAGE_PROVIDERS if name not in skip]
 
-    print(f"\n===== catalogs =====")
+    print("\n===== catalogs =====")
     run_catalogs(coord, label, out_dir, instruments=catalog_set,
                  radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
                  dered=dered, target_name=target_name)
 
-    print(f"\n===== images + measurement =====")
+    print("\n===== images + measurement =====")
     run_measure(coord, label, out_dir, instruments=image_set,
                 aperture_arcsec=aperture_arcsec, sky_in=sky_in,
                 sky_out=sky_out, cutout_arcsec=cutout_arcsec,
@@ -634,10 +653,10 @@ def run_all(
                 target_name=target_name)
 
     if spherex_model != 'off':
-        print(f"\n===== SPHEREx =====")
+        print("\n===== SPHEREx =====")
         run_spherex(coord, label, out_dir, model=spherex_model,
                     sersic_params=sersic_params, legacy_dr=legacy_dr,
                     target_name=target_name)
 
-    print(f"\n===== SED =====")
+    print("\n===== SED =====")
     run_sed(label, out_dir)

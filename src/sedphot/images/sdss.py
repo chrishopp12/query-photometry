@@ -9,13 +9,15 @@ saved per band; frames are 13.5 x 9.9 arcmin, so a target near a frame edge
 may sit closer to the boundary than the requested stamp half-size -- the
 Cutout2D in the measurement engine handles partial stamps.
 
+Data products (cached in cache_dir, the target's Photometry/SDSS/):
+    sdss_<band>_frame.fits    full calibrated frame, one file per band
+
 Requirements:
-    numpy, astropy, astroquery
+    astropy, astroquery
 
 Notes:
     SDSS frames are shallow relative to the other imaging this package
-    fetches; expect larger sky-limited errors (the A1925 SDSS u/z showed
-    exactly that).
+    fetches; expect larger sky-limited errors, especially in u and z.
 """
 from __future__ import annotations
 
@@ -57,6 +59,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     Returns
     -------
     products or result : list[ImageProduct] | ProviderResult
+        Image products on success; a no_coverage/error result otherwise.
     """
     from astroquery.sdss import SDSS
 

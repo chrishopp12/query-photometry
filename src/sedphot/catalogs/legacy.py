@@ -8,16 +8,14 @@ NOIRLab Datalab TAP service: optical broadbands plus the unWISE forced
 photometry carried in the same table (the WISE measurement matched to the
 Legacy source model -- distinct provenance from AllWISE).
 
-Ported from phot_coord_search.py with three additions: the Milky Way
-transmission columns are queried and carried per row, W3/W4 join W1/W2, and
-the data release is selectable (DR10 has i-band and the southern sky; DR9
-covers the BASS/MzLS north).
+The data release is selectable: DR10 adds i-band and the southern DECam
+sky; DR9 covers the BASS/MzLS north. The per-band Milky Way transmission
+columns are queried and carried per row.
 
-One deliberate deviation from v1: WISE rows are labeled WISE_Wn (not
-Legacy_Wn), with the unWISE provenance in the source column -- band identity
-is the filter, measurement provenance is the source (the A1925 convention
-and the sed_fitting registry rule). This keeps unWISE-forced and AllWISE
-values under one band name, distinguished where provenance belongs.
+WISE rows are labeled WISE_Wn with the unWISE provenance in the source
+column -- band identity is the filter, measurement provenance lives in the
+source column. unWISE-forced and AllWISE values therefore share WISE_Wn
+band labels and differ only in source.
 
 Column conventions:
     Tractor flux_* are nanomaggies; flux_ivar_* are 1/nanomaggy^2.

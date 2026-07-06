@@ -11,15 +11,13 @@ the rest of the package runs on. Name resolution tries, in order:
     2. NED  (astroquery.ipac.ned)
     3. SIMBAD (astroquery.simbad)
 
-The chain is ported from cluster_search/data_search.py and
-cluster_pipeline/utils/resolvers.py, without the cluster-specific name
-rewriting (this package resolves galaxies, not ACO/redMaPPer aliases).
-
 Requirements:
     astropy, astroquery
 
 Notes:
     resolve_target is the single entry point; providers never take raw names.
+    Names go to the services as-is -- no cluster-alias rewriting
+    (ACO/redMaPPer); this package resolves galaxies.
 """
 from __future__ import annotations
 
@@ -107,6 +105,9 @@ def jname(coord: SkyCoord) -> str:
     return f"J{ra}{dec}"
 
 
+# ------------------------------------
+# Entry point
+# ------------------------------------
 def resolve_target(
         *,
         name: str | None = None,

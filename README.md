@@ -97,9 +97,9 @@ use `--sersic-params` from a trusted fit.
 
 `phot_coord_search.py`, `hst_aperture_photometry.py`, and
 `plot_hst_image.py` remain standalone and untouched; `sedphot catalogs`
-reproduces `phot_coord_search.py` row-for-row (validated 2026-07-05), and
-the HST curve-of-growth workflow lives on in `hst_aperture_photometry.py`
-until its specialized outputs are folded in.
+reproduces `phot_coord_search.py` row-for-row, and the HST curve-of-growth
+workflow lives on in `hst_aperture_photometry.py` until its specialized
+outputs are folded in.
 
 ## Requirements
 

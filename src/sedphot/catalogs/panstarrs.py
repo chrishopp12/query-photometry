@@ -4,7 +4,7 @@ panstarrs.py
 Pan-STARRS DR1 Catalog Provider
 ---------------------------------------------------------
 Closest-source grizy photometry from the Pan-STARRS DR1 mean-object catalog
-via VizieR (II/349/ps1). Ported unchanged from phot_coord_search.py.
+via VizieR (II/349/ps1).
 
 Requirements:
     numpy, astropy, astroquery
@@ -15,11 +15,11 @@ Notes:
     galaxy totals. Bands with NaN magnitudes (non-detections) are skipped
     rather than propagated.
 
-    VizieR outages can present as EMPTY results rather than errors (observed
-    2026-07-05 on both the CDS default and the CfA mirror, intermittently).
-    A no_match during such an outage is indistinguishable from a true
-    no-match -- if a PS1-covered target reports no_match unexpectedly,
-    re-run later.
+    VizieR outages can present as EMPTY results rather than errors, on the
+    mirrors as well as the primary host (so the mirror fallback does not
+    catch them). A no_match during such an outage is indistinguishable from
+    a true no-match -- if a PS1-covered target reports no_match
+    unexpectedly, re-run later.
 """
 from __future__ import annotations
 

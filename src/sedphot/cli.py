@@ -4,16 +4,26 @@ cli.py
 
 sedphot Command-Line Interface
 ---------------------------------------------------------
-Galaxy in, SED photometry out. Every subcommand takes the same target spec:
-a resolvable name (--name) or an explicit position (--ra --dec), plus the
-galaxy directory products land in (--out-dir, default '.').
+
+Galaxy in, SED photometry out. Every subcommand writes into the galaxy
+directory given by --out-dir (default '.'); all but sed take the same
+target spec: a resolvable name (--name) or an explicit position
+(--ra --dec).
 
 Usage:
     sedphot resolve  (--name NAME | --ra DEG --dec DEG)
     sedphot catalogs (--name NAME | --ra DEG --dec DEG)
-                     (--instruments legacy panstarrs hst | --all)
-                     [--radius 2.0] [--legacy-dr {dr10,dr9}]
-                     [--out-dir DIR] [--label STEM]
+                     (--instruments legacy panstarrs hst ... | --all)
+                     [--radius 2.0] [--legacy-dr {dr10,dr9}] [--dered]
+    sedphot measure  (--name NAME | --ra DEG --dec DEG)
+                     (--instruments legacy sdss cfht ... | --all)
+                     [--mode {aperture,sersic}] [--aperture 10.0]
+                     [--sky-in 30] [--sky-out 45] [--mask FILE]
+    sedphot spherex  (--name NAME | --ra DEG --dec DEG)
+                     [--model {psf,sersic}] [--sersic-params N AXR PA RE]
+    sedphot sed      [--out-dir DIR] [--label STEM]
+    sedphot run      (--name NAME | --ra DEG --dec DEG) [--skip ...]
+                     [--spherex {off,psf,sersic}]
 
 Examples:
     Resolve a name to coordinates and the default output label:
@@ -25,6 +35,9 @@ Examples:
     Legacy + Pan-STARRS only, into a galaxy directory:
         sedphot catalogs --name "M87" --instruments legacy panstarrs \\
             --out-dir Clusters/Virgo/Galaxies/M87
+
+    Uniform aperture photometry on every available image:
+        sedphot measure --name "M87" --all --aperture 10 --out-dir M87
 """
 from __future__ import annotations
 
@@ -171,6 +184,7 @@ def _cmd_measure(args: argparse.Namespace) -> None:
 # Parser
 # ------------------------------------
 def build_parser() -> argparse.ArgumentParser:
+    """Assemble the argparse tree: one subparser per verb."""
     parser = argparse.ArgumentParser(
         prog="sedphot",
         description="Galaxy in, SED photometry out: multi-archive retrieval and measurement.",
@@ -230,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "instead of the auto-mask")
     p_measure.add_argument('--mask-ref', type=str, default=None,
                            help="Reference image whose WCS an .npz mask's grid "
-                                "is defined on (A1925 staged-mask pairing)")
+                                "is defined on")
     p_measure.add_argument('--protect-radius', type=float, default=4.0,
                            help="Auto-mask: radius never masked around the "
                                 "target, arcsec [default: 4.0]")

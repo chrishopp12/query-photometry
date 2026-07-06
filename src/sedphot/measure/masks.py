@@ -3,16 +3,16 @@ masks.py
 
 Neighbor Masks for Aperture Photometry
 ---------------------------------------------------------
-The auto-mask: a deblended detection on the stamp that protects the target
-(every segment touching within protect_radius of the center is kept) and
-masks everything else. Deblending is what keeps a neighbor that touches the
-target's envelope from being absorbed into the target's segment -- without
-it, masking the neighbor would gouge the galaxy.
 
-Ported from a1925_nbcg/photometry/forced_phot.py (source_mask,
-clean_neighbor_mask) and uniform_phot.py (_reproject_mask), plus the
-user-supplied mask loader (--mask FILE) that replaces the A1925 staged
-morphology masks.
+Boolean masks that keep neighboring sources out of the sky annulus and
+the aperture: a deblended source detection (source_mask), a
+profile-residual variant that protects the target's own light
+(neighbor_mask), and user-supplied masks loaded from disk and moved
+between pixel grids by WCS (load_user_mask, reproject_mask).
+
+Deblending is what keeps a neighbor that touches the target's envelope
+from being absorbed into the target's segment -- without it, masking
+the neighbor would gouge the galaxy.
 
 Requirements:
     numpy, scipy, astropy, photutils
@@ -20,8 +20,8 @@ Requirements:
 Notes:
     Masks are True where a pixel is EXCLUDED.
     A user mask may live on a different pixel grid than the band being
-    measured; reproject_mask moves it by WCS, so the native grid is
-    immaterial (the A1925 convention).
+    measured; reproject_mask moves it by WCS, so the mask's native grid
+    is immaterial.
 """
 from __future__ import annotations
 
@@ -38,10 +38,16 @@ from scipy.ndimage import binary_dilation
 # ------------------------------------
 # Auto-masks
 # ------------------------------------
-def source_mask(stamp: np.ndarray, threshold_std: float, *,
-                threshold_map: np.ndarray | None = None,
-                npixels: int = 8, nlevels: int = 32, contrast: float = 0.001,
-                dilate: int = 2) -> np.ndarray:
+def source_mask(
+        stamp: np.ndarray,
+        threshold_std: float,
+        *,
+        threshold_map: np.ndarray | None = None,
+        npixels: int = 8,
+        nlevels: int = 32,
+        contrast: float = 0.001,
+        dilate: int = 2,
+) -> np.ndarray:
     """Deblended source mask: an independent detection for cleaning the sky.
 
     Detects on a lightly smoothed copy at 2 x threshold_std and deblends, so
@@ -86,19 +92,26 @@ def radii_arcsec(shape: tuple, cx: float, cy: float, pixscale: float) -> np.ndar
     return np.hypot(xx - cx, yy - cy) * pixscale
 
 
-def neighbor_mask(stamp: np.ndarray, threshold_std: float, cx: float, cy: float,
-                  pixscale: float, *, protect_radius: float = 4.0,
-                  npixels: int = 8, dilate: int = 2, n_iter: int = 2) -> np.ndarray:
+def neighbor_mask(
+        stamp: np.ndarray,
+        threshold_std: float,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        protect_radius: float = 4.0,
+        npixels: int = 8,
+        dilate: int = 2,
+        n_iter: int = 2,
+) -> np.ndarray:
     """Profile-residual neighbor mask that protects the target's own light.
 
-    Subtracts the target's azimuthal median profile (a circular, model-free
-    "model" of the galaxy) and runs the deblended detection on the RESIDUAL,
+    A plain deblended detection on the data shreds a bright extended
+    envelope into segments and masks the target's own light, biasing the
+    flux low. This mask instead subtracts an elliptical-annulus median
+    model of the target and runs the deblended detection on the RESIDUAL,
     so neighbors -- including sources embedded in the envelope -- are
-    detected while the smooth target itself is not. A plain deblend on the
-    data shreds a bright extended envelope into segments and masks the
-    galaxy's own light (a 10%-level flux bias observed on the A1925 BCG);
-    the residual approach is the general, morphology-free equivalent of the
-    A1925 staged model masks.
+    detected while the smooth target itself is not.
 
     Parameters
     ----------
@@ -112,7 +125,9 @@ def neighbor_mask(stamp: np.ndarray, threshold_std: float, cx: float, cy: float,
         Arcsec per pixel.
     protect_radius : float
         Core radius (arcsec) never masked -- absorbs residual core
-        mismatch of the circular profile. [default: 4.0]
+        mismatch of the smooth profile. [default: 4.0]
+    npixels, dilate : int
+        Passed through to source_mask.
     n_iter : int
         Profile/mask iterations (the profile is remeasured with the mask
         applied). [default: 2]
@@ -121,6 +136,13 @@ def neighbor_mask(stamp: np.ndarray, threshold_std: float, cx: float, cy: float,
     -------
     mask : np.ndarray (bool)
         True where a neighbor is (exclude from sky and aperture).
+
+    Notes
+    -----
+    Any smooth-profile model has limits: a strongly asymmetric envelope
+    (e.g. a cD halo) or lumpy structure no elliptical profile can follow
+    (e.g. a lensed arc) leaves residuals that detect as spurious
+    neighbors, masking real light. Supply a user mask for such targets.
     """
     rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
     yy, xx = np.indices(stamp.shape)
@@ -176,16 +198,17 @@ def neighbor_mask(stamp: np.ndarray, threshold_std: float, cx: float, cy: float,
 # ------------------------------------
 # User-supplied masks
 # ------------------------------------
-def load_user_mask(path: str | Path,
-                   ref_image: str | Path | None = None) -> tuple[np.ndarray, WCS | None]:
+def load_user_mask(
+        path: str | Path,
+        ref_image: str | Path | None = None,
+) -> tuple[np.ndarray, WCS | None]:
     """Load a user mask: (mask, grid WCS or None).
 
     Two formats:
-      - .npz with a 'neighbor_mask' array (the A1925 staged-mask format,
-        which also stores the x0/y0 stamp center on its reference image).
-        Pair it with ref_image to reconstruct the mask's WCS (the
-        uniform_phot load_mask recipe); without one it can only be applied
-        to stamps sharing its exact grid.
+      - .npz with a 'neighbor_mask' array. The archive also stores the
+        x0/y0 stamp center on its reference image; pair it with ref_image
+        to reconstruct the mask's WCS. Without one, the mask can only be
+        applied to stamps sharing its exact grid.
       - FITS whose primary HDU is nonzero where masked, with its own WCS.
     """
     path = Path(path)
@@ -209,8 +232,12 @@ def load_user_mask(path: str | Path,
     return mask, wcs
 
 
-def reproject_mask(stamp_wcs: WCS, shape: tuple, mask_wcs: WCS,
-                   mask: np.ndarray) -> np.ndarray:
+def reproject_mask(
+        stamp_wcs: WCS,
+        shape: tuple,
+        mask_wcs: WCS,
+        mask: np.ndarray,
+) -> np.ndarray:
     """Nearest-pixel reprojection of a boolean mask onto a stamp's grid."""
     yy, xx = np.indices(shape)
     mx, my = mask_wcs.world_to_pixel(stamp_wcs.pixel_to_world(xx, yy))

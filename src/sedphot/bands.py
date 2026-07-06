@@ -15,8 +15,8 @@ Requirements:
     (stdlib only)
 
 Notes:
-    Milky Way extinction coefficients for --dered land here at M2 alongside
-    these wavelengths.
+    Milky Way extinction coefficients for --dered live in dered.py
+    (EXT_COEFF), keyed by these same band labels.
 """
 from __future__ import annotations
 

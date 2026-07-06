@@ -5,14 +5,12 @@ J-PLUS DR3 Catalog Provider
 ---------------------------------------------------------
 Closest-source 12-band photometry from the J-PLUS DR3 dual-mode catalog via
 the CEFCA TAP service, using the PSF-corrected magnitudes (MAG_PSFCOR) --
-the only PSF-homogenized magnitude set, validated against CFHT for the
-A1925 work.
+the catalog's PSF-homogenized magnitude set.
 
-Service facts pinned here because they were previously unrecorded (probed
-and validated 2026-07-05 against the A1925 control tables):
-  - TAP sync endpoint: TAP_SYNC_URL below; FORMAT=csv (the astroquery
+Service facts:
+  - TAP sync endpoint: TAP_SYNC_URL below; FORMAT=csv. The astroquery
     TapPlus wrappers choke on this service's table metadata and on its
-    error responses, so the module POSTs the sync endpoint directly).
+    error responses, so the module POSTs the sync endpoint directly.
   - Table jplus.MagABDualObj; positions are alpha_j2000/delta_j2000.
   - Magnitude columns are 12-element arrays indexed by the CEFCA filter
     macro (mag_psfcor[jplus::rSDSS]). NUMERIC indices do not follow filter
@@ -23,10 +21,9 @@ Requirements:
 
 Notes:
     Non-detections carry the SExtractor mag=99 sentinel and are skipped.
-    Fluxes are as-measured (no MW dereddening) -- this reproduces the
-    A1925 *_jplus_psfcor.csv tables exactly.
-    The uJAVA and bluest medium bands are shallow; low-S/N systematics
-    (background over-subtraction) were seen in the A1925 controls.
+    Fluxes are emitted AS-MEASURED (no MW dereddening).
+    The uJAVA and bluest medium bands are shallow; expect low S/N and
+    possible background over-subtraction systematics for faint sources.
 """
 from __future__ import annotations
 
@@ -42,6 +39,7 @@ from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
 from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
+
 
 # ------------------------------------
 # Constants

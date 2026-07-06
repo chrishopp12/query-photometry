@@ -3,11 +3,10 @@ sky.py
 
 Annulus Sky Estimation
 ---------------------------------------------------------
-Sigma-clipped sky from a source-masked annulus, with the matched-filter
-bright-source rejection used inside the annulus, and the radial sky profile
-QA. Ported from a1925_nbcg/photometry/forced_phot.py (clean_sky,
-radial_sky_profile) and uniform_phot.py (the matched-filter annulus
-detector inside measure()).
+
+Sigma-clipped sky from a source-masked annulus, with matched-filter
+rejection of bright sources inside the annulus, and the radial sky
+profile used for QA.
 
 Requirements:
     numpy, scipy, astropy
@@ -29,9 +28,16 @@ from .masks import radii_arcsec, source_mask
 # ------------------------------------
 # Sky measurement
 # ------------------------------------
-def annulus_source_mask(stamp: np.ndarray, cx: float, cy: float, pixscale: float,
-                        *, sky_in: float, sky_out: float,
-                        seeing_arcsec: float = 1.0) -> np.ndarray:
+def annulus_source_mask(
+        stamp: np.ndarray,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        sky_in: float,
+        sky_out: float,
+        seeing_arcsec: float = 1.0,
+) -> np.ndarray:
     """Matched-filter detection of bright sources in the sky annulus.
 
     Smooths at the PSF scale, finds local maxima above 4 sigma, and masks a
@@ -56,9 +62,16 @@ def annulus_source_mask(stamp: np.ndarray, cx: float, cy: float, pixscale: float
     return mask
 
 
-def annulus_sky(stamp: np.ndarray, cx: float, cy: float, pixscale: float, *,
-                sky_in: float, sky_out: float,
-                seeing_arcsec: float = 1.0) -> tuple[float, float, np.ndarray]:
+def annulus_sky(
+        stamp: np.ndarray,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        sky_in: float,
+        sky_out: float,
+        seeing_arcsec: float = 1.0,
+) -> tuple[float, float, np.ndarray]:
     """Sigma-clipped sky level and rms from a source-masked annulus.
 
     Parameters
@@ -92,13 +105,25 @@ def annulus_sky(stamp: np.ndarray, cx: float, cy: float, pixscale: float, *,
     return float(sky_level), float(sky_std), srcmask
 
 
-def radial_sky_profile(stamp: np.ndarray, cx: float, cy: float, pixscale: float,
-                       edges, *, srcmask: np.ndarray | None = None,
-                       ) -> tuple[np.ndarray, np.ndarray]:
+def radial_sky_profile(
+        stamp: np.ndarray,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        edges,
+        *,
+        srcmask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Source-masked, sigma-clipped sky in radial bins (QA).
 
     Parameters
     ----------
+    stamp : np.ndarray
+        Image stamp.
+    cx, cy : float
+        Stamp-pixel center.
+    pixscale : float
+        Arcsec per pixel.
     edges : sequence of float
         Bin edges in arcsec.
     srcmask : np.ndarray, optional

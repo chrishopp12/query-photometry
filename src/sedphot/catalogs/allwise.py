@@ -10,18 +10,20 @@ conversion.
 
 Band labels are WISE_Wn -- the same filters as the unWISE forced photometry
 the Legacy provider returns -- with 'AllWISE' in the source column carrying
-the provenance. The two measurements can differ substantially and the
-distinction has bitten before:
+the provenance: band identity is the filter, measurement provenance lives
+in the source column.
+
+Requirements:
+    numpy, astropy, astroquery
 
 Notes:
     AllWISE profile-fit photometry treats sources as point-like; for faint
     or extended galaxies it UNDER-COUNTS relative to unWISE forced
-    photometry (factors of 1.2-7.8x were measured on the A1925 controls).
-    Prefer the Legacy provider's unWISE values for galaxies inside the
-    Legacy footprint; this provider covers everything else (all-sky).
-
-Requirements:
-    numpy, astropy, astroquery
+    photometry, sometimes severalfold. Prefer the Legacy provider's unWISE
+    values for galaxies inside the Legacy footprint; this provider covers
+    everything else (all-sky).
+    A null w*sigmpro marks an upper limit, not a measurement; such bands
+    are skipped.
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
 from ..retry import with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
+
 
 # ------------------------------------
 # Constants

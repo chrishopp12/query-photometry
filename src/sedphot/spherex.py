@@ -3,12 +3,11 @@ spherex.py
 
 SPHEREx Spectrophotometry Retrieval (IRSA)
 ---------------------------------------------------------
-Programmatic driver for the IRSA SPHEREx Spectrophotometry Tool, ported
-whole from a1925_nbcg/sed_photoz/spherex_fetch.py. The output is the raw
-per-exposure table (one row per visit x LVF channel: lambda, lambda_width,
-flux, flux_err, flags, ...) written VERBATIM -- downstream SED machinery
-owns binning and quality cuts; this module never coerces it to the
-broadband schema.
+Programmatic driver for the IRSA SPHEREx Spectrophotometry Tool. The output
+is the raw per-exposure table (one row per visit x LVF channel: lambda,
+lambda_width, flux, flux_err, flags, ...) written VERBATIM -- downstream
+SED machinery owns binning and quality cuts; this module never coerces it
+to the broadband schema.
 
 The tool is a GUI over an IVOA UWS 1.1 async service. Direct UWS job
 creation is token-gated (403 for guests), so submission goes the way the
@@ -16,23 +15,25 @@ public GUI does: through Firefly's command server (guest session), then the
 open UWS endpoint is polled by job id. The direct-UWS path is kept for the
 day IRSA documents the credential.
 
-Source model: POINT, or ELLIPTICAL with a frozen Sersic shape. UNIT TRAP,
-preserved from the original: Firefly's ServerRequest carries
-effectiveRadius in DEGREES; the UWS ELLIPTICAL string and every CLI surface
-use ARCSEC. The Sersic dataclass stores arcsec and converts.
+Source model: POINT, or ELLIPTICAL with a frozen Sersic shape. UNIT TRAP:
+Firefly's ServerRequest carries effectiveRadius in DEGREES; the UWS
+ELLIPTICAL string and every CLI surface use ARCSEC. The Sersic dataclass
+stores arcsec and converts.
 
 Data products (under <out_dir>/Photometry/SPHEREx/):
     table_photometry.csv (+ .provenance.json)   the raw per-exposure table
 
 Requirements:
-    numpy, pandas, requests, astropy
+    numpy, pandas, requests, astropy (defusedxml used for XML when installed)
 
 Notes:
-    The programmatic path failed upstream for a period in 2026-06 (IRSA
-    pipeline errors); the manual fallback is the Data Explorer GUI's
-    "save as CSV", saved to the same path -- fetch() prints the recipe when
-    the service fails. Hand-downloaded raw tables are irreplaceable
-    ground truth: never overwrite one without archiving it.
+    An existing table is never overwritten: hand-downloaded raw tables are
+    irreplaceable ground truth, and results are not byte-reproducible
+    across fetch dates (server-side calibration evolves). When the service
+    fails, fetch() prints the manual Data Explorer recipe -- "save as CSV"
+    to the same path -- instead of writing a partial file. Epochs with
+    broken file metadata kill jobs server-side; the IRSA-documented
+    workaround is restricting to a known-good MJD window (mjd_range).
 """
 from __future__ import annotations
 
@@ -66,6 +67,9 @@ CMDSRV_ASYNC = APP_BASE + "/CmdSrv/async"                  # Firefly job servlet
 UWS_BASE = "https://irsa.ipac.caltech.edu/api/spherex/spectrophotometry"
 UWS_ASYNC = UWS_BASE + "/async"                            # IVOA UWS 1.1 service
 
+# ------------------------------------
+# Constants
+# ------------------------------------
 UWS_NS = {"uws": "http://www.ivoa.net/xml/UWS/v1.0",
           "xlink": "http://www.w3.org/1999/xlink"}
 
@@ -89,10 +93,16 @@ MANUAL_RECIPE = (
 class Sersic:
     """Frozen Sersic profile for forced photometry (matches the GUI fields).
 
-    n           : Sersic index (the tool caps this at 6).
-    axis_ratio  : "Major/Minor Axis Ratio" = a/b >= 1.
-    pa_deg      : position angle, degrees E of N.
-    reff_arcsec : effective radius, arcsec.
+    Parameters
+    ----------
+    n : float
+        Sersic index (the tool caps this at 6).
+    axis_ratio : float
+        "Major/Minor Axis Ratio" = a/b >= 1.
+    pa_deg : float
+        Position angle, degrees E of N.
+    reff_arcsec : float
+        Effective radius, arcsec.
     """
     n: float
     axis_ratio: float
@@ -110,8 +120,17 @@ def sersic_from_shape(shape_sky: dict) -> Sersic:
     """Bridge a measure-module sky shape into the tool's Sersic convention.
 
     Converts ellip (1 - b/a) to axis_ratio (a/b) and clips the index to the
-    tool's cap of 6 (with a printed note -- the A1925 control fit n=6.13 was
-    submitted as exactly this clip).
+    tool's cap of 6, printing a note when the clip fires.
+
+    Parameters
+    ----------
+    shape_sky : dict
+        Sky-frame shape with keys 'n', 'ellip', 'pa_deg', 'reff_arcsec'.
+
+    Returns
+    -------
+    model : Sersic
+        Tool-convention shape, index clipped to SPHEREX_N_MAX.
     """
     n = float(shape_sky['n'])
     if n > SPHEREX_N_MAX:
@@ -137,21 +156,36 @@ def build_server_request(ra, dec, model=None, bkg_region_size=15,
                          ff_session_id=None):
     """Build the Firefly ServerRequest dict for SpectrophotometryProcessor.
 
-    model=None -> point-source forced photometry (shapeFit=false); a Sersic
-    -> elliptical model with the shape fields the GUI sends. mjd_range
-    (start, end) limits the visits used -- the GUI's "Time Range / MJD
-    values" fields (startTime/endTime, sniffed from the live GUI
-    2026-07-05), which map to the UWS TIME parameter. The IRSA helpdesk's
-    prescribed workaround for the 2026-06/07 missing-metadata pipeline
-    failures is exactly such a cut to the "good" MJD window.
+    Parameters
+    ----------
+    ra, dec : float
+        Target position, ICRS degrees.
+    model : Sersic, optional
+        None requests point-source forced photometry (shapeFit=false); a
+        Sersic requests the elliptical model with the shape fields the GUI
+        sends. [default: None]
+    bkg_region_size : float
+        Background estimation region, pixels; the backend validates it as
+        an integer. [default: 15]
+    mjd_range : (float, float), optional
+        Limit the visits used -- the GUI's "Time Range / MJD values" fields
+        (startTime/endTime), which map to the UWS TIME parameter. Epochs
+        with broken file metadata kill jobs server-side; the IRSA-documented
+        workaround is a cut to a known-good MJD window.
+    tbl_id, job_id, ff_session_id : str, optional
+        Firefly bookkeeping; tbl_id is generated when not given.
+
+    Returns
+    -------
+    req : dict
+        ServerRequest payload for the CmdSrv tableSearch command.
     """
     tbl_id = tbl_id or _table_id()
     req = {
         "id": "SpectrophotometryProcessor",
         "UserTargetWorldPt": f"{ra};{dec};EQ_J2000",
-        # The backend validates this as an INTEGER ('15.0' is rejected with
-        # "Command line validation error" -- verified on the live service
-        # 2026-07-05).
+        # The backend validates this as an INTEGER in pixels ('15.0' is
+        # rejected with "Command line validation error").
         "bgEstimationRegion": str(int(round(float(bkg_region_size)))),
         "exposureTimeMode": "mjd",
         "CONE_AREA_KEY_RESERVED": "CONE",
@@ -203,11 +237,15 @@ def make_session(bootstrap=True):
 
 def submit_firefly(session, ra, dec, model=None, bkg_region_size=15,
                    mjd_range=None, ff_session_id=None):
-    """Submit a spectrophotometry job via Firefly.
+    """Submit a spectrophotometry job via Firefly's command server.
 
-    Returns (firefly_job_id, uws_url_or_None): the submit response either
-    already carries the UWS jobUrl or the caller polls CmdSrv until it
-    appears. The id is server-assigned.
+    Returns
+    -------
+    firefly_job_id : str
+        Server-assigned Firefly job id.
+    uws_url : str or None
+        UWS job URL when the submit response already carries it; otherwise
+        the caller polls CmdSrv until it appears.
     """
     req = build_server_request(ra, dec, model=model,
                                bkg_region_size=bkg_region_size,
@@ -228,10 +266,16 @@ def submit_firefly(session, ra, dec, model=None, bkg_region_size=15,
 
 
 def firefly_status(session, firefly_job_id):
-    """Poll Firefly's view of the job: (phase, uws_url_or_None, raw).
+    """Poll Firefly's view of the job.
 
-    A freshly-submitted job can briefly read back as JSON null before the
-    server registers it; treat that as still-pending rather than crashing.
+    A freshly submitted job can briefly read back as JSON null before the
+    server registers it; that case is treated as still-pending rather than
+    an error.
+
+    Returns
+    -------
+    phase, uws_url, payload : tuple
+        Firefly phase (or None), UWS job URL (or None), and the raw JSON.
     """
     response = session.get(f"{CMDSRV_ASYNC}/{firefly_job_id}", timeout=30)
     response.raise_for_status()
@@ -354,7 +398,35 @@ def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
                             verbose=True):
     """End-to-end: submit -> wait -> download the per-exposure table.
 
-    Returns a DataFrame (also written to out_csv if given).
+    Parameters
+    ----------
+    ra, dec : float
+        Target position, ICRS degrees.
+    model : Sersic, optional
+        Elliptical source model; None for point-source forced photometry.
+        [default: None]
+    bkg_region_size : float
+        Background estimation region, pixels (validated server-side as an
+        integer). [default: 15]
+    mjd_range : (float, float), optional
+        Restrict to visits in this MJD window.
+    out_csv : str or Path, optional
+        Also write the table here when given.
+    session : requests.Session, optional
+        Session to reuse. [default: a fresh make_session()]
+    ff_session_id : str, optional
+        Explicit Firefly session id.
+    poll : float
+        Poll interval, seconds. [default: 5]
+    timeout : float
+        Give up after this many seconds. [default: 3600]
+    verbose : bool
+        Print progress. [default: True]
+
+    Returns
+    -------
+    df : pd.DataFrame
+        Flat per-exposure table, one row per visit x channel.
     """
     session = session or make_session()
 
@@ -441,10 +513,23 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
 
     Parameters
     ----------
+    coord : SkyCoord
+        Target position.
+    out_dir : str or Path
+        Target directory; the table lands in Photometry/SPHEREx/ under it.
+    model : Sersic, optional
+        Elliptical source model; None for point-source forced photometry.
+        [default: None]
+    bkg_region_size : float
+        Background estimation region, pixels. [default: 15]
     mjd_range : (float, float), optional
         Restrict to visits in this MJD window (the GUI's Time Range). The
         IRSA-prescribed workaround for pipeline failures on files with
         broken metadata is a cut to the known-good window.
+    poll : float
+        Poll interval, seconds. [default: 5]
+    timeout : float
+        Give up after this many seconds. [default: 3600]
 
     Returns
     -------

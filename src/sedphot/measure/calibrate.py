@@ -3,16 +3,14 @@ calibrate.py
 
 Image Loading and Flux Calibration
 ---------------------------------------------------------
-FITS loading (plain or .fz) and the per-instrument calibration factors that
-put every image on the common microjansky scale:
+
+FITS loading (plain or .fz) and the per-instrument calibration factors
+that put every image on the common microjansky scale:
 
     'nmgy'    Legacy bricks/cutouts, SDSS frames:  uJy = ADU_nmgy * 3.631
     'photzp'  CFHT MegaPipe (PHOTZP header, AB):   uJy = ADU * 10^(-(ZP-23.9)/2.5)
     'ps1'     PanSTARRS stacks (ZP=25 for DN/s):   uJy = ADU * 10^((23.9-zp_dn)/2.5)
     'hst'     drizzled e/s with PHOTFLAM/PHOTPLAM: uJy = ADU * 10^((23.9-zp_ab)/2.5)
-
-Ported from uniform_phot.py (_load, _calib_factor) and
-hst_aperture_photometry.py (the AB zeropoint chain).
 
 Requirements:
     numpy, astropy
@@ -34,6 +32,20 @@ def load_image(path: str) -> tuple[np.ndarray, WCS, fits.Header]:
 
     Uses the first HDU carrying a 2D image -- covers plain FITS (primary),
     fpack .fz (extension 1), and MEF cutouts from SODA services.
+
+    Parameters
+    ----------
+    path : str
+        FITS file to load.
+
+    Returns
+    -------
+    data : np.ndarray
+        The 2D image, as floats.
+    wcs : WCS
+        World coordinate system of that HDU.
+    header : fits.Header
+        The HDU header (calibration keywords live here).
     """
     with fits.open(path) as hdul:
         for hdu in hdul:
