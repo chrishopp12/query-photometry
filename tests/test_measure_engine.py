@@ -101,6 +101,35 @@ def test_neighbor_inside_aperture_is_masked_and_filled(tmp_path):
     assert m['flux_ujy'] == pytest.approx(TRUTH, rel=0.05)
 
 
+def test_lumpy_envelope_is_not_masked(tmp_path):
+    # The c36/c38 feedback: LSB envelope substructure -- brightness
+    # patchiness around the smooth profile -- must NOT be eaten. An
+    # interloper is masked only when it DOMINATES the local profile;
+    # +/-35% patchiness sits at the profile level and stays in the flux.
+    from scipy.ndimage import gaussian_filter
+    rng = np.random.default_rng(3)
+    base = _render([GALAXY])
+    patch = gaussian_filter(rng.normal(0.0, 1.0, base.shape), 3.0 / PIXSCALE)
+    patch *= 0.35 / patch.std()
+    image = base * (1.0 + patch)
+    truth = _truth_flux(image)
+    m = _measure(tmp_path, _noisy(image, seed=3))
+    assert m['masked_fraction'] < 0.05, "envelope patchiness must stay in the flux"
+    assert m['flux_ujy'] == pytest.approx(truth, rel=0.04)
+
+
+def test_background_gradient_is_absorbed(tmp_path):
+    # The c48 failure that survived round 1: a bright halo lays a smooth
+    # gradient across the field; a scalar annulus median tilts the curve
+    # of growth. The plane fit must absorb it.
+    image = _noisy(_render([GALAXY]))
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(float)
+    image += 0.004 * (xx - SIZE / 2) * PIXSCALE   # 0.004 counts/arcsec ramp
+    m = _measure(tmp_path, image)
+    assert m['flux_ujy'] == pytest.approx(TRUTH, rel=0.04)
+    assert abs(m['cog_slope']) < 0.006, "gradient must not tilt the curve"
+
+
 def test_far_neighbors_do_not_bias_the_sky(tmp_path):
     # The declining-growth-curve failure (c48): a deep field crowds the
     # annulus with faint sources the 4-sigma peak rejection cannot see;

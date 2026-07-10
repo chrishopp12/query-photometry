@@ -135,6 +135,89 @@ def annulus_sky(
     return float(sky_level), float(sky_std), srcmask
 
 
+def annulus_sky_plane(
+        stamp: np.ndarray,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        sky_in: float,
+        sky_out: float,
+        seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
+        extra_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, float, np.ndarray]:
+    """Sigma-clipped PLANE fit to the source-masked annulus.
+
+    A scalar annulus median cannot represent a field with a large-scale
+    brightness gradient (a bright neighbor's halo, ICL): the median sits
+    between the bright and faint sides and the curve of growth tilts. The
+    plane absorbs the gradient and is evaluated per pixel, so subtracting
+    the returned map flattens the background across the whole stamp.
+
+    Parameters are those of annulus_sky.
+
+    Returns
+    -------
+    sky_map : np.ndarray
+        The fitted plane, same shape as stamp -- subtract this.
+    sky_level : float
+        The plane at the target position (provenance scalar).
+    sky_std : float
+        Sigma-clipped rms of the annulus residuals about the plane.
+    annulus_mask : np.ndarray (bool)
+        The source mask that was applied inside the annulus.
+
+    Raises
+    ------
+    ValueError
+        When too few annulus pixels survive masking, or the fitted
+        gradient is implausibly steep (a masking pathology, not sky) --
+        callers fall back to the scalar estimate.
+    """
+    rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
+    srcmask = annulus_source_mask(stamp, cx, cy, pixscale,
+                                  sky_in=sky_in, sky_out=sky_out,
+                                  seeing_arcsec=seeing_arcsec, nodata=nodata)
+    if extra_mask is not None:
+        srcmask = srcmask | extra_mask
+    region = (rr > sky_in) & (rr < sky_out) & ~srcmask & np.isfinite(stamp)
+    if nodata is not None:
+        region &= ~nodata
+    if region.sum() < 200:
+        raise ValueError(
+            f"sky annulus {sky_in:g}-{sky_out:g}\" has only "
+            f"{int(region.sum())} usable pixels after masking")
+
+    yy, xx = np.indices(stamp.shape)
+    dx = (xx - cx) * pixscale
+    dy = (yy - cy) * pixscale
+    select = region.copy()
+    coef = np.zeros(3)
+    sky_std = float('nan')
+    for _ in range(3):
+        design = np.column_stack([dx[select], dy[select],
+                                  np.ones(int(select.sum()))])
+        coef, *_ = np.linalg.lstsq(design, stamp[select], rcond=None)
+        residual = stamp - (coef[0] * dx + coef[1] * dy + coef[2])
+        _, _, sky_std = sigma_clipped_stats(residual[region], sigma=3.0)
+        refined = region & (np.abs(residual) < 3.0 * sky_std)
+        if refined.sum() < 200 or bool((refined == select).all()):
+            break
+        select = refined
+
+    # Sanity: the background may tilt, but a swing across the aperture
+    # bigger than the annulus scatter itself means the fit chased sources.
+    swing = float(np.hypot(coef[0], coef[1])) * 2.0 * sky_in
+    if not np.isfinite(sky_std) or swing > 3.0 * sky_std:
+        raise ValueError(
+            f"fitted sky gradient swings {swing:.3g} across the aperture "
+            f"(annulus rms {sky_std:.3g}) -- not believable as background")
+
+    sky_map = coef[0] * dx + coef[1] * dy + coef[2]
+    return sky_map, float(coef[2]), float(sky_std), srcmask
+
+
 def radial_sky_profile(
         stamp: np.ndarray,
         cx: float,

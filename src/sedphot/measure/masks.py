@@ -5,17 +5,15 @@ Neighbor Masks for Aperture Photometry
 ---------------------------------------------------------
 
 Boolean masks that keep neighboring sources out of the sky annulus and
-the aperture: a deblended source detection (source_mask), structural
-pixel ownership of the target's own segment (target_segment), the
-two-channel neighbor mask built on both (neighbor_mask), and
-user-supplied masks loaded from disk and moved between pixel grids by
-WCS (load_user_mask, reproject_mask).
+the aperture: a deblended source detection for cleaning the sky
+(source_mask), a difference-of-Gaussians interloper mask for the
+aperture (neighbor_mask), and user-supplied masks loaded from disk and
+moved between pixel grids by WCS (load_user_mask, reproject_mask).
 
-Ownership is structural, not radial: a detected segment that is not the
-target's is a neighbor wherever it sits -- inside the photometry
-aperture included -- while the target's own segment is never masked, no
-matter how asymmetric its envelope. Only sources whose isophotes merge
-with the target need the model-dependent residual channel.
+The aperture mask is scale-selective, not model-based: only sources with
+PSF-scale power above their own local diffuse level are interlopers, so
+the target's envelope -- asymmetric, patchy, or disconnected at any
+isophote -- can never be masked as its own neighbor, at any radius.
 
 Requirements:
     numpy, scipy, astropy, photutils
@@ -100,7 +98,21 @@ def radii_arcsec(shape: tuple, cx: float, cy: float, pixscale: float) -> np.ndar
     return np.hypot(xx - cx, yy - cy) * pixscale
 
 
-def target_segment(
+# Difference-of-Gaussians dominance: a candidate is masked where its
+# PSF-scale (fine-smoothed) brightness exceeds DOG_FACTOR x its own local
+# diffuse level (heavy-smoothed). Diffuse structure -- an envelope,
+# however asymmetric or patchy -- has fine ~ heavy and always fails; a
+# star or galaxy core has fine >> heavy and passes. No profile model is
+# involved, so there is no azimuthal-median reference to collapse on
+# one-sided envelopes (the failure that ate c36/c38).
+DOG_FACTOR = 1.5
+
+# The heavy smoothing scale (FWHM, arcsec) that defines "diffuse": at
+# least 3", or 2.5 seeing when the PSF is fat.
+DOG_HEAVY_FWHM_MIN = 3.0
+
+
+def nontarget_parents(
         stamp: np.ndarray,
         threshold_std: float,
         cx: float,
@@ -108,32 +120,32 @@ def target_segment(
         *,
         npixels: int = 8,
         nodata: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Structural pixel ownership: the target's segment vs everyone else's.
+) -> np.ndarray:
+    """Detected segments that do not contain the target position.
 
-    Segments the lightly smoothed stamp at 2 x threshold_std WITHOUT
-    deblending: a connected envelope is one segment, so the target cannot
-    be shredded into pieces here. The segment under the target position is
-    the target's; every other segment belongs to a neighbor.
+    Used to clean the DIAGNOSTIC curve of growth beyond the aperture: an
+    unmasked bright neighbor outside the aperture is (correctly) in no
+    flux, but once the growing radius reaches it the curve jumps and the
+    outer-slope sky witness reads as a false alarm. Ambiguous
+    disconnected envelope islands are filled there too -- the curve
+    under-shows envelope growth beyond the aperture, which is the
+    acceptable direction for a sky diagnostic.
 
     Returns
     -------
-    (target, neighbors) : tuple of np.ndarray (bool)
-        Pixels of the target's own segment, and pixels of every other
-        segment (undilated). Both all-False when nothing is detected.
+    mask : np.ndarray (bool)
+        True on every detected segment except the target's own.
     """
     work = stamp if nodata is None else np.where(nodata, 0.0, stamp)
     smoothed = convolve(np.nan_to_num(work), Gaussian2DKernel(1.5))
     segm = detect_sources(smoothed, threshold=2.0 * threshold_std,
                           n_pixels=npixels)
     if segm is None:
-        return (np.zeros(stamp.shape, bool), np.zeros(stamp.shape, bool))
+        return np.zeros(stamp.shape, bool)
     iy = int(np.clip(round(cy), 0, stamp.shape[0] - 1))
     ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
     label = int(segm.data[iy, ix])
-    target = segm.data == label if label else np.zeros(stamp.shape, bool)
-    neighbors = (segm.data > 0) & (segm.data != label if label else True)
-    return target, neighbors
+    return (segm.data > 0) & (segm.data != label if label else True)
 
 
 def neighbor_mask(
@@ -146,129 +158,103 @@ def neighbor_mask(
         protect_radius: float = 4.0,
         npixels: int = 8,
         dilate: int = 2,
-        n_iter: int = 2,
+        seeing_arcsec: float = 1.0,
         nodata: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Neighbor mask with structural target/neighbor ownership.
+    """Difference-of-Gaussians neighbor mask: concentrated interlopers only.
 
-    Two channels, by where a source sits:
+    The stamp is smoothed twice -- at the PSF scale and at a heavy
+    "diffuse" scale -- and their scaled difference is the dominance map:
 
-    - OUTSIDE the target's segment: every other detected segment is a
-      neighbor and is always masked -- radius is irrelevant, so a
-      companion inside the photometry aperture is masked while the
-      target's own envelope, however far it reaches, never is. (Deciding
-      this radially via protect_radius either ate asymmetric envelopes or
-      protected real companions, depending on which way it was set.)
-    - INSIDE the target's segment: a companion whose isophotes merge with
-      the target cannot be separated structurally without risking
-      shredding the envelope. There an elliptical-annulus median model of
-      the target is subtracted and the deblended detection runs on the
-      RESIDUAL, with a local-brightness floor so the envelope's own lumpy
-      substructure does not false-detect.
+        dog = fine - DOG_FACTOR x heavy
+
+    Diffuse structure lives equally in both smoothings and cancels, so
+    the target's envelope -- asymmetric, patchy, or disconnected at any
+    isophote -- can never mask itself. Concentrated sources survive the
+    difference; the connected dog region under the target position is
+    the target's own core (exempt), every other region is an interloper
+    and is masked, grown by roughly a seeing disk to cover its skirt.
+    Light beyond that growth (a bright companion's outer wings) stays in
+    the flux: masking errs toward keeping target light, the leak is
+    bounded, and the QA metrics betray it.
 
     Parameters
     ----------
     stamp : np.ndarray
         Sky-subtracted stamp.
     threshold_std : float
-        Background rms; detection threshold is 2 x threshold_std.
+        Background rms; the dominance exceedance threshold is
+        2 x threshold_std.
     cx, cy : float
         Stamp-pixel center of the target.
     pixscale : float
         Arcsec per pixel.
     protect_radius : float
-        Core radius (arcsec) the RESIDUAL channel never masks -- absorbs
-        core mismatch of the smooth profile. Structural neighbors are
-        masked regardless. [default: 4.0]
-    npixels, dilate : int
-        Passed through to source_mask.
-    n_iter : int
-        Profile/mask iterations (the profile is remeasured with the mask
-        applied). [default: 2]
+        Radius (arcsec) never masked -- keeps historical override
+        semantics (--protect-radius). A companion inside it stays in the
+        flux (the c41/c53/c58 class) with only the QA metrics to flag it.
+        [default: 4.0]
+    npixels : int
+        Minimum connected pixels for a dominance region.
+    dilate : int
+        Extra mask growth (pixels) on top of the seeing disk.
+    seeing_arcsec : float
+        Band PSF FWHM; sets the fine/heavy scale split and the mask
+        growth. [default: 1.0]
     nodata : np.ndarray (bool), optional
-        Off-footprint / blank pixels; excluded from the moments and the
-        profile, and never counted as neighbor pixels (the caller handles
-        their fill and coverage accounting).
+        Off-footprint / blank pixels; zeroed for the smoothings and never
+        counted as interloper pixels (the caller handles their fill and
+        coverage accounting).
 
     Returns
     -------
     mask : np.ndarray (bool)
-        True where a neighbor is (exclude from sky and aperture).
-
-    Notes
-    -----
-    Any smooth-profile model has limits: lumpy structure no elliptical
-    profile can follow (e.g. a lensed arc) still leaves residuals that
-    detect as spurious neighbors inside the target's segment. Supply a
-    user mask for such targets. A companion within protect_radius of the
-    center remains unseparable (the c41/c53/c58 class): its light is in
-    the flux and only the QA metrics flag it.
+        True where a concentrated interloper is (exclude from sky and
+        aperture).
     """
+    from scipy import ndimage
+
     rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
-    yy, xx = np.indices(stamp.shape)
     good = np.isfinite(stamp) if nodata is None else (np.isfinite(stamp) & ~nodata)
+    work = np.where(good, np.nan_to_num(stamp), 0.0)
 
-    # Channel 1 -- structural: every segment that is not the target's.
-    target_seg, neighbor_seg = target_segment(
-        stamp, threshold_std, cx, cy, npixels=npixels, nodata=nodata)
-    structural = binary_dilation(neighbor_seg, iterations=dilate)
-    structural &= ~target_seg  # dilation must not creep onto the target
+    fine = convolve(work, Gaussian2DKernel(1.5))
+    heavy_fwhm = max(DOG_HEAVY_FWHM_MIN, 2.5 * seeing_arcsec)
+    heavy_sigma_px = heavy_fwhm / 2.355 / pixscale
+    heavy = convolve(work, Gaussian2DKernel(heavy_sigma_px))
+    dog = fine - DOG_FACTOR * heavy
 
-    # Channel 2 -- residual detection inside the target's segment.
-    mask = structural.copy()
-    # Moments over the target's own segment, not a blind circular region:
-    # sky noise clipped positive across a 30" disk has enormous, perfectly
-    # circular second moments, so including it dilutes and circularizes the
-    # estimated ellipse -- and a wrong ellipse leaves a quadrupole residual
-    # on the envelope that beats the local floor and masks real light.
-    moment_region = target_seg if target_seg.any() \
-        else (rr < min(30.0, float(rr.max()) * 0.5))
-    for _ in range(n_iter):
-        # Elliptical geometry from flux-weighted second moments of the
-        # (unmasked) target light -- a circular profile leaves a quadrupole
-        # residual on an elliptical galaxy that false-detects as neighbors.
-        weight_sel = moment_region & ~mask & good
-        weights = np.where(weight_sel, np.clip(stamp, 0, None), 0.0)
-        total = weights.sum()
-        if total > 0:
-            dx, dy = xx - cx, yy - cy
-            mxx = float((weights * dx * dx).sum() / total)
-            myy = float((weights * dy * dy).sum() / total)
-            mxy = float((weights * dx * dy).sum() / total)
-            theta = 0.5 * np.arctan2(2 * mxy, mxx - myy)
-            trace = mxx + myy
-            det = np.sqrt(max((mxx - myy) ** 2 + 4 * mxy ** 2, 0.0))
-            a2, b2 = (trace + det) / 2, max((trace - det) / 2, 1e-12)
-            axis_ratio = float(np.clip(np.sqrt(b2 / a2), 0.3, 1.0))
-        else:
-            theta, axis_ratio = 0.0, 1.0
-        cos_t, sin_t = np.cos(theta), np.sin(theta)
-        x_rot = (xx - cx) * cos_t + (yy - cy) * sin_t
-        y_rot = -(xx - cx) * sin_t + (yy - cy) * cos_t
-        r_ell = np.hypot(x_rot, y_rot / axis_ratio) * pixscale
+    exceed = dog > 2.0 * threshold_std
+    if nodata is not None:
+        exceed &= ~nodata
+    labels, n_regions = ndimage.label(exceed)
+    if n_regions == 0:
+        return np.zeros(stamp.shape, bool)
 
-        # Elliptical-annulus median profile, then detect on the residual.
-        edges = np.arange(0.0, float(r_ell.max()) + 2.0, 1.0)
-        bin_index = np.clip(np.digitize(r_ell, edges) - 1, 0, len(edges) - 2)
-        profile = np.zeros(len(edges) - 1)
-        for i in range(len(edges) - 1):
-            sel = (bin_index == i) & ~mask & good
-            if sel.sum() > 5:
-                profile[i] = np.median(stamp[sel])
-        model = profile[bin_index]
-        residual = np.where(good, stamp - model, 0.0)
-        # Local-brightness floor: inside the galaxy-dominated region a
-        # residual must also beat half the local profile level -- compact
-        # neighbors do, the envelope's own lumpy substructure does not
-        # (deep imaging detects that substructure at any sky-based
-        # threshold, and masking it biases the flux low).
-        embedded = source_mask(residual, threshold_std,
-                               threshold_map=0.5 * np.clip(model, 0, None),
-                               npixels=npixels, dilate=dilate, nodata=nodata)
-        embedded &= target_seg          # channel 1 owns everything outside
-        embedded &= rr > protect_radius
-        mask = structural | embedded
+    # Drop sub-npixels specks, exempt the target's own core: the region
+    # under (or nearest within a seeing disk of) the target position.
+    sizes = ndimage.sum(exceed, labels, index=np.arange(1, n_regions + 1))
+    iy = int(np.clip(round(cy), 0, stamp.shape[0] - 1))
+    ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
+    target_label = labels[iy, ix]
+    if target_label == 0:
+        near = (rr < max(seeing_arcsec, 2.0 * pixscale)) & exceed
+        if near.any():
+            candidates, counts = np.unique(labels[near], return_counts=True)
+            target_label = int(candidates[np.argmax(counts)])
+    keep = [lab for lab in range(1, n_regions + 1)
+            if lab != target_label and sizes[lab - 1] >= npixels]
+    if not keep:
+        return np.zeros(stamp.shape, bool)
 
+    mask = np.isin(labels, keep)
+    grow = dilate + max(1, int(round(seeing_arcsec / pixscale)))
+    mask = binary_dilation(mask, iterations=grow)
+    if target_label:
+        mask &= labels != target_label
+    mask &= rr > protect_radius
+    if nodata is not None:
+        mask &= ~nodata
     return mask
 
 

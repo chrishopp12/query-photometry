@@ -41,8 +41,9 @@ from ..results import ImageProduct
 from ..schema import make_row
 from ..units import flux_err_to_mag_err, ujy_to_mag
 from .calibrate import calib_factor, load_image, pixel_scale_arcsec
-from .masks import neighbor_mask, radii_arcsec, reproject_mask, source_mask
-from .sky import annulus_sky
+from .masks import (neighbor_mask, nontarget_parents, radii_arcsec,
+                    reproject_mask, source_mask)
+from .sky import annulus_sky, annulus_sky_plane
 
 # ------------------------------------
 # Constants
@@ -104,10 +105,10 @@ def prepare_stamp(
     the profile, and handed to the caller for fill and coverage
     accounting. The sky is estimated twice: a first pass with
     matched-filter peak rejection sets the detection threshold, then every
-    detected segment is masked and the annulus re-clipped -- the faint
-    sources and bright-neighbor wings that survive peak rejection are what
-    bias a deep, crowded annulus high (the declining-growth-curve
-    signature).
+    detected segment is masked and a sigma-clipped PLANE is fit through
+    the annulus -- the faint sources and bright-neighbor wings that
+    survive peak rejection bias a deep crowded annulus high, and a halo
+    or ICL gradient tilts it, both of which read as sloped growth curves.
 
     Returns
     -------
@@ -142,21 +143,25 @@ def prepare_stamp(
     # such column through the integration region craters the curve of
     # growth. Anything deeper than 10 sigma below sky is nodata.
     nodata |= (stamp - sky_level) < -10.0 * max(sky_std, 1e-30)
-    # Sky pass 2: re-clip with every detected segment masked. Segments are
-    # dilated ~2 arcsec so the unmasked wings of bright annulus sources go
-    # with them.
+    # Sky pass 2: a sigma-clipped PLANE through the annulus with every
+    # detected segment masked (dilated ~2 arcsec so bright-neighbor wings
+    # go too). The plane absorbs the large-scale gradient a bright halo
+    # or ICL lays across the field -- a scalar median sits between the
+    # bright and faint sides and tilts the curve of growth. The scalar
+    # from pass 1 stands in when the fit is starved or not believable.
     segmask = source_mask(stamp - sky_level, sky_std,
                           dilate=max(2, int(round(2.0 / pixscale))),
                           nodata=nodata)
+    sky_map: np.ndarray | float = sky_level
     try:
-        sky_level, sky_std, annulus_srcmask = annulus_sky(
+        sky_map, sky_level, sky_std, annulus_srcmask = annulus_sky_plane(
             stamp, cx, cy, pixscale, sky_in=sky_in, sky_out=sky_out,
             seeing_arcsec=product.seeing_arcsec, nodata=nodata,
             extra_mask=segmask)
     except ValueError as e:
-        print(f"  {product.instrument} {product.band}: second sky pass "
-              f"left too few annulus pixels ({e}); keeping the first-pass sky")
-    sub = stamp - sky_level
+        print(f"  {product.instrument} {product.band}: plane sky pass "
+              f"fell back to the annulus median ({e})")
+    sub = stamp - sky_map
 
     if user_mask is not None:
         mask, mask_wcs = user_mask
@@ -169,7 +174,9 @@ def prepare_stamp(
         mask_mode = "user"
     else:
         mask = neighbor_mask(sub, sky_std, cx, cy, pixscale,
-                             protect_radius=protect_radius, nodata=nodata)
+                             protect_radius=protect_radius,
+                             seeing_arcsec=product.seeing_arcsec,
+                             nodata=nodata)
         mask_mode = "auto"
 
     return dict(stamp=sub, stamp_wcs=stamp_wcs, cx=cx, cy=cy, pixscale=pixscale,
@@ -260,19 +267,26 @@ def measure_aperture(
 
     # Azimuthal-profile fill of masked and nodata aperture pixels -- the
     # correction that keeps a masked companion or a small blank wedge from
-    # simply deleting aperture area.
+    # simply deleting aperture area. The DIAGNOSTIC curve additionally
+    # fills every non-target segment beyond the aperture: an unmasked
+    # neighbor out there is in no flux, but it would step the curve and
+    # fake a sky alarm in the outer slope.
     fill = mask | nodata
+    outer_fill = fill | (nontarget_parents(sub, sky_std, cx, cy, nodata=nodata)
+                         & (rr >= aperture_arcsec))
     edges = np.arange(0, rgrid.max() + 1, 1.0)
     profile = np.zeros(len(edges) - 1)
     for i in range(len(edges) - 1):
-        sel = (rr >= edges[i]) & (rr < edges[i + 1]) & ~fill
+        sel = (rr >= edges[i]) & (rr < edges[i + 1]) & ~outer_fill
         if sel.sum():
             profile[i] = np.median(sub[sel])
     bin_index = np.clip(np.digitize(rr, edges) - 1, 0, len(profile) - 1)
     filled = sub.copy()
     filled[fill] = profile[bin_index[fill]]
+    display = sub.copy()
+    display[outer_fill] = profile[bin_index[outer_fill]]
 
-    enclosed = np.array([float(filled[rr < radius].sum()) * cf for radius in rgrid])
+    enclosed = np.array([float(display[rr < radius].sum()) * cf for radius in rgrid])
     flux_ujy = float(filled[in_aperture].sum()) * cf
 
     masked_fraction = float((mask & in_aperture).sum()) / max(n_aper, 1)
