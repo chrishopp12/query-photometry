@@ -68,9 +68,14 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     products: list[ImageProduct] = []
-    try:
-        for band in bands:
-            path = cache_dir / f"sdss_{band}_frame.fits"
+    failures: list[str] = []
+    for band in bands:
+        path = cache_dir / f"sdss_{band}_frame.fits"
+        # Per-band containment: astroquery's frame lookup can fail
+        # positionally (e.g. KeyError 'run' when the field query returns a
+        # row without imaging identifiers); one bad band must not take the
+        # others down.
+        try:
             if not path.exists():
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
@@ -81,15 +86,19 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                     continue
                 hdu = images[0][0]
                 fits.writeto(path, hdu.data, hdu.header, overwrite=True)
-            products.append(ImageProduct(
-                provider='sdss', instrument='SDSS', band=band,
-                path=str(path), calib='nmgy', seeing_arcsec=SEEING,
-                wave_um=WAVE_UM.get(band, float('nan'))))
-    except Exception as e:
-        return ProviderResult(provider='sdss', status=STATUS_ERROR,
-                              message=f"{type(e).__name__}: {e}")
+        except Exception as e:
+            print(f"  [SDSS] {band} lookup failed: {type(e).__name__}: {e}")
+            failures.append(f"{band}: {type(e).__name__}: {e}")
+            continue
+        products.append(ImageProduct(
+            provider='sdss', instrument='SDSS', band=band,
+            path=str(path), calib='nmgy', seeing_arcsec=SEEING,
+            wave_um=WAVE_UM.get(band, float('nan'))))
 
     if not products:
+        if failures:
+            return ProviderResult(provider='sdss', status=STATUS_ERROR,
+                                  message="; ".join(failures))
         return ProviderResult(provider='sdss', status=STATUS_NO_COVERAGE,
                               message="no SDSS frames at this position")
     return products
