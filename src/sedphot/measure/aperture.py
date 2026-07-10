@@ -332,6 +332,7 @@ def measure_aperture(
         sky_level_ujy=sky_level * cf, sky_std_ujy=sky_std * cf,
         rgrid=rgrid, enclosed_ujy=enclosed,
         stamp=sub, rr=rr, mask=mask, mask_mode=mask_mode, nodata=nodata,
+        outer_fill=outer_fill,
         annulus_srcmask=prep['annulus_srcmask'],
         cx=cx, cy=cy,
         aperture_arcsec=aperture_arcsec, sky_in=sky_in, sky_out=sky_out,

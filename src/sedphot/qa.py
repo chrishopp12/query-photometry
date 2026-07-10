@@ -78,16 +78,36 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
     hidden = mask if nodata is None else (mask | nodata)
     axes[1].imshow(np.where(hidden, np.nan, stamp), origin="lower", cmap=gray,
                    norm=norm)
+    # The two invisible exclusion sets, tinted: the sky fit's source mask
+    # (gold) and the diagnostic curve's outer fill (orange). Neither
+    # touches the aperture flux; showing them keeps the panel honest about
+    # what the sky and the curve actually saw.
+    from matplotlib.colors import ListedColormap
+    rr_px = np.hypot(*np.meshgrid(np.arange(stamp.shape[1]) - cx,
+                                  np.arange(stamp.shape[0]) - cy)) * pixscale
+    sky_excluded = measurement.get('annulus_srcmask')
+    if sky_excluded is not None:
+        show = sky_excluded & (rr_px > sky_in) & (rr_px < sky_out) & ~hidden
+        axes[1].imshow(np.where(show, 1.0, np.nan), origin="lower",
+                       cmap=ListedColormap(["#eda100"]), alpha=0.4,
+                       interpolation="nearest")
+    outer_fill = measurement.get('outer_fill')
+    if outer_fill is not None:
+        show = outer_fill & ~hidden & (rr_px >= aperture) & (rr_px <= sky_in)
+        axes[1].imshow(np.where(show, 1.0, np.nan), origin="lower",
+                       cmap=ListedColormap(["#eb6834"]), alpha=0.4,
+                       interpolation="nearest")
     axes[1].add_patch(Circle((cx, cy), aperture / pixscale, fill=False,
                              ec="cyan", lw=1.2))
     for radius in (sky_in, sky_out):
         axes[1].add_patch(Circle((cx, cy), radius / pixscale, fill=False,
                                  ec="gold", lw=0.9, ls=(0, (4, 3))))
-    mask_title = f"{measurement['mask_mode']} mask | aperture + sky annulus"
+    mask_title = (f"{measurement['mask_mode']} mask (dark) | "
+                  f"curve fill (orange) | sky-excluded (gold)")
     coverage = measurement.get('aperture_coverage')
     if coverage is not None and coverage < 1.0:
         mask_title += f" | coverage {coverage:.2f}"
-    axes[1].set_title(mask_title, fontsize=10)
+    axes[1].set_title(mask_title, fontsize=9)
     for ax in axes[:2]:
         window = (sky_out + 6) / pixscale
         ax.set_xlim(cx - window, cx + window)
