@@ -55,12 +55,14 @@ GALEX_BANDS = {
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
     """One VizieR cone query; closest source; one row per detected band."""
     mag_cols = [c for pair in GALEX_BANDS.values() for c in pair]
-    vizier = Vizier(
-        columns=['RAJ2000', 'DEJ2000', 'E(B-V)'] + mag_cols,
-        row_limit=-1,
-    )
+    # The Vizier instance is built per mirror attempt: vizier_server is the
+    # only reliable way to point it (see retry.query_vizier_mirrors).
     result = query_vizier_mirrors(
-        lambda: vizier.query_region(
+        lambda server: Vizier(
+            columns=['RAJ2000', 'DEJ2000', 'E(B-V)'] + mag_cols,
+            row_limit=-1,
+            vizier_server=server,
+        ).query_region(
             coord,
             radius=radius_arcsec * u.arcsec,
             catalog=GALEX_CAT,

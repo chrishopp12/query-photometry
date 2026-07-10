@@ -127,8 +127,16 @@ def final_radius(
     return radius_arcsec * expand_factor ** (max_retries - 1)
 
 
-def query_vizier_mirrors(query_fn: Callable[[], object], label: str):
-    """Run a VizieR query callable, falling back across mirrors on empty/error.
+def query_vizier_mirrors(query_fn: Callable[[str], object], label: str):
+    """Run a VizieR query against each mirror until one returns rows.
+
+    query_fn receives the mirror hostname and must construct its Vizier
+    instance with Vizier(vizier_server=server, ...). Re-pointing
+    astroquery.vizier.conf.server at runtime does NOT work: VizierClass
+    captures the config value in a signature default when astroquery is
+    imported, so even instances constructed after the re-point keep the
+    original hostname (verified on astroquery 0.4.11 during the 2026-07-07
+    CDS DNS outage, when the "mirror" attempt still hit the CDS host).
 
     An empty result from one mirror may be a genuine no-match, so the next
     mirror is asked before concluding; the cost is one redundant query in the
@@ -138,8 +146,9 @@ def query_vizier_mirrors(query_fn: Callable[[], object], label: str):
     Parameters
     ----------
     query_fn : callable
-        Zero-argument callable performing the VizieR query; its result is
-        returned as-is when truthy (astroquery TableList).
+        One-argument callable (mirror hostname) performing the VizieR
+        query; its result is returned as-is when truthy (astroquery
+        TableList).
     label : str
         Provider name for logging.
 
@@ -147,24 +156,17 @@ def query_vizier_mirrors(query_fn: Callable[[], object], label: str):
     -------
     The first truthy query result, or None when every mirror returns nothing.
     """
-    from astroquery.vizier import conf
-
-    original = conf.server
-    try:
-        for server in VIZIER_MIRRORS:
-            conf.server = server
-            try:
-                result = query_fn()
-            except Exception as e:
-                print(f"  [{label}] VizieR {server} error: {type(e).__name__}: {e}")
-                continue
-            if result:
-                return result
-            if server != VIZIER_MIRRORS[-1]:
-                print(f"  [{label}] VizieR {server} returned nothing; trying a mirror")
-        return None
-    finally:
-        conf.server = original
+    for server in VIZIER_MIRRORS:
+        try:
+            result = query_fn(server)
+        except Exception as e:
+            print(f"  [{label}] VizieR {server} error: {type(e).__name__}: {e}")
+            continue
+        if result:
+            return result
+        if server != VIZIER_MIRRORS[-1]:
+            print(f"  [{label}] VizieR {server} returned nothing; trying a mirror")
+    return None
 
 
 def retry_transient(
