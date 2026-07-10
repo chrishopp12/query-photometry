@@ -168,6 +168,22 @@ def test_blank_annulus_chunk_leaves_flux_alone(tmp_path):
     assert m['flux_ujy'] == pytest.approx(TRUTH, rel=0.04)
 
 
+def test_dead_column_sentinel_is_nodata(tmp_path):
+    # A dead CCD column in a sky-inclusive stack is not exact zero -- it
+    # reads as a deeply negative outlier after sky subtraction. Unflagged,
+    # one such column craters the enclosed curve the moment the growing
+    # radius reaches it (seen on a real MegaPipe stack).
+    sky = 5.0                    # sky-inclusive stack: counts sit high
+    image = _noisy(_render([GALAXY])) + sky
+    c = SIZE // 2
+    column = c + int(round(14.0 / PIXSCALE))   # 14" out: outside aperture
+    image[:, column:column + 3] = 0.02          # dead, but not exactly 0
+    m = _measure(tmp_path, image)
+    assert m['aperture_coverage'] == pytest.approx(1.0)
+    assert m['flux_ujy'] == pytest.approx(TRUTH, rel=0.04)
+    assert m['cog_slope'] > -0.01, "curve must not crater at the column"
+
+
 # ------------------------------------
 # Metrics
 # ------------------------------------

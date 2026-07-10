@@ -136,6 +136,12 @@ def prepare_stamp(
     sky_level, sky_std, annulus_srcmask = annulus_sky(
         stamp, cx, cy, pixscale, sky_in=sky_in, sky_out=sky_out,
         seeing_arcsec=product.seeing_arcsec, nodata=nodata)
+    # Dead detector regions are not always exact zeros: a chip gap in a
+    # sky-inclusive stack holds some low sentinel that reads as a pixel
+    # tens of sigma BELOW sky -- physically impossible for data -- and one
+    # such column through the integration region craters the curve of
+    # growth. Anything deeper than 10 sigma below sky is nodata.
+    nodata |= (stamp - sky_level) < -10.0 * max(sky_std, 1e-30)
     # Sky pass 2: re-clip with every detected segment masked. Segments are
     # dilated ~2 arcsec so the unmasked wings of bright annulus sources go
     # with them.
