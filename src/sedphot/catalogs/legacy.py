@@ -41,7 +41,7 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.utils.tap.core import TapPlus
 
 from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
-from ..retry import with_expanding_radius
+from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
 from ..units import flux_err_to_mag_err, nanomaggy_to_ujy, ujy_to_mag
 
@@ -255,14 +255,22 @@ def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
     """Closest-source Tractor shape for a forced source model.
 
     One-shot cone query (no radius expansion: a shape grabbed from a wider
-    search risks the wrong source). Callers fall back to an image-domain
-    fit when this returns None.
+    search risks the wrong source).
 
     Returns
     -------
     (shape_sky, origin) : tuple or None
         shape_from_tractor() dict plus an origin dict whose 'source' string
-        names the table, profile type, and match separation.
+        names the table, profile type, and match separation. None means the
+        position genuinely has no usable extended shape (nothing within the
+        radius, or an unresolved PSF/DUP source).
+
+    Raises
+    ------
+    RuntimeError
+        When the TAP service fails after retries. Service failure is kept
+        distinct from no-usable-shape so callers can refuse to substitute a
+        degenerate image-fit shape for a transient outage.
     """
     table = LEGACY_TABLES[dr]
     ra = float(coord.ra.deg)
@@ -274,15 +282,19 @@ def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
       AND 't' = q3c_radial_query(ra, dec, {ra:.8f}, {dec:.8f},
                                  {radius_arcsec / 3600.0:.8f})
     """
-    try:
+
+    def _run():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tap = TapPlus(url=LEGACY_URL)
             job = tap.launch_job(query)
-            result = job.get_results().to_pandas()
+            return job.get_results().to_pandas()
+
+    try:
+        result = retry_transient(_run, "Legacy shape TAP")
     except Exception as e:
-        print(f"  [Legacy shape] Query error: {e}")
-        return None
+        raise RuntimeError(f"{table} shape query failed after retries: "
+                           f"{type(e).__name__}: {e}") from e
     if result.empty:
         print(f"  [Legacy shape] no {table} source within {radius_arcsec:.1f}\"")
         return None

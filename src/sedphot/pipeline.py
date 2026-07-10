@@ -526,14 +526,31 @@ def run_spherex(
                 cutout_half_arcsec=cutout_arcsec / 2.0, user_mask=None,
                 protect_radius=4.0)
         elif sersic_from is None:
-            looked = query_shape(coord, dr=legacy_dr)
-            if looked is not None:
-                shape_sky, origin = looked
-            else:
-                print("  [spherex] no usable Tractor shape; "
-                      "fitting the Legacy z image instead")
+            # Default: the Tractor catalog shape. A wrong shape poisons an
+            # irreplaceable raw table, so this aborts on failure rather
+            # than silently substituting the PSF-degenerate image fit (a
+            # Datalab outage once swapped in an image-fit b/a of 0.28 for
+            # a Tractor 0.41 without a word).
+            try:
+                looked = query_shape(coord, dr=legacy_dr)
+            except Exception as e:
+                message = (f"Tractor shape lookup failed: {e} -- aborting; "
+                           f"re-run later, or pass an explicit shape "
+                           f"(--sersic-params), fit one deliberately "
+                           f"(--sersic-from z), or use --model psf")
+                print(f"  [spherex] {message}")
+                return ProviderResult(provider='spherex', status=STATUS_ERROR,
+                                      message=message)
+            if looked is None:
+                message = ("no usable extended Tractor shape at this "
+                           "position -- pass --sersic-params, fit a band "
+                           "with --sersic-from, or use --model psf")
+                print(f"  [spherex] {message}")
+                return ProviderResult(provider='spherex', status=STATUS_ERROR,
+                                      message=message)
+            shape_sky, origin = looked
         if shape_sky is None:
-            spec = sersic_from or 'z'
+            spec = sersic_from
             instrument = spec.split('_')[0].lower() if '_' in spec else 'legacy'
             if instrument not in IMAGE_PROVIDERS:
                 raise ValueError(f"--sersic-from {spec!r}: unknown instrument "

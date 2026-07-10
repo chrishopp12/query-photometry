@@ -107,8 +107,11 @@ bias for extended sources -- with the shape resolved in order:
 2. `--sersic-from <band>` -- fit on that band's image
 3. default: the Legacy Tractor catalog shape (`type`, `sersic`, `shape_r`,
    `e1`/`e2` -> n, b/a, PA east of north; SER keeps its fitted index,
-   DEV/EXP/REX fix n = 4/1/1), falling back to a Legacy z image fit when
-   the source is unresolved (PSF/DUP) or the lookup fails
+   DEV/EXP/REX fix n = 4/1/1). The TAP lookup is retried, and when it
+   still fails -- or the source has no extended shape (PSF/DUP) -- the
+   verb ABORTS nonzero instead of silently substituting an image fit: a
+   wrong shape poisons an irreplaceable raw table. Proceed deliberately
+   with `--sersic-params`, `--sersic-from`, or `--model psf`.
 
 The shape's origin is recorded in the sidecar's model block. An existing
 table is never overwritten (raw tables can be irreplaceable manual
