@@ -33,12 +33,17 @@ Notes:
 """
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 
+import numpy as np
 import requests
+import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
 
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
@@ -58,6 +63,55 @@ _FILTER_RE = re.compile(r"^([ugriz])\.MP\d+$", re.IGNORECASE)
 def _band_of(filter_name: str) -> str | None:
     match = _FILTER_RE.match(str(filter_name).strip())
     return match.group(1).lower() if match else None
+
+
+def _footprint_center_offset(row, coord: SkyCoord) -> float:
+    """Angular distance (deg) from a plane's footprint centroid to the target.
+
+    A target near a stack's edge yields a half-blank SODA cutout, so ordering
+    candidate stacks by this offset puts the stack that best centers the target
+    (largest margin to its boundary) first. Returns a large value on parse
+    failure so unparseable planes sort last.
+    """
+    try:
+        samples = np.asarray(row['position_bounds_samples'], dtype=float).ravel()
+        samples = samples[np.isfinite(samples)]
+        if samples.size < 2:
+            return 1e9
+        ra = samples[0::2].mean()
+        dec = samples[1::2].mean()
+        return float(SkyCoord(ra * u.deg, dec * u.deg).separation(coord).deg)
+    except Exception:
+        return 1e9
+
+
+def _covers_target(content: bytes, coord: SkyCoord, pad_arcsec: float = 15.0) -> bool:
+    """Does a SODA cutout hold real data across a pad_arcsec box on the TARGET?
+
+    SODA truncates cutouts at a stack's footprint edge, so the target can land
+    near the returned array's edge even when the array center is populated --
+    check the target's OWN WCS position and require it to sit at least
+    pad_arcsec (> the photometry aperture) inside the array, so the aperture
+    fits. A target near every stack's edge (true survey boundary) fails here
+    and CFHT is skipped rather than measured on a clipped aperture.
+    """
+    try:
+        with fits.open(io.BytesIO(content)) as hdul:
+            hdu = next(h for h in hdul if h.data is not None and h.data.ndim == 2)
+            data = hdu.data
+            wcs = WCS(hdu.header)
+        x, y = wcs.world_to_pixel(coord)
+        x, y = int(round(float(x))), int(round(float(y)))
+        scale = float(np.mean(proj_plane_pixel_scales(wcs))) * 3600.0  # arcsec/pix
+        pad = max(3, int(round(pad_arcsec / scale)))
+        ny, nx = data.shape
+        if not (pad <= x < nx - pad and pad <= y < ny - pad):
+            return False
+        box = data[y - pad:y + pad + 1, x - pad:x + pad + 1]
+        good = np.isfinite(box) & (box != 0)
+        return bool(good.mean() > 0.8)
+    except Exception:
+        return False
 
 
 # ------------------------------------
@@ -123,18 +177,43 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 continue
             path = cache_dir / f"cfht_megapipe_{band}.fits"
             if not path.exists():
-                subset = result[[i for i, row in enumerate(result)
-                                 if _band_of(row['energy_bandpassName']) == band]]
+                # Order candidate stacks by how well their footprint centers the
+                # target, then take the first that actually covers the stamp
+                # center. SODA returns overlapping stacks in a non-deterministic
+                # order, so a fixed urls[0] can grab a stack that clips the target
+                # at its edge (half-blank cutout) even when covering stacks exist.
+                band_idx = sorted(
+                    (i for i, row in enumerate(result)
+                     if _band_of(row['energy_bandpassName']) == band),
+                    key=lambda i: _footprint_center_offset(result[i], coord))
+                subset = result[band_idx]
                 urls = retry_transient(
                     lambda: cadc.get_image_list(subset, coord, radius),
                     f"CADC SODA {band}")
                 if not urls:
                     print(f"  [CFHT] no cutout URL for {band}")
                     continue
-                response = retry_transient(
-                    lambda: requests.get(urls[0], timeout=600), f"CADC download {band}")
-                response.raise_for_status()
-                path.write_bytes(response.content)
+                content = None
+                for url in urls:
+                    # One dead candidate must not kill the band (let alone
+                    # the provider) -- log it and try the next stack.
+                    try:
+                        resp = retry_transient(
+                            lambda: requests.get(url, timeout=600),
+                            f"CADC download {band}")
+                        resp.raise_for_status()
+                    except Exception as e:
+                        print(f"  [CFHT] {band}: candidate stack failed "
+                              f"({type(e).__name__}: {e}); trying the next")
+                        continue
+                    if _covers_target(resp.content, coord):
+                        content = resp.content
+                        break
+                if content is None:
+                    print(f"  [CFHT] {band}: all {len(urls)} stack(s) clip the "
+                          f"target at their edge (near survey boundary)")
+                    continue
+                path.write_bytes(content)
                 # Sanity: PHOTZP present for photometric use.
                 with fits.open(path) as hdul:
                     hdu = hdul[1] if len(hdul) > 1 and hdul[0].data is None else hdul[0]
