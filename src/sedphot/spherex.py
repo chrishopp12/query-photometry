@@ -385,11 +385,32 @@ def read_result_table(session, href):
 # ------------------------------------
 # Orchestration
 # ------------------------------------
-def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None):
-    """Poll poll_fn -> (phase, payload) until done, or raise on timeout."""
+def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None,
+          max_poll_failures=5):
+    """Poll poll_fn -> (phase, payload) until done, or raise on timeout.
+
+    Transient poll failures are tolerated up to max_poll_failures in a
+    row: a long job is polled hundreds of times, and one dropped HTTP
+    read must not abandon an extraction that is still running
+    server-side (observed as ReadTimeouts killing whole submissions
+    during an IRSA slow spell).
+    """
     t0 = time.time()
+    failures = 0
     while True:
-        phase, payload = poll_fn()
+        try:
+            phase, payload = poll_fn()
+            failures = 0
+        except requests.RequestException as e:
+            failures += 1
+            if failures >= max_poll_failures:
+                raise
+            print(f"  [spherex] poll failed ({type(e).__name__}); "
+                  f"retrying ({failures}/{max_poll_failures})")
+            if time.time() - t0 > timeout:
+                raise TimeoutError(f"job unreachable after {timeout}s") from e
+            time.sleep(interval)
+            continue
         if on_update:
             on_update(phase, payload)
         if done is not None:

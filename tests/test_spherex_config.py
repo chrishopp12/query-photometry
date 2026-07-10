@@ -154,3 +154,36 @@ def test_pretag_table_without_sidecar_is_not_matched(monkeypatch, tmp_path):
     result = fetch(COORD, out_dir=tmp_path, model=SHAPE, mjd_range=MJD)
     assert result.status == STATUS_OK
     assert 'reused' not in result.meta
+
+
+# ------------------------------------
+# Poll resilience
+# ------------------------------------
+def test_wait_survives_transient_poll_failures(monkeypatch):
+    import requests as requests_mod
+    from sedphot.spherex import _wait
+    monkeypatch.setattr('time.sleep', lambda s: None)
+    calls = []
+
+    def flaky_poll():
+        calls.append(1)
+        if len(calls) < 3:
+            raise requests_mod.exceptions.ReadTimeout("dropped read")
+        return "COMPLETED", ["result"]
+
+    phase, payload = _wait(flaky_poll, interval=0)
+    assert phase == "COMPLETED"
+    assert len(calls) == 3
+
+
+def test_wait_gives_up_after_persistent_failures(monkeypatch):
+    import pytest as pytest_mod
+    import requests as requests_mod
+    from sedphot.spherex import _wait
+    monkeypatch.setattr('time.sleep', lambda s: None)
+
+    def dead_poll():
+        raise requests_mod.exceptions.ReadTimeout("dead service")
+
+    with pytest_mod.raises(requests_mod.exceptions.ReadTimeout):
+        _wait(dead_poll, interval=0, max_poll_failures=3)
