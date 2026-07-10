@@ -81,17 +81,32 @@ vs AllWISE both label their bands `WISE_Wn` and differ in `source`).
 
 ## Measurement recipe
 
-One recipe for every instrument: stamp at the target -> neighbor mask ->
-sigma-clipped annulus sky (with matched-filter rejection of bright annulus
-sources) -> azimuthal-profile fill of masked pixels -> curve of growth ->
-aperture flux. Errors use the archive's inverse variance when it exists
-(Legacy bricks, HST weights), sky rms otherwise.
+One recipe for every instrument: stamp at the target -> two-pass sky
+(sigma-clipped annulus: pass one rejects bright peaks, then every detected
+segment is masked and the annulus re-clipped, so the faint sources and
+neighbor wings that bias a deep crowded annulus go too) -> two-channel
+neighbor mask -> azimuthal-profile fill of masked and blank pixels ->
+curve of growth -> aperture flux. Errors use the archive's inverse
+variance when it exists (Legacy bricks, HST weights), sky rms otherwise.
 
-The auto-mask subtracts the target's own elliptical-median profile and
-detects neighbors on the residual, so it does not eat the galaxy's envelope;
-for pathological targets (bright asymmetric cD envelopes) pass a custom
-`--mask` (`.npz` staged masks pair with `--mask-ref` for their WCS). A
-warning fires when more than 20% of the aperture is masked.
+Pixel ownership is structural, not radial: a detected segment that is not
+the target's is masked wherever it sits -- inside the aperture included --
+while the target's own segment is never masked, however asymmetric its
+envelope. Sources whose isophotes merge with the target are caught by
+subtracting the target's elliptical-median profile and detecting on the
+residual above a local-brightness floor; `--protect-radius` guards only
+that residual channel, and a merged companion inside it stays in the flux
+with only the QA metrics to betray it. For pathological targets pass a
+custom `--mask` (`.npz` staged masks pair with `--mask-ref` for their WCS).
+
+Off-footprint and blank pixels are fill-corrected up to 5% of the aperture
+area and demote the band to `no_coverage` beyond that -- or at any
+fraction when they clip the seeing-scale core, where no fill can
+reconstruct the peak. Every measured row carries machine-parsable QA
+tokens in `flags`: `cov` (aperture coverage), `maskfrac` (masked fraction
+of the aperture), `cogslope` (relative outer curve-of-growth slope per
+arcsec; strongly negative means the sky was over-estimated). A warning
+still fires when more than 20% of the aperture is masked.
 
 `--mode sersic` forces one sky-frame Sersic shape (from `--sersic-params`,
 or fit on a band with `--sersic-from`) across all bands and solves only the

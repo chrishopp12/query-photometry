@@ -133,13 +133,14 @@ def forced_photometry_single(
     ok = np.isfinite(stamp) & (weight > 0)
     if fit_mask is not None:
         ok &= ~fit_mask
+    data = np.where(ok, stamp, 0.0)   # 0-weight NaNs would still poison sums
     weights = weight * ok
     denom = np.sum(weights * basis * basis)
-    flux = float(np.sum(weights * basis * stamp) / denom)
+    flux = float(np.sum(weights * basis * data) / denom)
     err = float(1.0 / np.sqrt(denom))
     model = flux * basis
     ndof = max(int(ok.sum()) - 1, 1)
-    redchi2 = float(np.sum((weights * (stamp - model) ** 2)[ok]) / ndof)
+    redchi2 = float(np.sum((weights * (data - model) ** 2)[ok]) / ndof)
     return flux, err, model, redchi2
 
 
@@ -278,15 +279,30 @@ def measure_forced(
         Flux/err in uJy, the model and residual stamps, and QA curves.
     """
     from ..bands import wave_um as band_wave
-    from .aperture import DEFAULT_RGRID, prepare_stamp
+    from .aperture import (COVERAGE_MIN, ApertureCoverageError,
+                           DEFAULT_RGRID, prepare_stamp)
 
     prep = prepare_stamp(product, coord, cutout_half_arcsec=cutout_half_arcsec,
                          sky_in=sky_in, sky_out=sky_out, user_mask=user_mask,
                          protect_radius=protect_radius)
     sub, mask = prep['stamp'], prep['mask']
+    nodata = prep['nodata']
     cx, cy = prep['cx'], prep['cy']
     pixscale, cf = prep['pixscale'], prep['cf']
     sky_std = prep['sky_std']
+
+    # Coverage gate over the model-dominated region: missing pixels are
+    # excluded from the fit (statistically clean), but when a big piece of
+    # the galaxy itself is gone the amplitude rides on unconstrained wings.
+    cov_radius = float(np.clip(3.0 * float(shape_sky['reff_arcsec']),
+                               2.0, cutout_half_arcsec))
+    core = prep['rr'] < cov_radius
+    coverage = 1.0 - float((nodata & core).sum()) / max(int(core.sum()), 1)
+    if coverage < COVERAGE_MIN:
+        raise ApertureCoverageError(
+            f"coverage {coverage:.2f} < {COVERAGE_MIN:g} within "
+            f"{cov_radius:.1f}\" of the target (off footprint / blank)",
+            coverage)
 
     theta_px = theta_from_pa(prep['stamp_wcs'], cx, cy, shape_sky['pa_deg'])
     shape_px = dict(reff=shape_sky['reff_arcsec'] / pixscale, n=shape_sky['n'],
@@ -297,16 +313,18 @@ def measure_forced(
         from .calibrate import load_image
         invvar_image, _, _ = load_image(product.invvar_path)
         weight = Cutout2D(invvar_image, (prep['px'], prep['py']),
-                          2 * prep['half_px'] + 1).data.astype(float)
+                          2 * prep['half_px'] + 1,
+                          mode='partial', fill_value=0.0).data.astype(float)
         weight[~np.isfinite(weight)] = 0.0
         err_model = "ivm"
     else:
         weight = np.full(sub.shape, 1.0 / sky_std ** 2)
         err_model = "skyrms"
+    weight[nodata] = 0.0
 
     flux, err, model, redchi2 = forced_photometry_single(
         sub, weight, shape_px, (cx, cy), product.seeing_arcsec, pixscale,
-        fit_mask=mask)
+        fit_mask=mask | nodata)
 
     rgrid = np.asarray(rgrid if rgrid is not None else DEFAULT_RGRID, dtype=float)
     rr = prep['rr']
@@ -322,10 +340,14 @@ def measure_forced(
         sky_level_ujy=prep['sky_level'] * cf, sky_std_ujy=sky_std * cf,
         rgrid=rgrid, enclosed_ujy=model_cog,
         stamp=sub, model=model, rr=rr, mask=mask, mask_mode=prep['mask_mode'],
+        nodata=nodata,
         cx=cx, cy=cy,
         shape_sky=shape_sky, sky_in=sky_in, sky_out=sky_out,
         aperture_arcsec=float('nan'),
         n_masked_in_aperture=int(mask.sum()),
+        aperture_coverage=coverage,
+        masked_fraction=float((mask & core).sum()) / max(int(core.sum()), 1),
+        cog_slope=float('nan'),   # the model curve is monotonic by construction
         target_ra=float(coord.ra.deg), target_dec=float(coord.dec.deg),
     )
 
@@ -334,6 +356,7 @@ def forced_to_row(measurement: dict) -> dict:
     """Convert a forced measurement to a schema table row."""
     from ..schema import make_row
     from ..units import flux_err_to_mag_err, ujy_to_mag
+    from .aperture import qa_flags
 
     flux = measurement['flux_ujy']
     err = measurement['flux_err_ujy']
@@ -349,7 +372,7 @@ def forced_to_row(measurement: dict) -> dict:
         match_ra=measurement['target_ra'],
         match_dec=measurement['target_dec'],
         sep_arcsec=0.0,
-        flags='',
+        flags=qa_flags(measurement),
         source=(f"sedphot_sersic_n{shape['n']:.2f}_re{shape['reff_arcsec']:.2f}as_"
                 f"{measurement['mask_mode']}mask_{measurement['err_model']}"),
     )

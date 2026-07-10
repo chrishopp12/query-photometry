@@ -37,6 +37,7 @@ def annulus_source_mask(
         sky_in: float,
         sky_out: float,
         seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
 ) -> np.ndarray:
     """Matched-filter detection of bright sources in the sky annulus.
 
@@ -49,11 +50,18 @@ def annulus_source_mask(
         True where an annulus source is masked.
     """
     yy, xx = np.indices(stamp.shape)
-    level, _, _ = sigma_clipped_stats(stamp, sigma=3.0)
-    smoothed = gaussian_filter(stamp - level, max(0.6, seeing_arcsec / 2.355 / pixscale))
+    work = stamp
+    if nodata is not None:
+        work = np.where(nodata, 0.0, stamp)
+    finite = work[np.isfinite(work)]
+    level, _, _ = sigma_clipped_stats(finite, sigma=3.0)
+    smoothed = gaussian_filter(np.nan_to_num(work - level),
+                               max(0.6, seeing_arcsec / 2.355 / pixscale))
     _, _, smooth_std = sigma_clipped_stats(smoothed, sigma=3.0)
     peaks = ((smoothed == maximum_filter(smoothed, size=int(round(3 / pixscale))))
              & (smoothed / smooth_std > 4))
+    if nodata is not None:
+        peaks &= ~nodata
     py, px = np.where(peaks)
     mask = np.zeros(stamp.shape, bool)
     for j in range(len(px)):
@@ -71,6 +79,8 @@ def annulus_sky(
         sky_in: float,
         sky_out: float,
         seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
+        extra_mask: np.ndarray | None = None,
 ) -> tuple[float, float, np.ndarray]:
     """Sigma-clipped sky level and rms from a source-masked annulus.
 
@@ -86,6 +96,16 @@ def annulus_sky(
         Annulus radii in arcsec.
     seeing_arcsec : float
         PSF FWHM for the matched-filter source rejection. [default: 1.0]
+    nodata : np.ndarray (bool), optional
+        Off-footprint / blank pixels, excluded from every statistic. In a
+        sky-subtracted archive image blank zeros sit exactly at the
+        expected sky level, so the clip cannot reject them -- left in,
+        they drag the median toward zero.
+    extra_mask : np.ndarray (bool), optional
+        Additional exclusion (e.g. the full segmentation mask on a second
+        pass); the matched-filter peak rejection alone leaves the faint
+        sources and bright-neighbor wings that bias a deep crowded
+        annulus high.
 
     Returns
     -------
@@ -94,13 +114,23 @@ def annulus_sky(
     sky_std : float
         Sigma-clipped std (per-pixel background rms).
     annulus_mask : np.ndarray (bool)
-        The bright-source mask that was applied inside the annulus.
+        The source mask that was applied inside the annulus.
     """
     rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
     srcmask = annulus_source_mask(stamp, cx, cy, pixscale,
                                   sky_in=sky_in, sky_out=sky_out,
-                                  seeing_arcsec=seeing_arcsec)
+                                  seeing_arcsec=seeing_arcsec, nodata=nodata)
+    if extra_mask is not None:
+        srcmask = srcmask | extra_mask
     region = (rr > sky_in) & (rr < sky_out) & ~srcmask & np.isfinite(stamp)
+    if nodata is not None:
+        region &= ~nodata
+    # A pathological mask can empty the annulus; sigma_clipped_stats on an
+    # empty array would return NaN and silently zero every flux downstream.
+    if region.sum() < 50:
+        raise ValueError(
+            f"sky annulus {sky_in:g}-{sky_out:g}\" has only "
+            f"{int(region.sum())} usable pixels after masking")
     sky_level, _, sky_std = sigma_clipped_stats(stamp[region], sigma=3.0)
     return float(sky_level), float(sky_std), srcmask
 

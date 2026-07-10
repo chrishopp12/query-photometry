@@ -70,17 +70,24 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
     gray = plt.cm.gray.copy()
     gray.set_bad("0.15")
 
-    axes[0].imshow(stamp, origin="lower", cmap=gray, norm=norm)
+    nodata = measurement.get('nodata')
+    shown = stamp if nodata is None else np.where(nodata, np.nan, stamp)
+    axes[0].imshow(shown, origin="lower", cmap=gray, norm=norm)
     axes[0].set_title("cutout (sky-subtracted)", fontsize=10)
 
-    axes[1].imshow(np.where(mask, np.nan, stamp), origin="lower", cmap=gray, norm=norm)
+    hidden = mask if nodata is None else (mask | nodata)
+    axes[1].imshow(np.where(hidden, np.nan, stamp), origin="lower", cmap=gray,
+                   norm=norm)
     axes[1].add_patch(Circle((cx, cy), aperture / pixscale, fill=False,
                              ec="cyan", lw=1.2))
     for radius in (sky_in, sky_out):
         axes[1].add_patch(Circle((cx, cy), radius / pixscale, fill=False,
                                  ec="gold", lw=0.9, ls=(0, (4, 3))))
-    axes[1].set_title(f"{measurement['mask_mode']} mask | aperture + sky annulus",
-                      fontsize=10)
+    mask_title = f"{measurement['mask_mode']} mask | aperture + sky annulus"
+    coverage = measurement.get('aperture_coverage')
+    if coverage is not None and coverage < 1.0:
+        mask_title += f" | coverage {coverage:.2f}"
+    axes[1].set_title(mask_title, fontsize=10)
     for ax in axes[:2]:
         window = (sky_out + 6) / pixscale
         ax.set_xlim(cx - window, cx + window)
@@ -96,9 +103,13 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
     axes[2].set_xlabel("aperture radius (arcsec)")
     axes[2].set_ylabel(r"enclosed flux ($\mu$Jy)")
     axes[2].grid(alpha=0.25, which="both")
-    axes[2].set_title(
+    growth_title = (
         rf"{measurement['flux_ujy']:.1f} $\pm$ {measurement['flux_err_ujy']:.1f} "
-        rf"$\mu$Jy ({aperture:g}\") | {measurement['err_model']}", fontsize=10)
+        rf"$\mu$Jy ({aperture:g}\") | {measurement['err_model']}")
+    slope = measurement.get('cog_slope')
+    if slope is not None and np.isfinite(slope):
+        growth_title += f" | outer slope {slope:+.3f}/arcsec"
+    axes[2].set_title(growth_title, fontsize=10)
 
     fig.suptitle(f"{measurement['instrument']} {measurement['band']}", fontsize=12)
     out_dir = Path(out_dir)

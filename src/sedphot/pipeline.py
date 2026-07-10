@@ -39,6 +39,7 @@ from .provenance import write_sidecar
 from .qa import plot_growth_curves, qa_band_figure, qa_forced_figure
 from .results import (
     STATUS_ERROR,
+    STATUS_NO_COVERAGE,
     STATUS_OK,
     ImageProduct,
     ProviderResult,
@@ -373,10 +374,13 @@ def run_measure(
               f"({shape_origin['source']})\n")
 
     # Phase 3 -- measure every band.
+    from .measure.aperture import ApertureCoverageError
+
     for name, products in fetched_products:
         cache_dir = phot_dir / instrument_dirs.get(name, name)
         provider_rows: list[dict] = []
         measured_bands: list[str] = []
+        demoted_bands: list[str] = []
         for product in products:
             try:
                 if mode == 'sersic':
@@ -400,6 +404,14 @@ def run_measure(
                         protect_radius=protect_radius)
                     row = measurement_to_row(measurement)
                     figure = qa_band_figure(measurement, cache_dir / "QA")
+            except ApertureCoverageError as e:
+                # The image exists but the aperture is off its footprint:
+                # honest no_coverage, not a measurement of zero.
+                print(f"  {product.instrument} {product.band}: "
+                      f"no_coverage -- {e}")
+                demoted_bands.append(f"{product.band} "
+                                     f"(coverage {e.coverage:.2f})")
+                continue
             except Exception as e:
                 print(f"  {product.instrument} {product.band} FAILED: "
                       f"{type(e).__name__}: {e}")
@@ -412,11 +424,21 @@ def run_measure(
                   f"{measurement['flux_err_ujy']:.1f} uJy "
                   f"({measurement['err_model']}; QA {figure.name})")
         rows.extend(provider_rows)
+        pieces = []
+        if measured_bands:
+            pieces.append(f"measured bands: {', '.join(measured_bands)}")
+        if demoted_bands:
+            pieces.append(f"aperture off footprint: {', '.join(demoted_bands)}")
+        if measured_bands:
+            status = STATUS_OK
+        elif demoted_bands:
+            status = STATUS_NO_COVERAGE
+        else:
+            status = STATUS_ERROR
+            pieces.append("fetched images but every measurement failed")
         results.append(ProviderResult(
-            provider=name, status=STATUS_OK if measured_bands else STATUS_ERROR,
-            rows=provider_rows,
-            message=f"measured bands: {', '.join(measured_bands)}" if measured_bands
-                    else "fetched images but every measurement failed"))
+            provider=name, status=status, rows=provider_rows,
+            message="; ".join(pieces)))
         print()
 
     measured_df = rows_to_frame(rows)
@@ -450,7 +472,12 @@ def run_measure(
         "per_band": {f"{m['instrument']}_{m['band']}":
                      {"err_model": m['err_model'],
                       "sky_level_ujy_per_px": round(m['sky_level_ujy'], 6),
-                      "n_masked_in_aperture": m['n_masked_in_aperture']}
+                      "n_masked_in_aperture": m['n_masked_in_aperture'],
+                      "aperture_coverage": round(m.get('aperture_coverage', 1.0), 4),
+                      "masked_fraction": round(m.get('masked_fraction', 0.0), 4),
+                      "cog_slope": (round(m['cog_slope'], 5)
+                                    if np.isfinite(m.get('cog_slope', float('nan')))
+                                    else None)}
                      for m in measurements},
     })
     print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
