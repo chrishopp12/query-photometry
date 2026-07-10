@@ -21,22 +21,33 @@ ELLIPTICAL string and every CLI surface use ARCSEC. The Sersic dataclass
 stores arcsec and converts.
 
 Data products (under <out_dir>/Photometry/SPHEREx/):
-    table_photometry.csv (+ .provenance.json)   the raw per-exposure table
+    table_photometry.<tag>.csv (+ .provenance.json)   one raw per-exposure
+        table per extraction configuration, tag = '<model>-<hash6>' over
+        the config (model + params + bkg region + MJD window)
+    extractions.json                                  manifest: the tag
+        decoder ring, regenerable from the sidecars
 
 Requirements:
     numpy, pandas, requests, astropy (defusedxml used for XML when installed)
 
 Notes:
-    An existing table is never overwritten: hand-downloaded raw tables are
-    irreplaceable ground truth, and results are not byte-reproducible
-    across fetch dates (server-side calibration evolves). When the service
-    fails, fetch() prints the manual Data Explorer recipe -- "save as CSV"
-    to the same path -- instead of writing a partial file. Epochs with
-    broken file metadata kill jobs server-side; the IRSA-documented
-    workaround is restricting to a known-good MJD window (mjd_range).
+    Nothing on disk is overwritten or renamed: hand-downloaded raw tables
+    are irreplaceable ground truth, results are not byte-reproducible
+    across fetch dates (server-side calibration evolves), and existing
+    filenames are baked into roster/run provenance. Re-requesting a
+    configuration that is already on disk -- under its tagged name, or as
+    a pre-tag bare table_photometry.csv whose sidecar records the same
+    config -- reuses it; move a table aside deliberately to force a
+    re-fetch. When the service fails, fetch() prints the manual Data
+    Explorer recipe -- "save as CSV" -- instead of writing a partial file.
+    Epochs with broken file metadata kill jobs server-side; the
+    IRSA-documented workaround is restricting to a known-good MJD window
+    (mjd_range).
 """
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import re
 import secrets
@@ -501,23 +512,158 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
 
 
 # ------------------------------------
+# Extraction configurations
+# ------------------------------------
+MANIFEST_NAME = "extractions.json"
+PRETAG_TABLE_NAME = "table_photometry.csv"   # fetched before tags existed
+
+
+def _canon(value: float) -> float:
+    """Canonical float for configuration identity: 6 significant digits."""
+    return float(f"{float(value):.6g}")
+
+
+def config_payload(model: Sersic | None, bkg_region_size: float = 15,
+                   mjd_range=None) -> dict:
+    """The extraction-defining parameters, canonically normalized.
+
+    Everything that changes what the tool computes belongs here (source
+    model, background region, visit window); provenance-only detail (shape
+    origin, fetch date) does not -- the same numeric shape from Tractor or
+    from a hand-typed --sersic-params is the same extraction.
+    """
+    if model is None:
+        model_payload: str | dict = "psf"
+    else:
+        model_payload = {
+            "type": "sersic",
+            "n": _canon(model.n),
+            "axis_ratio": _canon(model.axis_ratio),
+            "pa_deg": _canon(model.pa_deg),
+            "reff_arcsec": _canon(model.reff_arcsec),
+        }
+    return {
+        "model": model_payload,
+        "bkg_region_size_px": int(round(float(bkg_region_size))),
+        "mjd_range": ([_canon(v) for v in sorted(float(x) for x in mjd_range)]
+                      if mjd_range else None),
+    }
+
+
+def extraction_tag(model: Sersic | None, bkg_region_size: float = 15,
+                   mjd_range=None) -> str:
+    """Deterministic '<model>-<hash6>' tag naming one configuration."""
+    payload = config_payload(model, bkg_region_size, mjd_range)
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode()).hexdigest()[:6]
+    kind = "psf" if model is None else "sersic"
+    return f"{kind}-{digest}"
+
+
+def _sidecar_payload(sidecar: dict) -> dict | None:
+    """Rebuild a config payload from a table's provenance sidecar."""
+    model = sidecar.get("model")
+    if model in ("point", "psf"):
+        model_payload: str | dict = "psf"
+    elif isinstance(model, dict):
+        try:
+            model_payload = {
+                "type": "sersic",
+                "n": _canon(model["n"]),
+                "axis_ratio": _canon(model["axis_ratio"]),
+                "pa_deg": _canon(model["pa_deg"]),
+                "reff_arcsec": _canon(model["reff_arcsec"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+    else:
+        return None
+    try:
+        mjd = sidecar.get("mjd_range")
+        return {
+            "model": model_payload,
+            "bkg_region_size_px": int(round(float(sidecar["bkg_region_size_px"]))),
+            "mjd_range": ([_canon(v) for v in sorted(float(x) for x in mjd)]
+                          if mjd else None),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _matching_existing_table(spherex_dir: Path, payload: dict,
+                             tag: str) -> Path | None:
+    """An already-fetched table for this configuration, if any.
+
+    The tagged filename is checked first, then the pre-tagging bare name
+    whose sidecar records the same configuration. Pre-tag tables are
+    recognized in place and never renamed: their names are baked into
+    roster entries and run provenance.
+    """
+    tagged = spherex_dir / f"table_photometry.{tag}.csv"
+    if tagged.exists():
+        return tagged
+    pretag = spherex_dir / PRETAG_TABLE_NAME
+    sidecar_path = pretag.with_suffix(".provenance.json")
+    if pretag.exists() and sidecar_path.exists():
+        try:
+            recorded = json.loads(sidecar_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if _sidecar_payload(recorded) == payload:
+            return pretag
+    return None
+
+
+def _index_extraction(spherex_dir: Path, tag: str, filename: str,
+                      payload: dict, *, shape_origin=None, n_rows=None) -> None:
+    """Record one extraction in the manifest (the tag decoder ring).
+
+    The manifest is a regenerable convenience index; the per-table
+    provenance sidecars remain authoritative.
+    """
+    manifest_path = spherex_dir / MANIFEST_NAME
+    manifest = {"kind": "spherex_extractions", "entries": {}}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            print(f"  [spherex] unreadable {MANIFEST_NAME}; rebuilding it")
+        manifest.setdefault("entries", {})
+    manifest["entries"][tag] = {
+        "file": filename,
+        **payload,
+        "shape_origin": shape_origin,
+        "n_rows": n_rows,
+        "indexed": datetime.datetime.now().astimezone().isoformat(
+            timespec="seconds"),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+# ------------------------------------
 # Provider-style wrapper
 # ------------------------------------
 def fetch(coord, *, out_dir, model: Sersic | None = None,
           bkg_region_size: float = 15, mjd_range: tuple | None = None,
           poll: float = 5, timeout: float = 3600,
           shape_origin: str | None = None) -> ProviderResult:
-    """Fetch the raw SPHEREx table into <out_dir>/Photometry/SPHEREx/.
+    """Fetch the raw SPHEREx table for ONE extraction configuration.
 
-    Refuses to overwrite an existing table (raw tables may be irreplaceable
-    hand downloads); prints the manual-GUI recipe on service failure.
+    Each distinct configuration (source model + background region + MJD
+    window) owns a tagged table under Photometry/SPHEREx/, so PSF and
+    Sersic extractions -- or different Sersic shapes -- coexist without
+    manual renames. Re-requesting an existing configuration reuses its
+    table (status ok, nothing fetched); move a table aside deliberately to
+    force a re-fetch. Nothing on disk is ever overwritten or renamed (raw
+    tables can be irreplaceable manual downloads, and existing names are
+    baked into run provenance).
 
     Parameters
     ----------
     coord : SkyCoord
         Target position.
     out_dir : str or Path
-        Target directory; the table lands in Photometry/SPHEREx/ under it.
+        Target directory; tables land in Photometry/SPHEREx/ under it.
     model : Sersic, optional
         Elliptical source model; None for point-source forced photometry.
         [default: None]
@@ -533,24 +679,53 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         Give up after this many seconds. [default: 3600]
     shape_origin : str, optional
         Provenance of the Sersic shape (e.g. Tractor table + type, or the
-        image fit); recorded in the sidecar's model block.
+        image fit); recorded in the sidecar's model block and the manifest.
 
     Returns
     -------
     result : ProviderResult
-        status ok with meta.path on success; error with the recipe (and no
-        partial file) otherwise.
+        status ok with meta.path and meta.tag on success (meta.reused when
+        the configuration was already on disk); error with the manual
+        recipe (and no partial file) otherwise.
     """
     spherex_dir = Path(out_dir) / "Photometry" / "SPHEREx"
     spherex_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = spherex_dir / "table_photometry.csv"
-    if out_csv.exists():
-        return ProviderResult(
-            provider='spherex', status=STATUS_ERROR,
-            message=f"{out_csv} already exists -- raw SPHEREx tables can be "
-                    f"irreplaceable manual downloads; move it aside deliberately "
-                    f"before re-fetching")
+    payload = config_payload(model, bkg_region_size, mjd_range)
+    tag = extraction_tag(model, bkg_region_size, mjd_range)
 
+    existing = _matching_existing_table(spherex_dir, payload, tag)
+    if existing is not None:
+        # Index it if the manifest does not know it yet (pre-tag tables,
+        # rebuilt manifests); origin and row count come from its sidecar.
+        recorded = {}
+        sidecar_path = existing.with_suffix(".provenance.json")
+        if sidecar_path.exists():
+            try:
+                recorded = json.loads(sidecar_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        manifest_path = spherex_dir / MANIFEST_NAME
+        known = {}
+        if manifest_path.exists():
+            try:
+                known = json.loads(manifest_path.read_text()).get("entries", {})
+            except (OSError, json.JSONDecodeError):
+                pass
+        if tag not in known:
+            recorded_model = recorded.get("model")
+            origin = (recorded_model.get("shape_origin")
+                      if isinstance(recorded_model, dict) else None)
+            _index_extraction(spherex_dir, tag, existing.name, payload,
+                              shape_origin=origin or shape_origin,
+                              n_rows=recorded.get("n_rows"))
+        print(f"  [spherex] extraction {tag} already on disk: {existing.name}")
+        return ProviderResult(provider='spherex', status=STATUS_OK,
+                              message=f"reusing extraction {tag} "
+                                      f"({existing.name})",
+                              meta={'path': str(existing), 'tag': tag,
+                                    'reused': True})
+
+    out_csv = spherex_dir / f"table_photometry.{tag}.csv"
     try:
         df = fetch_spectrophotometry(
             float(coord.ra.deg), float(coord.dec.deg), model=model,
@@ -564,6 +739,7 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
 
     write_sidecar(out_csv, {
         "kind": "spherex_spectrophotometry_raw",
+        "extraction_tag": tag,
         "target": {"ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
         "model": ("point" if model is None else
                   {"type": "sersic", "n": model.n, "axis_ratio": model.axis_ratio,
@@ -575,6 +751,8 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         "n_rows": len(df),
         "columns": list(df.columns),
     })
+    _index_extraction(spherex_dir, tag, out_csv.name, payload,
+                      shape_origin=shape_origin, n_rows=len(df))
     return ProviderResult(provider='spherex', status=STATUS_OK,
-                          message=f"{len(df)} visit-channel rows",
-                          meta={'path': str(out_csv)})
+                          message=f"{len(df)} visit-channel rows ({tag})",
+                          meta={'path': str(out_csv), 'tag': tag})

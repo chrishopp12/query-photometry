@@ -63,7 +63,10 @@ fetch-all.
     <label>_sed.png
     coverage_catalogs.json / coverage_measure.json
     Legacy/ PanSTARRS/ SDSS/ CFHT/ HST/     cached images + QA/ figures
-    SPHEREx/table_photometry.csv            raw per-visit x channel table, verbatim
+    SPHEREx/table_photometry.<tag>.csv      raw per-visit x channel table,
+                                            verbatim; one per extraction
+                                            config (tag = <model>-<hash6>)
+    SPHEREx/extractions.json                the tag decoder ring
 ```
 
 Tables share one schema (the v1 `OUT_COLS` plus `retrieved`,
@@ -113,9 +116,14 @@ bias for extended sources -- with the shape resolved in order:
    wrong shape poisons an irreplaceable raw table. Proceed deliberately
    with `--sersic-params`, `--sersic-from`, or `--model psf`.
 
-The shape's origin is recorded in the sidecar's model block. An existing
-table is never overwritten (raw tables can be irreplaceable manual
-downloads); move it aside deliberately to re-fetch. `--mjd-range` restricts
+The shape's origin is recorded in the sidecar's model block. Every
+distinct extraction configuration (model + shape + background region +
+MJD window) owns its own `table_photometry.<model>-<hash6>.csv`, indexed
+in `extractions.json`, so PSF and Sersic runs -- or different shapes --
+coexist without manual renames. Re-requesting a configuration already on
+disk reuses it (pre-tag bare tables are matched through their sidecars
+and reused in place, never renamed); nothing is ever overwritten -- move
+a table aside deliberately to force a re-fetch. `--mjd-range` restricts
 the job to a known-good visit window (the IRSA workaround for
 broken-metadata epochs). The verb exits nonzero when the fetch fails, so
 shell chains can trust `$?`.
