@@ -373,9 +373,47 @@ def run_measure(
               f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
               f"({shape_origin['source']})\n")
 
-    # Phase 3 -- measure every band.
-    from .measure.aperture import ApertureCoverageError
+    # Phase 2.6 -- aperture mode, auto-mask: derive ONE mask on the
+    # deepest available band and reproject it onto every band. Per-band
+    # masks differ with depth and PSF (a knot is a tight core in CFHT and
+    # a fat blob in SDSS), and that geometry difference masquerades as
+    # cross-instrument flux disagreement.
+    from .measure.aperture import ApertureCoverageError, prepare_stamp
 
+    shared_mask = None
+    mask_reference = None
+    if mode == 'aperture' and user_mask is None:
+        preference = [('cfht', 'r'), ('cfht', 'i'), ('cfht', 'g'),
+                      ('cfht', 'z'), ('legacy', 'r'), ('legacy', 'z'),
+                      ('legacy', 'g'), ('panstarrs', 'r'), ('panstarrs', 'i'),
+                      ('sdss', 'r'), ('sdss', 'i')]
+        by_key = {(name, p.band): p
+                  for name, products in fetched_products for p in products}
+        for key in preference:
+            ref_product = by_key.get(key)
+            if ref_product is None:
+                continue
+            try:
+                ref_prep = prepare_stamp(
+                    ref_product, coord, cutout_half_arcsec=cutout_arcsec / 2.0,
+                    sky_in=sky_in, sky_out=sky_out, user_mask=None,
+                    protect_radius=protect_radius)
+            except Exception as e:
+                print(f"  [mask] reference {key[0]} {key[1]} unusable "
+                      f"({type(e).__name__}: {e}); trying the next")
+                continue
+            central = ref_prep['rr'] < sky_out
+            if ref_prep['nodata'][central].mean() > 0.02:
+                print(f"  [mask] reference {key[0]} {key[1]} has blank "
+                      f"pixels near the target; trying the next")
+                continue
+            shared_mask = (ref_prep['mask'], ref_prep['stamp_wcs'])
+            mask_reference = f"{ref_product.instrument}_{ref_product.band}"
+            print(f"Auto-mask derived on {mask_reference}, "
+                  f"shared across all bands\n")
+            break
+
+    # Phase 3 -- measure every band.
     for name, products in fetched_products:
         cache_dir = phot_dir / instrument_dirs.get(name, name)
         provider_rows: list[dict] = []
@@ -400,8 +438,9 @@ def run_measure(
                         sky_in=sky_in, sky_out=sky_out,
                         cutout_half_arcsec=cutout_arcsec / 2.0,
                         rgrid=np.asarray(rgrid, dtype=float) if rgrid else None,
-                        user_mask=user_mask,
-                        protect_radius=protect_radius)
+                        user_mask=shared_mask or user_mask,
+                        protect_radius=protect_radius,
+                        mask_mode_label='autoref' if shared_mask else None)
                     row = measurement_to_row(measurement)
                     figure = qa_band_figure(measurement, cache_dir / "QA")
             except ApertureCoverageError as e:
@@ -464,8 +503,10 @@ def run_measure(
         "sersic_shape": {**shape_sky, **shape_origin} if shape_sky else None,
         "sky_annulus_arcsec": [sky_in, sky_out],
         "cutout_arcsec": cutout_arcsec,
-        "mask": {"mode": "user" if mask_file else "auto",
+        "mask": {"mode": ("user" if mask_file
+                          else "autoref" if mask_reference else "auto"),
                  "file": mask_file, "ref_image": mask_ref,
+                 "reference_band": mask_reference,
                  "protect_radius_arcsec": protect_radius},
         "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
                   if 'legacy' in instruments else None,

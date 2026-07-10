@@ -112,6 +112,79 @@ DOG_FACTOR = 1.5
 DOG_HEAVY_FWHM_MIN = 3.0
 
 
+# A source whose smoothed peak clears this many detection sigmas is
+# masked in FULL (segment + wings dilation) from the sky region: its
+# skirt is individually significant structure, not ambient background.
+SKY_BRIGHT_SIGMA = 10.0
+
+
+def sky_source_mask(
+        stamp: np.ndarray,
+        threshold_std: float,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        npixels: int = 8,
+        seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
+) -> np.ndarray:
+    """Sky-region source mask, symmetric with the aperture's treatment.
+
+    Aperture photometry measures the target only if the ambient
+    background of faint sources cancels between the aperture and the sky
+    region -- so the sky must exclude exactly what the aperture excludes,
+    and keep what it keeps. Masking EVERY detected segment out of a deep
+    annulus breaks the symmetry: the deep sky becomes true dark sky and
+    under-subtracts the faint-source background still inside the
+    aperture (the depth-dependent flux offsets between CFHT and SDSS
+    measurements of one galaxy).
+
+    Three exclusions, everything else stays:
+    - the target's own connected segment (target light is never sky);
+    - the FULL segment (dilated ~2") of every bright source
+      (peak > SKY_BRIGHT_SIGMA x threshold_std): a bright galaxy's skirt
+      is individually significant structure, not ambient background;
+    - the DoG cores of everything fainter, grown by a seeing disk --
+      mirroring the aperture-side interloper mask.
+    """
+    from scipy import ndimage
+
+    good = np.isfinite(stamp) if nodata is None else (np.isfinite(stamp) & ~nodata)
+    work = np.where(good, np.nan_to_num(stamp), 0.0)
+    fine = convolve(work, Gaussian2DKernel(1.5))
+    heavy_fwhm = max(DOG_HEAVY_FWHM_MIN, 2.5 * seeing_arcsec)
+    heavy = convolve(work, Gaussian2DKernel(heavy_fwhm / 2.355 / pixscale))
+    dog = fine - DOG_FACTOR * heavy
+
+    mask = np.zeros(stamp.shape, bool)
+    segm = detect_sources(fine, threshold=2.0 * threshold_std,
+                          n_pixels=npixels)
+    if segm is not None:
+        iy = int(np.clip(round(cy), 0, stamp.shape[0] - 1))
+        ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
+        target_label = int(segm.data[iy, ix])
+        if target_label:
+            mask |= segm.data == target_label
+        labels = np.array([lab for lab in np.unique(segm.data)
+                           if lab > 0 and lab != target_label])
+        if labels.size:
+            peaks = ndimage.maximum(fine, labels=segm.data, index=labels)
+            bright = labels[np.asarray(peaks)
+                            > SKY_BRIGHT_SIGMA * threshold_std]
+            if bright.size:
+                mask |= binary_dilation(
+                    np.isin(segm.data, bright),
+                    iterations=max(2, int(round(2.0 / pixscale))))
+
+    cores = dog > 2.0 * threshold_std
+    if nodata is not None:
+        cores &= ~nodata
+    grow = max(1, int(round(seeing_arcsec / pixscale))) + 2
+    mask |= binary_dilation(cores, iterations=grow)
+    return mask
+
+
 def nontarget_parents(
         stamp: np.ndarray,
         threshold_std: float,

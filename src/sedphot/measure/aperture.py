@@ -42,7 +42,7 @@ from ..schema import make_row
 from ..units import flux_err_to_mag_err, ujy_to_mag
 from .calibrate import calib_factor, load_image, pixel_scale_arcsec
 from .masks import (neighbor_mask, nontarget_parents, radii_arcsec,
-                    reproject_mask, source_mask)
+                    reproject_mask, sky_source_mask)
 from .sky import annulus_sky, annulus_sky_plane
 
 # ------------------------------------
@@ -143,15 +143,18 @@ def prepare_stamp(
     # such column through the integration region craters the curve of
     # growth. Anything deeper than 10 sigma below sky is nodata.
     nodata |= (stamp - sky_level) < -10.0 * max(sky_std, 1e-30)
-    # Sky pass 2: a sigma-clipped PLANE through the annulus with every
-    # detected segment masked (dilated ~2 arcsec so bright-neighbor wings
-    # go too). The plane absorbs the large-scale gradient a bright halo
-    # or ICL lays across the field -- a scalar median sits between the
-    # bright and faint sides and tilts the curve of growth. The scalar
-    # from pass 1 stands in when the fit is starved or not believable.
-    segmask = source_mask(stamp - sky_level, sky_std,
-                          dilate=max(2, int(round(2.0 / pixscale))),
-                          nodata=nodata)
+    # Sky pass 2: a sigma-clipped PLANE through the annulus, with sources
+    # excluded SYMMETRICALLY with the aperture's own treatment (the
+    # target's segment, bright sources in full, DoG cores of the faint --
+    # the ambient faint-source background stays in both aperture and sky
+    # so its mean cancels; see sky_source_mask). The plane absorbs the
+    # large-scale gradient a bright halo or ICL lays across the field --
+    # a scalar median sits between the bright and faint sides and tilts
+    # the curve of growth. The scalar from pass 1 stands in when the fit
+    # is starved or not believable.
+    segmask = sky_source_mask(stamp - sky_level, sky_std, cx, cy, pixscale,
+                              seeing_arcsec=product.seeing_arcsec,
+                              nodata=nodata)
     sky_map: np.ndarray | float = sky_level
     try:
         sky_map, sky_level, sky_std, annulus_srcmask = annulus_sky_plane(
@@ -200,6 +203,7 @@ def measure_aperture(
         rgrid: np.ndarray | None = None,
         user_mask: tuple | None = None,
         protect_radius: float = 4.0,
+        mask_mode_label: str | None = None,
 ) -> dict:
     """Uniform aperture measurement for one band.
 
@@ -222,6 +226,10 @@ def measure_aperture(
         mask carries no WCS it must already match this band's stamp grid.
     protect_radius : float
         Auto-mask protection radius around the target (arcsec). [default: 4.0]
+    mask_mode_label : str, optional
+        Override for the recorded mask mode -- e.g. 'autoref' when
+        user_mask carries the auto-mask derived once on a reference band
+        and shared across instruments.
 
     Returns
     -------
@@ -239,7 +247,7 @@ def measure_aperture(
     cx, cy = prep['cx'], prep['cy']
     pixscale, cf = prep['pixscale'], prep['cf']
     sky_level, sky_std = prep['sky_level'], prep['sky_std']
-    mask, mask_mode = prep['mask'], prep['mask_mode']
+    mask, mask_mode = prep['mask'], (mask_mode_label or prep['mask_mode'])
     nodata = prep['nodata']
     rr = prep['rr']
     px, py, half_px = prep['px'], prep['py'], prep['half_px']
