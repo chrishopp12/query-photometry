@@ -133,12 +133,17 @@ def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
     WHERE 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
                                  {60.0 / 3600.0:.8f})
     """
-    try:
+    from ..retry import retry_transient
+
+    def _run():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            result = TapPlus(url=TAP_URL).launch_job(query).get_results()
+            return TapPlus(url=TAP_URL).launch_job(query).get_results()
+
+    try:
+        result = retry_transient(_run, "Legacy brick TAP")
     except Exception as e:
-        print(f"  [Legacy] brick resolution failed: {e}")
+        print(f"  [Legacy] brick resolution failed after retries: {e}")
         return None
     if len(result) == 0:
         return None
