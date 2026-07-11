@@ -6,14 +6,18 @@ Neighbor Masks for Aperture Photometry
 
 Boolean masks that keep neighboring sources out of the sky annulus and
 the aperture: a deblended source detection for cleaning the sky
-(source_mask), a difference-of-Gaussians interloper mask for the
-aperture (neighbor_mask), and user-supplied masks loaded from disk and
-moved between pixel grids by WCS (load_user_mask, reproject_mask).
+(source_mask), a two-channel interloper mask for the aperture
+(neighbor_mask), and user-supplied masks loaded from disk and moved
+between pixel grids by WCS (load_user_mask, reproject_mask).
 
-The aperture mask is scale-selective, not model-based: only sources with
-PSF-scale power above their own local diffuse level are interlopers, so
-the target's envelope -- asymmetric, patchy, or disconnected at any
-isophote -- can never be masked as its own neighbor, at any radius.
+The aperture mask is structural, not model-based. A difference of
+Gaussians finds interloper CORES (PSF-scale power above the local
+diffuse level), so the target's envelope -- asymmetric, patchy, or
+disconnected at any isophote -- can never be masked as its own
+neighbor. Each core's full EXTENT then comes from point-reflection
+symmetry: light significantly brighter than its 180-degree twin through
+the target center cannot belong to the target, and is masked where it
+connects to a core -- wings and diffuse envelopes included.
 
 Requirements:
     numpy, scipy, astropy, photutils
@@ -29,11 +33,23 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.io import fits
 from astropy.wcs import WCS
 from photutils.segmentation import deblend_sources, detect_sources
-from scipy.ndimage import binary_dilation
+from scipy import ndimage
+from scipy.ndimage import (binary_dilation, binary_propagation,
+                           gaussian_filter, map_coordinates)
+
+
+def _smooth(work: np.ndarray, sigma_px: float) -> np.ndarray:
+    """Zero-boundary Gaussian smoothing.
+
+    Separable scipy filter with support matched to the direct astropy
+    kernel it replaced (truncate=4 = the 8-sigma kernel width); identical
+    output to floating point, ~60x faster at the heavy scale.
+    """
+    return gaussian_filter(work, sigma_px, mode='constant', cval=0.0,
+                           truncate=4.0)
 
 
 # ------------------------------------
@@ -80,7 +96,7 @@ def source_mask(
         True where a source is detected.
     """
     work = stamp if nodata is None else np.where(nodata, 0.0, stamp)
-    smoothed = convolve(np.nan_to_num(work), Gaussian2DKernel(1.5))
+    smoothed = _smooth(np.nan_to_num(work), 1.5)
     threshold = 2.0 * threshold_std
     if threshold_map is not None:
         threshold = np.maximum(threshold, threshold_map)
@@ -104,7 +120,7 @@ def radii_arcsec(shape: tuple, cx: float, cy: float, pixscale: float) -> np.ndar
 # however asymmetric or patchy -- has fine ~ heavy and always fails; a
 # star or galaxy core has fine >> heavy and passes. No profile model is
 # involved, so there is no azimuthal-median reference to collapse on
-# one-sided envelopes (the failure that ate c36/c38).
+# one-sided envelopes.
 DOG_FACTOR = 1.5
 
 # The heavy smoothing scale (FWHM, arcsec) that defines "diffuse": at
@@ -116,6 +132,25 @@ DOG_HEAVY_FWHM_MIN = 3.0
 # masked in FULL (segment + wings dilation) from the sky region: its
 # skirt is individually significant structure, not ambient background.
 SKY_BRIGHT_SIGMA = 10.0
+
+
+# Symmetry-excess significance (units of the raw background rms): a
+# pixel belongs to a neighbor where its fine-smoothed brightness exceeds
+# its point-reflected twin through the target center by more than this.
+# The fine smoothing suppresses the raw rms ~5x, so 1.0 raw-rms is a
+# conservative threshold on the difference map while still reaching far
+# down a bright neighbor's wings.
+EXCESS_SIGMA = 1.0
+
+# Light floor for the excess flood (units of the raw rms): masked pixels
+# must also carry this much brightness on the fine map. The excess
+# condition alone stops noise percolation (it is ~4 sigma of the
+# smoothed difference map); the floor bounds how deep into a bright
+# complex's low-surface-brightness fringe the flood may reach. On a
+# crowded cluster-core test field, 1.5 masks visibly more halo fringe
+# than 2.0 with an unchanged false-mask rate in source-free sectors
+# (1.0 tested safe there too; kept conservative for field diversity).
+EXCESS_LIGHT_FLOOR = 1.5
 
 
 def sky_source_mask(
@@ -148,13 +183,11 @@ def sky_source_mask(
     - the DoG cores of everything fainter, grown by a seeing disk --
       mirroring the aperture-side interloper mask.
     """
-    from scipy import ndimage
-
     good = np.isfinite(stamp) if nodata is None else (np.isfinite(stamp) & ~nodata)
     work = np.where(good, np.nan_to_num(stamp), 0.0)
-    fine = convolve(work, Gaussian2DKernel(1.5))
+    fine = _smooth(work, 1.5)
     heavy_fwhm = max(DOG_HEAVY_FWHM_MIN, 2.5 * seeing_arcsec)
-    heavy = convolve(work, Gaussian2DKernel(heavy_fwhm / 2.355 / pixscale))
+    heavy = _smooth(work, heavy_fwhm / 2.355 / pixscale)
     dog = fine - DOG_FACTOR * heavy
 
     mask = np.zeros(stamp.shape, bool)
@@ -210,7 +243,7 @@ def nontarget_parents(
         True on every detected segment except the target's own.
     """
     work = stamp if nodata is None else np.where(nodata, 0.0, stamp)
-    smoothed = convolve(np.nan_to_num(work), Gaussian2DKernel(1.5))
+    smoothed = _smooth(np.nan_to_num(work), 1.5)
     segm = detect_sources(smoothed, threshold=2.0 * threshold_std,
                           n_pixels=npixels)
     if segm is None:
@@ -219,6 +252,85 @@ def nontarget_parents(
     ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
     label = int(segm.data[iy, ix])
     return (segm.data > 0) & (segm.data != label if label else True)
+
+
+def _dog_regions(
+        stamp: np.ndarray,
+        threshold_std: float,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
+) -> tuple:
+    """DoG dominance regions and the target's own label.
+
+    The shared front half of the interloper machinery: neighbor_mask
+    grows and floods these regions into the aperture mask, and
+    interloper_cores reads off their peak positions as deblend centers.
+
+    Returns
+    -------
+    labels, n_regions, target_label, fine, good : tuple
+        Connected dominance regions, their count, the label under (or
+        nearest within a seeing disk of) the target position -- 0 when
+        the target has none -- and the fine-smoothed map with its
+        validity mask, for reuse.
+    """
+    good = np.isfinite(stamp) if nodata is None else (np.isfinite(stamp) & ~nodata)
+    work = np.where(good, np.nan_to_num(stamp), 0.0)
+    fine = _smooth(work, 1.5)
+    heavy_fwhm = max(DOG_HEAVY_FWHM_MIN, 2.5 * seeing_arcsec)
+    heavy = _smooth(work, heavy_fwhm / 2.355 / pixscale)
+    exceed = (fine - DOG_FACTOR * heavy) > 2.0 * threshold_std
+    if nodata is not None:
+        exceed &= ~nodata
+    labels, n_regions = ndimage.label(exceed)
+    target_label = 0
+    if n_regions:
+        iy = int(np.clip(round(cy), 0, stamp.shape[0] - 1))
+        ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
+        target_label = labels[iy, ix]
+        if target_label == 0:
+            rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
+            near = (rr < max(seeing_arcsec, 2.0 * pixscale)) & exceed
+            if near.any():
+                candidates, counts = np.unique(labels[near], return_counts=True)
+                target_label = int(candidates[np.argmax(counts)])
+    return labels, n_regions, int(target_label), fine, good
+
+
+def interloper_cores(
+        stamp: np.ndarray,
+        threshold_std: float,
+        cx: float,
+        cy: float,
+        pixscale: float,
+        *,
+        npixels: int = 8,
+        seeing_arcsec: float = 1.0,
+        nodata: np.ndarray | None = None,
+) -> list[tuple[float, float, float]]:
+    """Interloper core peaks, brightest first: [(peak, py, px), ...].
+
+    The deblend centers: every DoG dominance region that is not the
+    target's own and not a sub-npixels speck, located at its
+    fine-smoothed peak.
+    """
+    labels, n_regions, target_label, fine, _ = _dog_regions(
+        stamp, threshold_std, cx, cy, pixscale,
+        seeing_arcsec=seeing_arcsec, nodata=nodata)
+    if n_regions == 0:
+        return []
+    index = np.arange(1, n_regions + 1)
+    sizes = ndimage.sum(labels > 0, labels, index=index)
+    peaks = ndimage.maximum(fine, labels=labels, index=index)
+    positions = ndimage.maximum_position(fine, labels=labels, index=index)
+    cores = [(float(peaks[k]), float(positions[k][0]), float(positions[k][1]))
+             for k in range(n_regions)
+             if (k + 1) != target_label and sizes[k] >= npixels]
+    return sorted(cores, reverse=True)
 
 
 def neighbor_mask(
@@ -233,22 +345,38 @@ def neighbor_mask(
         dilate: int = 2,
         seeing_arcsec: float = 1.0,
         nodata: np.ndarray | None = None,
+        symmetry_excess: bool = True,
 ) -> np.ndarray:
-    """Difference-of-Gaussians neighbor mask: concentrated interlopers only.
+    """Two-channel neighbor mask: DoG cores plus seeded symmetry excess.
 
-    The stamp is smoothed twice -- at the PSF scale and at a heavy
-    "diffuse" scale -- and their scaled difference is the dominance map:
+    Channel 1 -- scale selection. The stamp is smoothed twice, at the
+    PSF scale and at a heavy "diffuse" scale, and their scaled
+    difference is the dominance map:
 
         dog = fine - DOG_FACTOR x heavy
 
     Diffuse structure lives equally in both smoothings and cancels, so
     the target's envelope -- asymmetric, patchy, or disconnected at any
-    isophote -- can never mask itself. Concentrated sources survive the
-    difference; the connected dog region under the target position is
-    the target's own core (exempt), every other region is an interloper
-    and is masked, grown by roughly a seeing disk to cover its skirt.
-    Light beyond that growth (a bright companion's outer wings) stays in
-    the flux: masking errs toward keeping target light, the leak is
+    isophote -- can never mask itself. The connected dog region under
+    the target position is the target's own core (exempt); every other
+    region is an interloper CORE, masked and grown by a seeing disk.
+
+    Channel 2 -- ownership by symmetry. Cores alone under-mask: a bright
+    companion's wings extend far past one seeing disk, and a neighbor's
+    diffuse envelope is invisible to the dog by construction. Both are
+    caught by point-reflection through the target center: where the
+    fine-smoothed image exceeds its own 180-degree twin by more than
+    EXCESS_SIGMA x rms, the light cannot belong to a source centered on
+    the target. Excess alone is not enough -- the target's own envelope
+    may be genuinely asymmetric (lumpy or one-sided envelopes) -- so
+    excess pixels are masked only where they are CONNECTED to a channel-1 core: each
+    interloper's mask flood-fills outward from its core through the
+    significant-excess region and stops where the target's symmetric
+    light takes over. An asymmetric envelope with no interloper core
+    inside it is never touched.
+
+    Light below both channels (a companion's sub-threshold skirt) stays
+    in the flux: masking errs toward keeping target light, the leak is
     bounded, and the QA metrics betray it.
 
     Parameters
@@ -257,7 +385,8 @@ def neighbor_mask(
         Sky-subtracted stamp.
     threshold_std : float
         Background rms; the dominance exceedance threshold is
-        2 x threshold_std.
+        2 x threshold_std, the symmetry-excess threshold
+        EXCESS_SIGMA x threshold_std.
     cx, cy : float
         Stamp-pixel center of the target.
     pixscale : float
@@ -265,7 +394,7 @@ def neighbor_mask(
     protect_radius : float
         Radius (arcsec) never masked -- keeps historical override
         semantics (--protect-radius). A companion inside it stays in the
-        flux (the c41/c53/c58 class) with only the QA metrics to flag it.
+        flux with only the QA metrics to flag it.
         [default: 4.0]
     npixels : int
         Minimum connected pixels for a dominance region.
@@ -278,51 +407,55 @@ def neighbor_mask(
         Off-footprint / blank pixels; zeroed for the smoothings and never
         counted as interloper pixels (the caller handles their fill and
         coverage accounting).
+    symmetry_excess : bool
+        Enable channel 2. [default: True]
 
     Returns
     -------
     mask : np.ndarray (bool)
-        True where a concentrated interloper is (exclude from sky and
-        aperture).
+        True where a neighbor's light is (exclude from the aperture and
+        fill from the target's own profile).
     """
-    from scipy import ndimage
-
     rr = radii_arcsec(stamp.shape, cx, cy, pixscale)
-    good = np.isfinite(stamp) if nodata is None else (np.isfinite(stamp) & ~nodata)
-    work = np.where(good, np.nan_to_num(stamp), 0.0)
-
-    fine = convolve(work, Gaussian2DKernel(1.5))
-    heavy_fwhm = max(DOG_HEAVY_FWHM_MIN, 2.5 * seeing_arcsec)
-    heavy_sigma_px = heavy_fwhm / 2.355 / pixscale
-    heavy = convolve(work, Gaussian2DKernel(heavy_sigma_px))
-    dog = fine - DOG_FACTOR * heavy
-
-    exceed = dog > 2.0 * threshold_std
-    if nodata is not None:
-        exceed &= ~nodata
-    labels, n_regions = ndimage.label(exceed)
+    labels, n_regions, target_label, fine, good = _dog_regions(
+        stamp, threshold_std, cx, cy, pixscale,
+        seeing_arcsec=seeing_arcsec, nodata=nodata)
     if n_regions == 0:
         return np.zeros(stamp.shape, bool)
 
-    # Drop sub-npixels specks, exempt the target's own core: the region
-    # under (or nearest within a seeing disk of) the target position.
-    sizes = ndimage.sum(exceed, labels, index=np.arange(1, n_regions + 1))
-    iy = int(np.clip(round(cy), 0, stamp.shape[0] - 1))
-    ix = int(np.clip(round(cx), 0, stamp.shape[1] - 1))
-    target_label = labels[iy, ix]
-    if target_label == 0:
-        near = (rr < max(seeing_arcsec, 2.0 * pixscale)) & exceed
-        if near.any():
-            candidates, counts = np.unique(labels[near], return_counts=True)
-            target_label = int(candidates[np.argmax(counts)])
+    # Drop sub-npixels specks, exempt the target's own core.
+    sizes = ndimage.sum(labels > 0, labels, index=np.arange(1, n_regions + 1))
     keep = [lab for lab in range(1, n_regions + 1)
             if lab != target_label and sizes[lab - 1] >= npixels]
     if not keep:
         return np.zeros(stamp.shape, bool)
 
-    mask = np.isin(labels, keep)
+    cores = np.isin(labels, keep)
     grow = dilate + max(1, int(round(seeing_arcsec / pixscale)))
-    mask = binary_dilation(mask, iterations=grow)
+    mask = binary_dilation(cores, iterations=grow)
+
+    if symmetry_excess:
+        # Point-reflect the fine map through the target center; a twin
+        # sampled off the stamp or on blank pixels proves nothing, so
+        # ownership is only claimed where the twin is real data. The
+        # flood is additionally gated at the EXCESS_LIGHT_FLOOR
+        # isophote: a wing worth masking has significant LIGHT as well
+        # as significant asymmetry. Without the light floor, the excess
+        # set percolates through correlated noise and field-scale
+        # diffuse light (ICL), and one seed annexes half the stamp.
+        yy, xx = np.indices(stamp.shape)
+        coords = np.array([2.0 * cy - yy, 2.0 * cx - xx])
+        twin = map_coordinates(fine, coords, order=1, mode='constant',
+                               cval=0.0)
+        twin_good = map_coordinates(good.astype(float), coords, order=1,
+                                    mode='constant', cval=0.0) > 0.99
+        excess = ((fine - twin > EXCESS_SIGMA * threshold_std)
+                  & (fine > EXCESS_LIGHT_FLOOR * threshold_std)
+                  & twin_good & good)
+        if target_label:
+            excess &= labels != target_label
+        mask |= binary_propagation(cores & excess, mask=excess)
+
     if target_label:
         mask &= labels != target_label
     mask &= rr > protect_radius

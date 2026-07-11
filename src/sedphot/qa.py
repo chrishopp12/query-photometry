@@ -71,9 +71,13 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
     gray.set_bad("0.15")
 
     nodata = measurement.get('nodata')
-    shown = stamp if nodata is None else np.where(nodata, np.nan, stamp)
+    n_deblended = measurement.get('n_deblended', 0)
+    raw = measurement.get('stamp_raw')
+    left = raw if (raw is not None and n_deblended) else stamp
+    shown = left if nodata is None else np.where(nodata, np.nan, left)
     axes[0].imshow(shown, origin="lower", cmap=gray, norm=norm)
-    axes[0].set_title("cutout (sky-subtracted)", fontsize=10)
+    axes[0].set_title("cutout (pre-deblend)" if n_deblended
+                      else "cutout (sky-subtracted)", fontsize=10)
 
     hidden = mask if nodata is None else (mask | nodata)
     axes[1].imshow(np.where(hidden, np.nan, stamp), origin="lower", cmap=gray,
@@ -104,6 +108,8 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
                                  ec="gold", lw=0.9, ls=(0, (4, 3))))
     mask_title = (f"{measurement['mask_mode']} mask (dark) | "
                   f"curve fill (orange) | sky-excluded (gold)")
+    if n_deblended:
+        mask_title = f"deblended ({n_deblended} nbr) | " + mask_title
     coverage = measurement.get('aperture_coverage')
     if coverage is not None and coverage < 1.0:
         mask_title += f" | coverage {coverage:.2f}"
@@ -119,17 +125,42 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
                  color="0.25", ms=3, lw=1.2)
     axes[2].axvline(aperture, color="cyan", lw=1.2)
     axes[2].axvspan(sky_in, sky_out, color="gold", alpha=0.15)
+    conv = measurement.get('cog_conv_arcsec')
+    if conv is not None and np.isfinite(conv):
+        axes[2].axvline(conv, color="0.55", lw=0.9, ls=":")
     axes[2].set_yscale("log")
     axes[2].set_xlabel("aperture radius (arcsec)")
     axes[2].set_ylabel(r"enclosed flux ($\mu$Jy)")
     axes[2].grid(alpha=0.25, which="both")
-    growth_title = (
-        rf"{measurement['flux_ujy']:.1f} $\pm$ {measurement['flux_err_ujy']:.1f} "
-        rf"$\mu$Jy ({aperture:g}\") | {measurement['err_model']}")
+    parts = [
+        rf"{measurement['flux_ujy']:.1f} $\pm$ "
+        rf"{measurement['flux_err_ujy']:.1f} $\mu$Jy ({aperture:g}\")",
+        measurement['err_model']]
     slope = measurement.get('cog_slope')
     if slope is not None and np.isfinite(slope):
-        growth_title += f" | outer slope {slope:+.3f}/arcsec"
-    axes[2].set_title(growth_title, fontsize=10)
+        parts.append(f"slope {slope:+.3f}")
+    if conv is not None:
+        step = measurement.get('cog_step')
+        if np.isfinite(conv) and step is not None and np.isfinite(step):
+            parts.append(rf"step {step:+.2f} past {conv:g}\"")
+        elif not np.isfinite(conv):
+            end = measurement.get('cog_end_slope')
+            parts.append(f"grow {end:+.1%}/as" if end is not None
+                         and np.isfinite(end) else "not converged")
+    # The wide-range fit decomposes the curve into flux + uniform
+    # pedestal: report the pedestal's share OF the aperture flux (the
+    # honest "how much uniform background is in this number"), never
+    # just the fit residual -- a curve that fits well with b != 0 is
+    # pedestal-laden, not flat.
+    ped = measurement.get('cog_pedestal')
+    flux = measurement.get('flux_ujy')
+    if ped is not None and np.isfinite(ped) and flux:
+        parts.append(
+            f"ped {np.pi * ped * aperture ** 2 / abs(flux):+.1%} in ap")
+    rms = measurement.get('cog_fit_rms')
+    if rms is not None and np.isfinite(rms):
+        parts.append(f"resid {rms:.1%}")
+    axes[2].set_title(" | ".join(parts), fontsize=9)
 
     fig.suptitle(f"{measurement['instrument']} {measurement['band']}", fontsize=12)
     out_dir = Path(out_dir)

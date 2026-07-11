@@ -373,15 +373,18 @@ def run_measure(
               f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
               f"({shape_origin['source']})\n")
 
-    # Phase 2.6 -- aperture mode, auto-mask: derive ONE mask on the
-    # deepest available band and reproject it onto every band. Per-band
-    # masks differ with depth and PSF (a knot is a tight core in CFHT and
-    # a fat blob in SDSS), and that geometry difference masquerades as
-    # cross-instrument flux disagreement.
+    # Phase 2.6 -- aperture mode, auto-mask: derive ONE mask and ONE set
+    # of deblend centers on the deepest available band and share them
+    # with every band (the mask reprojected by WCS, the centers as sky
+    # positions). Per-band detections differ with depth and PSF (a knot
+    # is a tight core in CFHT, a fat blob in SDSS, invisible in u), and
+    # that difference masquerades as cross-instrument flux disagreement.
     from .measure.aperture import ApertureCoverageError, prepare_stamp
+    from .measure.deblend import reference_component_templates
 
     shared_mask = None
     mask_reference = None
+    shared_templates = None
     if mode == 'aperture' and user_mask is None:
         preference = [('cfht', 'r'), ('cfht', 'i'), ('cfht', 'g'),
                       ('cfht', 'z'), ('legacy', 'r'), ('legacy', 'z'),
@@ -409,8 +412,23 @@ def run_measure(
                 continue
             shared_mask = (ref_prep['mask'], ref_prep['stamp_wcs'])
             mask_reference = f"{ref_product.instrument}_{ref_product.band}"
-            print(f"Auto-mask derived on {mask_reference}, "
-                  f"shared across all bands\n")
+            # Neighbor MODELS from the PRE-deblend reference stamp: the
+            # deep band's contained symmetric templates carry each
+            # neighbor's shape down into its sub-threshold wings; every
+            # band reprojects them and fits one amplitude per neighbor
+            # (forced photometry of the contaminants).
+            templates, ref_target = reference_component_templates(
+                ref_prep['stamp_raw'], ref_prep['sky_std'],
+                ref_prep['cx'], ref_prep['cy'], ref_prep['pixscale'],
+                protect_radius=protect_radius,
+                seeing_arcsec=ref_product.seeing_arcsec,
+                nodata=ref_prep['nodata'])
+            if templates:
+                shared_templates = (templates, ref_target,
+                                    ref_prep['stamp_wcs'],
+                                    ref_product.seeing_arcsec)
+            print(f"Auto-mask and {len(templates)} neighbor template(s) "
+                  f"derived on {mask_reference}, shared across all bands\n")
             break
 
     # Phase 3 -- measure every band.
@@ -440,7 +458,12 @@ def run_measure(
                         rgrid=np.asarray(rgrid, dtype=float) if rgrid else None,
                         user_mask=shared_mask or user_mask,
                         protect_radius=protect_radius,
-                        mask_mode_label='autoref' if shared_mask else None)
+                        mask_mode_label='autoref' if shared_mask else None,
+                        # the reference band's template set is the
+                        # verdict: none there = nothing to deblend
+                        deblend=(shared_templates is not None
+                                 or mask_reference is None),
+                        deblend_templates=shared_templates)
                     row = measurement_to_row(measurement)
                     figure = qa_band_figure(measurement, cache_dir / "QA")
             except ApertureCoverageError as e:
