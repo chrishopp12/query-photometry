@@ -91,7 +91,7 @@ SPHEREX_N_MAX = 6.0    # the tool rejects Sersic indices above 6
 
 # The tool treats any source with reff below this as a POINT SOURCE: a
 # sub-threshold Sersic request returns photometry bit-identical to a psf
-# request (verified on A1925 control_63: two independently fetched jobs,
+# request (verified on a control target: two independently fetched jobs,
 # 300/300 identical rows). The Sersic parameters are then cosmetic.
 SPHEREX_POINT_SOURCE_REFF = 1.0    # arcsec
 

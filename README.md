@@ -16,14 +16,14 @@ sedphot resolve --name "SDSS J142800.81+570046.3"
 sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87
 
 # fetch images and measure every band with one identical aperture recipe
-sedphot measure --ra 216.988087 --dec 56.9878 --instruments cfht legacy \
+sedphot measure --ra 194.898792 --dec 27.959528 --instruments cfht legacy \
     --aperture 25.5 --sky-in 30 --sky-out 43 --legacy-dr dr9
 
 # SPHEREx forced photometry; the Sersic shape comes from the Tractor catalog
-sedphot spherex --ra 217.32297 --dec 56.72999 --out-dir Galaxies/control_6
+sedphot spherex --name "NGC 4874" --out-dir Clusters/Coma/Galaxies/NGC_4874
 
 # the flagship: everything, then a combined SED plot
-sedphot run --name "SDSS J142800.81+570046.3" --out-dir Galaxies/control_0
+sedphot run --name "NGC 4889" --out-dir Clusters/Coma/Galaxies/NGC_4889
 ```
 
 ## Verbs

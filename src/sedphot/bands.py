@@ -5,7 +5,7 @@ Band Effective Wavelengths
 ---------------------------------------------------------
 Effective (pivot-ish) wavelengths per band label, for QA figure coloring and
 the combined SED plot ONLY -- these numbers never enter a measurement. SED
-fitters own their bandpass physics (sedpy curves in the sed_fitting package);
+fitters own their bandpass physics (sedpy curves in the SED-fitting stage);
 duplicating full filter curves here would create a second authority.
 
 HST filters are parsed from the name instead of tabulated: the flight-filter

@@ -27,7 +27,7 @@ def _patch_get_images(monkeypatch, responses):
 
 
 def test_one_bad_band_keeps_the_others(monkeypatch, tmp_path):
-    # The c13 failure: KeyError 'run' from deep inside astroquery for one
+    # A KeyError 'run' from deep inside astroquery for one
     # band must not take down the bands that resolve fine.
     _patch_get_images(monkeypatch, {'g': _fake_frame(), 'r': KeyError('run')})
     products = sdss_images.fetch(COORD, bands=('g', 'r'), cache_dir=tmp_path)

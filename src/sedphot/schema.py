@@ -72,7 +72,7 @@ ALL_COLS = BASE_COLS + EXTRA_COLS
 # ------------------------------------
 # Leading prefixes of the `source` strings each measurement kind emits -- the
 # machine half of the stable-API promise above. Downstream consumers select
-# rows by these prefixes (the sed_fitting roster's provider tokens key on
+# rows by these prefixes (downstream roster provider tokens key on
 # them), so the set is a frozen contract: append new kinds, never rename an
 # existing prefix. The set must stay prefix-free -- no entry may be a prefix
 # of another -- so startswith matching is unambiguous ('Legacy_' must never

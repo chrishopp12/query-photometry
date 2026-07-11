@@ -68,7 +68,7 @@ def test_rows_to_frame_empty_and_order():
 
 
 def test_source_prefixes_are_frozen_contract():
-    # Downstream consumers (the sed_fitting roster's provider tokens) select
+    # Downstream consumers (roster provider tokens) select
     # rows by these prefixes -- append new kinds; never rename an entry.
     assert SOURCE_PREFIXES == {
         'legacy': 'Legacy_', 'unwise': 'unWISE_Legacy_', 'allwise': 'AllWISE',
