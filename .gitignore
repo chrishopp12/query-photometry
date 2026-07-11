@@ -45,3 +45,6 @@ config.*
 *.egg-info/
 build/
 dist/
+
+# Per-project Claude context, local only
+CLAUDE.md
