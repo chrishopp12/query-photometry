@@ -89,6 +89,12 @@ _PENDING = {"PENDING", "QUEUED", "EXECUTING", "RUN", "UNKNOWN", "HELD", "SUSPEND
 
 SPHEREX_N_MAX = 6.0    # the tool rejects Sersic indices above 6
 
+# The tool treats any source with reff below this as a POINT SOURCE: a
+# sub-threshold Sersic request returns photometry bit-identical to a psf
+# request (verified on A1925 control_63: two independently fetched jobs,
+# 300/300 identical rows). The Sersic parameters are then cosmetic.
+SPHEREX_POINT_SOURCE_REFF = 1.0    # arcsec
+
 MANUAL_RECIPE = (
     "Manual fallback: IRSA Data Explorer -> SPHEREx Spectrophotometry Tool, "
     "enter the position (and Sersic shape for elliptical mode), run, then "
@@ -711,6 +717,12 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
     """
     spherex_dir = Path(out_dir) / "Photometry" / "SPHEREx"
     spherex_dir.mkdir(parents=True, exist_ok=True)
+    if model is not None and model.reff_arcsec < SPHEREX_POINT_SOURCE_REFF:
+        print(f"  [spherex] WARNING: reff {model.reff_arcsec:.2f}\" is below "
+              f"the tool's {SPHEREX_POINT_SOURCE_REFF:g}\" point-source "
+              f"threshold -- this job returns PSF photometry regardless of "
+              f"the Sersic parameters (a psf-tag table of the same window "
+              f"would be identical)")
     payload = config_payload(model, bkg_region_size, mjd_range)
     tag = extraction_tag(model, bkg_region_size, mjd_range)
 
@@ -765,7 +777,10 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         "model": ("point" if model is None else
                   {"type": "sersic", "n": model.n, "axis_ratio": model.axis_ratio,
                    "pa_deg": model.pa_deg, "reff_arcsec": model.reff_arcsec,
-                   "shape_origin": shape_origin}),
+                   "shape_origin": shape_origin,
+                   **({"effectively_point_source": True}
+                      if model.reff_arcsec < SPHEREX_POINT_SOURCE_REFF
+                      else {})}),
         "bkg_region_size_px": int(round(float(bkg_region_size))),
         "mjd_range": list(mjd_range) if mjd_range else None,
         "service": UWS_BASE,

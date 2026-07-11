@@ -187,3 +187,18 @@ def test_wait_gives_up_after_persistent_failures(monkeypatch):
 
     with pytest_mod.raises(requests_mod.exceptions.ReadTimeout):
         _wait(dead_poll, interval=0, max_poll_failures=3)
+
+
+def test_sub_threshold_sersic_flagged_as_point_source(monkeypatch, tmp_path, capsys):
+    # The tool point-sources anything with reff < 1"; the fetch warns and
+    # the sidecar records it so downstream knows the shape was cosmetic.
+    _fake_network(monkeypatch)
+    tiny = Sersic(n=1.0, axis_ratio=1.0, pa_deg=0.0, reff_arcsec=0.39)
+    result = fetch(COORD, out_dir=tmp_path, model=tiny, mjd_range=MJD)
+    assert result.status == STATUS_OK
+    assert "point-source threshold" in capsys.readouterr().out
+    spherex_dir = tmp_path / "Photometry" / "SPHEREx"
+    tag = result.meta['tag']
+    sidecar = json.loads(
+        (spherex_dir / f"table_photometry.{tag}.provenance.json").read_text())
+    assert sidecar["model"]["effectively_point_source"] is True
