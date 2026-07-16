@@ -144,11 +144,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
         radius_arcsec=args.radius,
         dered=args.dered,
         aperture_arcsec=args.aperture,
-        sky_in=args.sky_in,
-        sky_out=args.sky_out,
         cutout_arcsec=args.cutout_size,
-        mask_file=args.mask,
-        mask_ref=args.mask_ref,
+        registry_path=args.registry,
+        registry_update=args.registry_update,
         spherex_model=args.spherex,
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
@@ -169,13 +167,11 @@ def _cmd_measure(args: argparse.Namespace) -> None:
         sersic_params=args.sersic_params,
         sersic_seeing=args.sersic_seeing,
         aperture_arcsec=args.aperture,
-        sky_in=args.sky_in,
-        sky_out=args.sky_out,
         cutout_arcsec=args.cutout_size,
         rgrid=args.radii,
-        mask_file=args.mask,
-        mask_ref=args.mask_ref,
-        protect_radius=args.protect_radius,
+        registry_path=args.registry,
+        registry_update=args.registry_update,
+        dump_arrays=args.dump_arrays,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
         hst_proposal_id=args.hst_proposal_id,
@@ -235,33 +231,30 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Aperture radius in arcsec [default: 10.0]")
     p_measure.add_argument('--radii', nargs='+', type=float, default=None,
                            help="Curve-of-growth radii override (arcsec)")
-    p_measure.add_argument('--sky-in', type=float, default=30.0,
-                           help="Sky annulus inner radius, arcsec [default: 30]")
-    p_measure.add_argument('--sky-out', type=float, default=45.0,
-                           help="Sky annulus outer radius, arcsec [default: 45]")
     p_measure.add_argument('--cutout-size', type=float, default=120.0,
-                           help="Stamp width in arcsec; must contain the sky "
-                                "annulus [default: 120]")
-    p_measure.add_argument('--mask', type=str, default=None,
-                           help="User mask file (.npz neighbor_mask or FITS) "
-                                "instead of the auto-mask")
-    p_measure.add_argument('--mask-ref', type=str, default=None,
-                           help="Reference image whose WCS an .npz mask's grid "
-                                "is defined on")
-    p_measure.add_argument('--protect-radius', type=float, default=4.0,
-                           help="Auto-mask: radius never masked around the "
-                                "target, arcsec [default: 4.0]")
+                           help="Stamp width in arcsec [default: 120]")
+    p_measure.add_argument('--registry', type=str, default=None,
+                           help="Cross-field registry JSON to consume (solved "
+                                "shared sources enter as frozen components)")
+    p_measure.add_argument('--registry-update', action='store_true',
+                           help="Also write this galaxy's solved seats back "
+                                "to --registry")
+    p_measure.add_argument('--dump-arrays', action='store_true',
+                           help="Write per-band array bundles under <Inst>/QA/ "
+                                "(debug)")
     p_measure.add_argument('--sersic-from', type=str, default=None,
-                           help="Sersic mode: fit the shape on this band "
-                                "('z' or 'Legacy_z') [default: reddest optical]")
+                           help="Sersic mode: pin the target shape to a fit "
+                                "on this band ('z' or 'Legacy_z') [default: "
+                                "per-instrument reference-band refit]")
     p_measure.add_argument('--sersic-params', nargs=4, type=float, default=None,
                            metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
                            help="Sersic mode: explicit shape (n, a/b >= 1, "
-                                "PA deg E of N, r_eff arcsec) -- skips the fit")
+                                "PA deg E of N, r_eff arcsec) -- pins the "
+                                "target profile in every band")
     p_measure.add_argument('--sersic-seeing', type=float, default=None,
-                           help="PSF FWHM (arcsec) of the shape-fit band; the "
-                                "fitted n and r_eff are PSF-sensitive "
-                                "[default: the provider's typical value, warned]")
+                           help="PSF FWHM (arcsec) assumed by the --sersic-from "
+                                "shape fit; fitted n and r_eff are "
+                                "PSF-sensitive")
     p_measure.add_argument('--legacy-dr', type=str, default='dr9',
                            choices=('dr10', 'dr9'),
                            help="Legacy release for images [default: dr9]")
@@ -326,16 +319,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Apply MW dereddening to catalog fluxes")
     p_run.add_argument('--aperture', type=float, default=10.0,
                        help="Aperture radius, arcsec [default: 10.0]")
-    p_run.add_argument('--sky-in', type=float, default=30.0,
-                       help="Sky annulus inner radius, arcsec [default: 30]")
-    p_run.add_argument('--sky-out', type=float, default=45.0,
-                       help="Sky annulus outer radius, arcsec [default: 45]")
     p_run.add_argument('--cutout-size', type=float, default=120.0,
                        help="Stamp width, arcsec [default: 120]")
-    p_run.add_argument('--mask', type=str, default=None,
-                       help="User mask file instead of the auto-mask")
-    p_run.add_argument('--mask-ref', type=str, default=None,
-                       help="Reference image for an .npz mask's WCS")
+    p_run.add_argument('--registry', type=str, default=None,
+                       help="Cross-field registry JSON to consume")
+    p_run.add_argument('--registry-update', action='store_true',
+                       help="Also write solved seats back to --registry")
     p_run.add_argument('--spherex', type=str, default='off',
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")

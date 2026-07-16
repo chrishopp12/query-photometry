@@ -251,3 +251,24 @@ PSF_STAR_GMAG = (15.8, 19.5)
 # star's measured outer rings are noise, and a monotone-floored noise
 # wing is systematically zero.
 PSF_WING_SNR = 5.0
+
+
+# ------------------------------------
+# Era stamping
+# ------------------------------------
+def snapshot() -> dict:
+    """Every recipe constant as a JSON-safe dict, for provenance.
+
+    A measured value is only reproducible against the exact recipe that
+    produced it, so every measurement sidecar carries this snapshot.
+    """
+    out = {}
+    for name, value in sorted(globals().items()):
+        if not name.isupper():
+            continue
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+        elif isinstance(value, tuple):
+            value = list(value)
+        out[name] = value
+    return out
