@@ -6,7 +6,7 @@ QA and SED Figures
 
 The diagnostic figures every image extraction writes, and the combined SED
 plot. Shared conventions across the figures: asinh/ZScale grayscale stamps,
-cyan aperture markings, wavelength-ordered point colors.
+tab:blue aperture markings, tab:green mask contours, wavelength-ordered point colors.
 
 Data products:
     QA/<inst>_<band>.png          per-band scene panels: data | fitted scene |
@@ -82,8 +82,8 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
     gray.set_bad("0.15")
 
     panels = [
-        (f"data (bg {witness['bg_sb']:+.3f} uJy/as2, "
-         f"tilt {witness['bg_tilt_sb']:.3f})", shown),
+        (rf"data (bg {witness['bg_sb']:+.3f} $\mu$Jy/as$^2$, "
+         rf"tilt {witness['bg_tilt_sb']:.3f})", shown),
         ("fitted scene + background", scene),
         ("residual", np.where(good, image - scene, np.nan)),
         (f"masked ({witness['maskfrac_ap']:.0%} of aperture) + filled",
@@ -99,16 +99,17 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
         ax.set_yticks([])
         ax.set_title(title, fontsize=9)
         ax.add_patch(Circle((cx, cy), aperture / pixscale, fill=False,
-                            ec="cyan", lw=1.0))
+                            ec="tab:blue", lw=1.0))
         if i in (2, 3) and mask.any():
-            ax.contour(mask, levels=[0.5], colors="orange", linewidths=0.6)
+            ax.contour(mask, levels=[0.5], colors="tab:green",
+                       linewidths=0.6)
 
     ax = axes[4]
     ax.plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
             color="C3", ms=3, lw=1.4, label="CoG (data - bg)")
     ax.plot(measurement['rgrid'], measurement['model_cog'], "k--", lw=1.4,
             label="fitted target model")
-    ax.axvline(aperture, color="cyan", lw=1.0)
+    ax.axvline(aperture, color="tab:blue", lw=1.0)
     conv = witness['r_conv_as']
     if conv > 0:
         ax.axvline(conv, color="0.55", lw=0.9, ls=":")
@@ -116,13 +117,13 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
     ax.set_ylabel(r"enclosed flux ($\mu$Jy)")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)
-    conv_label = f"conv@{conv:.0f}\"" if conv > 0 else "no plateau"
+    conv_label = f'conv@{conv:.0f}"' if conv > 0 else 'no plateau'
     ax.set_title(
-        rf"{measurement['flux_ujy']:.1f} $\pm$ "
-        rf"{measurement['flux_err_ujy']:.1f} $\mu$Jy ({aperture:g}\", "
-        f"{measurement['err_model']})  excess "
-        f"{witness['excess_growth_uJy']:+.1f} "
-        f"(own {witness['model_own_growth_uJy']:+.1f})  {conv_label}",
+        rf'{measurement["flux_ujy"]:.1f} $\pm$ '
+        rf'{measurement["flux_err_ujy"]:.1f} $\mu$Jy ({aperture:g}", '
+        f'{measurement["err_model"]})  excess '
+        f'{witness["excess_growth_uJy"]:+.1f} '
+        f'(own {witness["model_own_growth_uJy"]:+.1f})  {conv_label}',
         fontsize=9)
 
     fig.suptitle(f"{measurement['instrument']} {measurement['band']} -- "
@@ -145,7 +146,8 @@ def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
                 color=_wave_color(m['wave_um']), lw=1.6, alpha=0.85,
                 label=f"{m['instrument']} {m['band']}")
     if measurements:
-        ax.axvline(measurements[0]['aperture_arcsec'], color="cyan", lw=1.2)
+        ax.axvline(measurements[0]['aperture_arcsec'], color="tab:blue",
+                   lw=1.2)
     ax.set_yscale("log")
     ax.set_xlabel("aperture radius (arcsec)")
     ax.set_ylabel(r"enclosed flux ($\mu$Jy)")
