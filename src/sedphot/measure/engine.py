@@ -228,9 +228,15 @@ def measure_band(
     stamp = load_stamp(product.path, product.calib, coord,
                        cutout_half_arcsec=cutout_half_arcsec,
                        invvar_path=product.invvar_path)
+    # The catalog's per-source PSF sizes describe the scene catalog's
+    # own imaging; only that instrument's bands may read them. Every
+    # other instrument falls through to its header keyword or its
+    # provider-typical seeing.
+    psfsize_col = (f'psfsize_{product.band.lower()}'
+                   if product.instrument.lower() == 'legacy' else None)
     psf, seeing, seeing_src = resolve_psf(
         stamp, cat if len(cat) else None, stars,
-        psfsize_col=f'psfsize_{product.band.lower()}',
+        psfsize_col=psfsize_col,
         fallback_arcsec=product.seeing_arcsec,
         fallback_label='provider typical')
     check_coverage(stamp, aperture_arcsec=aperture_arcsec,
