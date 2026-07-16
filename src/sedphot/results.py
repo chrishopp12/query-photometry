@@ -10,7 +10,7 @@ fetch-all over many archives degrades gracefully instead of dying on the
 first service outage.
 
 Data products:
-    coverage_report.json    per-provider status written by the drivers
+    coverage_catalogs.json / coverage_measure.json    per-provider status written by the drivers
 
 Requirements:
     (stdlib only)

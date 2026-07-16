@@ -13,7 +13,6 @@ dependencies = [
     "pandas>=2.0",
     "astropy>=5.3",
     "astroquery>=0.4.10",
-    "photutils>=1.8",
     "matplotlib>=3.7",
     "requests",
     "defusedxml",

@@ -189,7 +189,7 @@ outputs are folded in.
 
 ## Requirements
 
-Python 3.11+; numpy, scipy, pandas, astropy, astroquery, photutils,
+Python 3.11+; numpy, scipy, pandas, astropy, astroquery,
 matplotlib, requests, defusedxml (see `pyproject.toml`).
 
 ## License
