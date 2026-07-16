@@ -62,8 +62,10 @@ TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
 # The halo gate. A gated source receives a shape solve (Sersic core +
 # Nuker halo) instead of a fixed catalog profile. The second profile
 # exists to fix MISFIT, and the catalog's own reduced chi-square is its
-# misfit statement -- the necessary condition. Point sources and the
-# target itself never gate.
+# misfit statement -- the necessary condition. Point sources, the
+# target itself, and OFF-STAMP rows never gate: a shape solve needs its
+# source's pixels on the stamp, and an off-stamp halo seat with center
+# freedom degenerates into a flat sheet across the field.
 GATE_FLUX_UJY = 100.0
 GATE_RCHISQ = 4.0
 

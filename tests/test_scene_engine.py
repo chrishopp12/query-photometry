@@ -115,6 +115,28 @@ def test_build_components_names_normalization_and_margin():
     assert len(wings) == 1 and wings[0]['cat'] >= recipe.BRIGHT_PSF_UJY
 
 
+def test_off_stamp_rows_never_gate():
+    stamp = make_stamp(np.zeros((200, 200)))
+    psf = moffat_kernel(1.3, PIX)
+    rows = [
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=40.0),
+        # bright + misfit + ON-stamp: gates
+        catalog_row(stamp.wcs, stamp.cx + 40, stamp.cy, flux_nmgy=300.0,
+                    rchisq=9.0, sersic=5.0, shape_r=2.5),
+        # the same source pushed past the edge: its cuspy wings still
+        # clear the margin, but a shape solve has no pixels to stand on
+        catalog_row(stamp.wcs, -18.0, stamp.cy, flux_nmgy=290.0,
+                    rchisq=9.0, sersic=5.0, shape_r=2.5),
+    ]
+    cat = make_catalog(rows)
+    comps = build_components(cat, stamp, psf, 1.3)
+    on_stamp = next(c for c in comps if c['x'] > stamp.cx + 10)
+    off_stamp = next(c for c in comps if c['x'] < 0)
+    assert on_stamp['gate']
+    assert not off_stamp['gate']          # present, fixed profile only
+    assert off_stamp['flux0'] >= recipe.MARGIN_MIN_UJY
+
+
 def test_build_components_profile_cache_reuse():
     stamp = make_stamp(np.zeros((160, 160)))
     psf = moffat_kernel(1.3, PIX)

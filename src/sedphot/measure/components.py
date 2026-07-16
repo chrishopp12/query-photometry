@@ -175,8 +175,14 @@ def build_components(
                                    row['shape_r'], row['shape_e1'],
                                    row['shape_e2'])
         counts = max(float(row['uJy']), 0.0) / cf
+        # Off-stamp rows never gate: the pixels that would constrain a
+        # shape solve are not on the stamp, and the wing-level light an
+        # off-stamp source lands here is served by its catalog profile.
+        # A monster beyond the edge whose envelope truly reaches the
+        # target is patches territory, never blind-scene machinery.
         meta = dict(name=name, irow=int(irow), cat=float(row['uJy']),
-                    x=x, y=y, gate=gated_row(row, dist_arcsec))
+                    x=x, y=y,
+                    gate=inside and gated_row(row, dist_arcsec))
 
         if shape is None:
             # Point source. On-stamp: a delta at the catalog position
