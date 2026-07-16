@@ -138,12 +138,29 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
 
 
 def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
-    """Enclosed flux vs radius for every measured band on one figure."""
+    """Enclosed flux vs radius for every measured band on one figure.
+
+    Colors are wavelength-ordered over the range actually plotted: the
+    absolute SED scale (far-UV through mid-IR) would compress an
+    optical-only band set into near-identical hues.
+    """
+    waves = [m['wave_um'] for m in measurements
+             if np.isfinite(m['wave_um'])]
+    log_lo = np.log10(min(waves)) if waves else 0.0
+    log_hi = np.log10(max(waves)) if waves else 1.0
+    span = max(log_hi - log_lo, 1e-9)
+
+    def band_color(wave: float) -> tuple:
+        if not np.isfinite(wave):
+            return (0.3, 0.3, 0.3, 1.0)
+        return plt.cm.turbo(
+            float(np.clip((np.log10(wave) - log_lo) / span, 0.0, 1.0)))
+
     fig, ax = plt.subplots(figsize=(11, 7))
     for m in measurements:
         style = INSTRUMENT_STYLE.get(m['instrument'], "-")
         ax.plot(m['rgrid'], m['enclosed_ujy'], style,
-                color=_wave_color(m['wave_um']), lw=1.6, alpha=0.85,
+                color=band_color(m['wave_um']), lw=1.6, alpha=0.85,
                 label=f"{m['instrument']} {m['band']}")
     if measurements:
         ax.axvline(measurements[0]['aperture_arcsec'], color="tab:blue",
