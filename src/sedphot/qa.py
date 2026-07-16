@@ -40,6 +40,12 @@ from .bands import wave_um
 INSTRUMENT_STYLE = {"Legacy": "-", "SDSS": "--", "CFHT": ":", "PS1": "-.",
                     "PanSTARRS": "-.", "HST": "-"}
 
+# Marker per instrument in the SED plot (keyed by the band-label prefix;
+# color already carries the wavelength, so the shape carries the source).
+INSTRUMENT_MARKER = {"Legacy": "o", "CFHT": "^", "SDSS": "s", "PS1": "D",
+                     "JPLUS": "v", "WISE": "P", "GALEX": "*", "HST": "X",
+                     "SPHEREx": "."}
+
 
 # ------------------------------------
 # Helpers
@@ -204,12 +210,18 @@ def plot_sed(
     -------
     outpath : Path
     """
+    from matplotlib.lines import Line2D
+
     fig, ax = plt.subplots(figsize=(10, 6.5))
-    markers = {"catalog": "o", "measured": "s"}
     plotted = 0
+    seen_instruments: list[str] = []
     for label, df in frames.items():
         if df is None or df.empty:
             continue
+        # Fill carries provenance: catalog points are filled, our own
+        # measurements are open; the marker carries the instrument and
+        # the color carries the wavelength.
+        open_face = label == 'measured'
         waves = np.array([wave_um(b) for b in df['band']])
         flux = df['flux_uJy'].to_numpy(dtype=float)
         err = df['flux_err_uJy'].to_numpy(dtype=float)
@@ -220,20 +232,33 @@ def plot_sed(
                   f"{', '.join(dropped)}")
         for i in np.where(ok)[0]:
             color = _wave_color(waves[i])
-            ax.errorbar(waves[i], flux[i], yerr=err[i] if np.isfinite(err[i]) else None,
-                        fmt=markers.get(label, "D"), color=color, ms=6,
-                        mec="k", mew=0.4, elinewidth=1.0, capsize=2)
+            instrument = str(df['band'].iloc[i]).split('_')[0]
+            if instrument not in seen_instruments:
+                seen_instruments.append(instrument)
+            marker = INSTRUMENT_MARKER.get(instrument, 'h')
+            ax.errorbar(waves[i], flux[i],
+                        yerr=err[i] if np.isfinite(err[i]) else None,
+                        fmt=marker, ms=7,
+                        mfc='none' if open_face else color,
+                        mec=color if open_face else 'k',
+                        mew=1.2 if open_face else 0.4,
+                        ecolor=color, elinewidth=1.0, capsize=2)
             plotted += 1
-    # Legend proxies: one entry per table, shape only.
-    for label in frames:
-        if frames[label] is not None and not frames[label].empty:
-            ax.plot([], [], markers.get(label, "D"), color="0.4", mec="k", label=label)
+    handles = [Line2D([], [], marker=INSTRUMENT_MARKER.get(inst, 'h'),
+                      linestyle='', color='0.45', mec='k', label=inst)
+               for inst in sorted(seen_instruments)]
+    handles += [
+        Line2D([], [], marker='o', linestyle='', color='0.45', mec='k',
+               label='catalog (filled)'),
+        Line2D([], [], marker='o', linestyle='', mfc='none', mec='0.2',
+               label='measured (open)'),
+    ]
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"wavelength ($\mu$m)")
     ax.set_ylabel(r"flux ($\mu$Jy)")
     ax.set_title(title or "SED")
-    ax.legend(fontsize=9)
+    ax.legend(handles=handles, fontsize=9, ncol=2)
     ax.grid(alpha=0.25, which="both")
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)
