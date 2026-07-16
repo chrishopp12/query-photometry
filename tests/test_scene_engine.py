@@ -115,6 +115,53 @@ def test_build_components_names_normalization_and_margin():
     assert len(wings) == 1 and wings[0]['cat'] >= recipe.BRIGHT_PSF_UJY
 
 
+def test_drop_target_shreds_scope_and_pinning():
+    from sedphot.measure.components import drop_target_shreds
+
+    stamp = make_stamp(np.zeros((200, 200)))
+    coord = stamp.wcs.pixel_to_world(stamp.cx, stamp.cy)
+    hot = dict(rchisq=1.0)
+    rows = [
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=200.0, **hot),
+        catalog_row(stamp.wcs, stamp.cx + 8, stamp.cy, flux_nmgy=4.0, **hot),
+        catalog_row(stamp.wcs, stamp.cx + 16, stamp.cy, flux_nmgy=4.0, **hot),
+        catalog_row(stamp.wcs, stamp.cx + 50, stamp.cy, flux_nmgy=4.0, **hot),
+    ]
+    cat = make_catalog(rows)
+    # all rows hot: even a hot TARGET row never drops
+    cat['fracflux_r'] = [5.0, 5.0, 5.0, 5.0]
+    pinned = stamp.wcs.pixel_to_world(stamp.cx + 16, stamp.cy)
+    patches = {'free_seats': [dict(ra=float(pinned.ra.deg),
+                                   dec=float(pinned.dec.deg))]}
+    kept = drop_target_shreds(cat, coord, aperture_arcsec=12.0,
+                              patches=patches)
+    # dropped: only the unpinned in-aperture shred (at +8 px = 4")
+    assert len(kept) == 3
+    dists = np.hypot(kept.ra - coord.ra.deg, 0)   # crude: check by flux
+    assert (kept['flux_r'] == 200.0).any()        # target stays
+    assert (kept['flux_r'] == 4.0).sum() == 2     # pinned + far stay
+
+
+def test_gate_radius_is_radial():
+    stamp = make_stamp(np.zeros((240, 240)))     # 120" stamp, half 60"
+    psf = moffat_kernel(1.3, PIX)
+    rows = [
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=40.0),
+        # corner source: inside the square stamp at 40" diagonal reach,
+        # gate-eligible by flux and misfit
+        catalog_row(stamp.wcs, stamp.cx + 57, stamp.cy + 57,
+                    flux_nmgy=300.0, rchisq=9.0, shape_r=2.5),
+    ]
+    cat = make_catalog(rows)
+    corner = lambda comps: next(c for c in comps if c['x'] > stamp.cx + 30)
+    with_reach = build_components(cat, stamp, psf, 1.3,
+                                  gate_radius_arcsec=35.0)
+    assert not corner(with_reach)['gate']   # 40" > 35" reach: no gate
+    without = build_components(cat, stamp, psf, 1.3,
+                               gate_radius_arcsec=60.0)
+    assert corner(without)['gate']          # inside 60" reach: gates
+
+
 def test_off_stamp_rows_never_gate():
     stamp = make_stamp(np.zeros((200, 200)))
     psf = moffat_kernel(1.3, PIX)

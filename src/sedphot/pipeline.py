@@ -386,6 +386,7 @@ def run_measure(
     # confirmed stars (cache-first under Photometry/scene/), the optional
     # patches file, and the cross-field registry.
     scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
+                          aperture_arcsec=aperture_arcsec,
                           legacy_dr=legacy_dr, registry_path=registry_path)
     print()
 

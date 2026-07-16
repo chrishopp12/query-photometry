@@ -112,6 +112,70 @@ def apply_patches(cat: pd.DataFrame, patches: dict) -> pd.DataFrame:
 
 
 # ------------------------------------
+# Target-substructure rows
+# ------------------------------------
+def drop_target_shreds(
+        cat: pd.DataFrame,
+        coord: SkyCoord,
+        *,
+        aperture_arcsec: float,
+        patches: dict | None = None,
+) -> pd.DataFrame:
+    """Drop catalog rows that are really the target's own light.
+
+    A row inside the science aperture whose fracflux exceeds
+    recipe.SHRED_FRACFLUX sits where other sources' light outweighs its
+    own flux -- the catalog's rendering of target substructure, not an
+    independent neighbor. Subtracting (and masking) such rows steals
+    target flux, so they leave the scene entirely and their light is
+    measured as target. The target row itself never drops, and rows at
+    patch-named positions are pinned -- declared human knowledge wins
+    over the blind rule.
+
+    Parameters
+    ----------
+    cat : pd.DataFrame
+        Scene catalog (post-patches, with 'uJy' and 'fracflux_r').
+    coord : SkyCoord
+        Target position.
+    aperture_arcsec : float
+        Science aperture radius (the rule's scope).
+    patches : dict, optional
+        Per-galaxy custom inputs; their named positions are exempt.
+
+    Returns
+    -------
+    kept : pd.DataFrame
+        The catalog without the target-substructure rows, reindexed.
+    """
+    if not len(cat) or 'fracflux_r' not in cat:
+        return cat
+    rows = SkyCoord(cat['ra'].values, cat['dec'].values, unit='deg')
+    dist = coord.separation(rows).arcsec
+    shred = ((dist > recipe.TARGET_MATCH_AS)
+             & (dist < aperture_arcsec)
+             & (cat['fracflux_r'].values > recipe.SHRED_FRACFLUX))
+    if patches:
+        pinned = []
+        for rep in patches.get('replace_rows', []):
+            for row in rep['with']:
+                pinned.append((row.get('ra', rep['ra']),
+                               row.get('dec', rep['dec'])))
+        for seat in patches.get('free_seats', []):
+            pinned.append((seat['ra'], seat['dec']))
+        for ra, dec in pinned:
+            near = SkyCoord(ra, dec, unit='deg').separation(rows).arcsec
+            shred &= ~(near < recipe.PATCH_MATCH_AS)
+    if shred.any():
+        fluxes = [round(v, 1) for v in cat.loc[shred, 'uJy']]
+        print(f"  target substructure: {int(shred.sum())} catalog row(s) "
+              f"inside the aperture with fracflux_r > "
+              f"{recipe.SHRED_FRACFLUX:g} ({fluxes} uJy) leave the "
+              f"scene; their light is measured as target flux")
+    return cat[~shred].reset_index(drop=True)
+
+
+# ------------------------------------
 # Components
 # ------------------------------------
 def build_components(
@@ -121,6 +185,7 @@ def build_components(
         seeing_arcsec: float,
         *,
         profile_cache: dict | None = None,
+        gate_radius_arcsec: float | None = None,
 ) -> list[dict]:
     """Render every usable catalog row into a fixed scene component.
 
@@ -147,6 +212,11 @@ def build_components(
         instrument grid, keyed by component name (catalog shapes are
         band-independent; each band convolves with its own PSF). The
         caller owns grid-identity verification.
+    gate_radius_arcsec : float, optional
+        Radial gate reach: rows beyond this sky distance never gate,
+        keeping the gate census identical on every instrument
+        regardless of grid rotation. None gates by stamp membership
+        alone.
 
     Returns
     -------
@@ -175,14 +245,17 @@ def build_components(
                                    row['shape_r'], row['shape_e1'],
                                    row['shape_e2'])
         counts = max(float(row['uJy']), 0.0) / cf
-        # Off-stamp rows never gate: the pixels that would constrain a
-        # shape solve are not on the stamp, and the wing-level light an
-        # off-stamp source lands here is served by its catalog profile.
-        # A monster beyond the edge whose envelope truly reaches the
-        # target is patches territory, never blind-scene machinery.
+        # Off-stamp and beyond-reach rows never gate: the pixels that
+        # would constrain a shape solve are not (reliably) on the
+        # stamp, and the wing-level light such a source lands here is
+        # served by its catalog profile. A monster beyond the edge
+        # whose envelope truly reaches the target is patches territory,
+        # never blind-scene machinery.
+        in_reach = (gate_radius_arcsec is None
+                    or dist_arcsec < gate_radius_arcsec)
         meta = dict(name=name, irow=int(irow), cat=float(row['uJy']),
                     x=x, y=y,
-                    gate=inside and gated_row(row, dist_arcsec))
+                    gate=inside and in_reach and gated_row(row, dist_arcsec))
 
         if shape is None:
             # Point source. On-stamp: a delta at the catalog position

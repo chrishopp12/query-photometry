@@ -44,7 +44,7 @@ from . import recipe
 from .aperture import (build_mask, curve, enclosed_at, flux_error,
                        twin_fill, witness_row)
 from .background import bin_plane
-from .components import apply_patches, build_components
+from .components import apply_patches, build_components, drop_target_shreds
 from .psf import resolve_psf
 from .render import ampl_from_total, conv_same, sersic_profile
 from .seats import apply_registry, build_seats, harvest_seats, load_registry
@@ -62,6 +62,7 @@ def prepare_scene(
         *,
         phot_dir: str | Path,
         out_dir: str | Path,
+        aperture_arcsec: float,
         legacy_dr: str = 'dr9',
         registry_path: str | Path | None = None,
 ) -> dict:
@@ -82,6 +83,8 @@ def prepare_scene(
     out_dir : str or Path
         The galaxy directory; an optional patches file
         (recipe.PATCH_FILENAME) is read from here.
+    aperture_arcsec : float
+        Science aperture radius; scopes the target-substructure rule.
     legacy_dr : str
         Legacy data release for the scene catalog. [default: 'dr9']
     registry_path : str or Path, optional
@@ -111,6 +114,9 @@ def prepare_scene(
         print(f"  patches: {sorted(patches.keys())}")
     if len(cat):
         cat = apply_patches(cat, patches)
+        cat = drop_target_shreds(cat, coord,
+                                 aperture_arcsec=aperture_arcsec,
+                                 patches=patches)
     else:
         print("  scene catalog is empty here; measuring blind")
 
@@ -241,7 +247,8 @@ def measure_band(
         cache['signature'] = signature
         cache['profiles'] = {}
     comps = build_components(cat, stamp, psf, seeing,
-                             profile_cache=cache['profiles']) \
+                             profile_cache=cache['profiles'],
+                             gate_radius_arcsec=cutout_half_arcsec) \
         if len(cat) else []
     comps, consumed = apply_registry(comps, scene['registry'], stamp,
                                      psf, band_key, product.instrument,

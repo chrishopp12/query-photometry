@@ -63,11 +63,24 @@ TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
 # Nuker halo) instead of a fixed catalog profile. The second profile
 # exists to fix MISFIT, and the catalog's own reduced chi-square is its
 # misfit statement -- the necessary condition. Point sources, the
-# target itself, and OFF-STAMP rows never gate: a shape solve needs its
-# source's pixels on the stamp, and an off-stamp halo seat with center
-# freedom degenerates into a flat sheet across the field.
+# target itself, and rows beyond the stamp half-width never gate: a
+# shape solve needs its source's pixels on the stamp, a distant halo
+# seat with center freedom degenerates into a flat sheet across the
+# field, and a RADIAL reach keeps the gate census identical on every
+# instrument (a square-stamp test would admit corner sources on a
+# rotated grid that an aligned grid excludes).
 GATE_FLUX_UJY = 100.0
 GATE_RCHISQ = 4.0
+
+# Ownership of blended catalog rows. A row inside the science aperture
+# whose fracflux says the light at its position is dominated by OTHER
+# sources is the catalog's rendering of the target's own substructure
+# (knots and asymmetries a smooth profile cannot carry) -- it is target
+# light, and subtracting it steals flux. Such rows leave the scene
+# entirely. Outside the aperture the same signature usually means a
+# real compact source embedded in a neighbor's envelope, which must
+# stay modeled, so the rule is scoped to the aperture.
+SHRED_FRACFLUX = 1.0
 
 PATCH_FILENAME = 'patches.json'   # optional per-galaxy custom inputs
 
