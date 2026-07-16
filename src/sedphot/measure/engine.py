@@ -1,7 +1,7 @@
 """
 engine.py
 
-Stage 6: Per-Galaxy Scene Measurement Driver
+Stage 8: Per-Galaxy Scene Measurement Driver
 ---------------------------------------------------------
 One galaxy, all bands: fetch the scene inputs once (survey catalog,
 confirmed stars, optional patches and registry), then measure every
@@ -15,11 +15,10 @@ is the REFERENCE -- it solves seat shapes -- and its siblings transfer
 those shapes, re-solving neighbor seats warm with color-leashed fluxes.
 Nothing is shared across instruments but the catalogs and patches.
 
-Data products (per band, returned to the pipeline):
-    measurement dict     flux, error, witnesses, and the images the QA
-                         figure draws
-    reference dict       seat shapes + fluxes for the instrument's
-                         sibling bands
+Each measured band returns two dicts to the pipeline: the measurement
+(flux, error, witnesses, and the images the QA figure draws) and, from
+a reference band, the seat shapes + fluxes its instrument's sibling
+bands transfer.
 
 Requirements:
     numpy, pandas, astropy
@@ -40,15 +39,16 @@ import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from ..catalogs import gaia
-from ..catalogs.legacy import SCENE_COLS, query_scene
-from ..units import NANOMAGGY_TO_UJY
+from ..catalogs.legacy import query_scene
 from . import recipe
 from .aperture import (build_mask, curve, enclosed_at, flux_error,
                        twin_fill, witness_row)
 from .background import bin_plane
 from .components import apply_patches, build_components
 from .psf import resolve_psf
+from .render import ampl_from_total, conv_same, sersic_profile
 from .seats import apply_registry, build_seats, harvest_seats, load_registry
+from .sersic import theta_from_pa
 from .solve import joint_fit
 from .stamp import check_coverage, load_stamp
 from .stars import confirm_stars, subtract_stars
@@ -277,7 +277,7 @@ def measure_band(
         fit_ref['col_color'] = _seat_colors(seats, cat, comps,
                                             product.band)
     fit = joint_fit(image, good, stamp, psf, comps, seats, drops,
-                    ref=fit_ref, tag=tag)
+                    ref=fit_ref)
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
     if solve_info is not None:
@@ -382,8 +382,8 @@ def measure_band(
     new_ref = None
     if ref is None and solve_info is not None:
         n_fixed = len(fit['fixed'])
-        # Amplitudes ARE microjanskys: the reference fluxes for sibling
-        # -band leashes come straight off the solve.
+        # Amplitudes ARE microjanskys: the reference fluxes for the
+        # sibling-band leashes come straight off the solve.
         new_ref = dict(seats=seats, drops=sorted(drops),
                        p=solve_info['p'], pix=stamp.pixscale,
                        col_flux=[max(float(a), 0.0)
@@ -415,9 +415,6 @@ def _pin_target(comps: list[dict], target_shape: dict, stamp,
     Used by forced mode: the shape (n, reff_arcsec, ellip, pa_deg) is
     given, the amplitude stays free in the joint solve.
     """
-    from .render import ampl_from_total, conv_same, sersic_profile
-    from .sersic import theta_from_pa
-
     target = next((c for c in comps if c['name'] == 'target'), None)
     if target is None:
         return

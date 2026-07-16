@@ -1,7 +1,7 @@
 """
 solve.py
 
-Stage 4: The Joint Fit, with One Background Owner
+Stage 6: The Joint Fit, with One Background Owner
 ---------------------------------------------------------
 The background never sits in a design matrix next to component
 amplitudes. It is only ever estimated by background.bin_plane on a
@@ -181,7 +181,6 @@ def solve_shapes(
         p_seed=None,
         extra_fixed_cols=None,
         gram=None,
-        tag: str = '',
 ) -> dict:
     """Joint nonlinear solve of the given seats' shape parameters.
 
@@ -246,9 +245,9 @@ def solve_shapes(
     if p_seed is None:
         # Two-stage cold start: with center offsets in the vector, a
         # cold solve can converge into a nearby local minimum before
-        # the geometry organizes. Stage 1 solves the proven
-        # centers-frozen problem; stage 2 releases the Sersic centers
-        # warm from that basin. Warm re-solves skip the staging.
+        # the geometry organizes. Stage 1 solves the centers-frozen
+        # problem; stage 2 releases the Sersic centers warm from that
+        # basin. Warm re-solves skip the staging.
         lo1, hi1 = lo.copy(), hi.copy()
         for seat, sl in zip(seats, seat_slices(seats)):
             if seat['kind'] == 'sersic':
@@ -352,7 +351,6 @@ def joint_fit(
         drops: set[str],
         *,
         ref: dict | None = None,
-        tag: str = '',
 ) -> dict:
     """The whole fit: {shapes + amplitudes} <-> background, block
     coordinate descent to a fixed point.
@@ -368,7 +366,7 @@ def joint_fit(
     Parameters
     ----------
     image : np.ndarray
-        Star-subtracted stamp (counts, finite everywhere).
+        Star-subtracted image (counts, finite everywhere).
     good : np.ndarray
         Usable-pixel map.
     stamp : Stamp
@@ -386,8 +384,6 @@ def joint_fit(
         reference pixel scale (pix), per-seat reference fluxes
         (col_flux), and per-seat color factors (col_color). None on a
         reference band -- seats solve their own shapes.
-    tag : str
-        Run-log prefix.
 
     Returns
     -------
@@ -426,7 +422,7 @@ def joint_fit(
                 gram = _fixed_gram(fixed_bases, good, [])
             solve_info = solve_shapes(image, good, comps, bg['img'],
                                       stamp, psf, seats, drops,
-                                      p_seed=p, gram=gram, tag=tag)
+                                      p_seed=p, gram=gram)
             p = solve_info['p']
             nfev_hist.append(solve_info['nfev'])
             cols, owners = render_seats(seats, p, stamp, psf)
@@ -443,7 +439,7 @@ def joint_fit(
                      for i in transfer['free_idx']],
                     drops, p_seed=transfer['p_free'],
                     extra_fixed_cols=transfer['frozen_cols'],
-                    gram=gram, tag=tag)
+                    gram=gram)
                 transfer['p_free'] = solve_info['p']
                 nfev_hist.append(solve_info['nfev'])
                 free_cols, _ = render_seats(

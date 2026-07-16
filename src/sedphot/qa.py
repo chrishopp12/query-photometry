@@ -6,7 +6,7 @@ QA and SED Figures
 
 The diagnostic figures every image extraction writes, and the combined SED
 plot. Shared conventions across the figures: asinh/ZScale grayscale stamps,
-cyan aperture markings, gold sky annulus, wavelength-ordered point colors.
+cyan aperture markings, wavelength-ordered point colors.
 
 Data products:
     QA/<inst>_<band>.png          per-band scene panels: data | fitted scene |
@@ -157,64 +157,6 @@ def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
     out = out_dir / "growth_curves.png"
     fig.tight_layout()
     fig.savefig(out, dpi=135)
-    plt.close(fig)
-    return out
-
-
-def qa_forced_figure(measurement: dict, out_dir: str | Path) -> Path:
-    """Masked data | forced-Sersic model | residual, plus the model growth curve."""
-    stamp = measurement['stamp']
-    model = measurement['model']
-    mask = measurement['mask']
-    cx, cy = measurement['cx'], measurement['cy']
-    pixscale = measurement['pixscale']
-    sky_in, sky_out = measurement['sky_in'], measurement['sky_out']
-
-    fig, axes = plt.subplots(1, 4, figsize=(16.5, 4.2),
-                             gridspec_kw=dict(width_ratios=[1, 1, 1, 1.2]))
-    norm = ImageNormalize(stamp, interval=ZScaleInterval(), stretch=AsinhStretch())
-    gray = plt.cm.gray.copy()
-    gray.set_bad("0.15")
-
-    axes[0].imshow(np.where(mask, np.nan, stamp), origin="lower", cmap=gray, norm=norm)
-    axes[0].set_title("data (masked)", fontsize=10)
-    axes[1].imshow(model, origin="lower", cmap=gray, norm=norm)
-    axes[1].set_title("forced-Sersic model", fontsize=10)
-    residual = stamp - model
-    axes[2].imshow(np.where(mask, np.nan, residual), origin="lower",
-                   cmap="RdBu_r",
-                   vmin=-5 * measurement['sky_std_ujy'] / measurement['cf'],
-                   vmax=5 * measurement['sky_std_ujy'] / measurement['cf'])
-    axes[2].set_title(rf"residual ($\chi^2_\nu$ = {measurement['redchi2']:.2f})",
-                      fontsize=10)
-    window = (sky_out + 6) / pixscale
-    for ax in axes[:3]:
-        ax.set_xlim(cx - window, cx + window)
-        ax.set_ylim(cy - window, cy + window)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    axes[3].plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
-                 color="0.25", ms=3, lw=1.2)
-    axes[3].axhline(measurement['flux_ujy'], color="cyan", lw=1.0, ls="--")
-    axes[3].set_xlabel("radius (arcsec)")
-    axes[3].set_ylabel(r"enclosed model flux ($\mu$Jy)")
-    axes[3].grid(alpha=0.25)
-    axes[3].set_title(
-        rf"{measurement['flux_ujy']:.1f} $\pm$ {measurement['flux_err_ujy']:.1f} "
-        rf"$\mu$Jy total", fontsize=10)
-
-    shape = measurement['shape_sky']
-    fig.suptitle(
-        f"{measurement['instrument']} {measurement['band']}  |  forced Sersic: "
-        rf"n={shape['n']:.2f}, $r_e$={shape['reff_arcsec']:.2f}\", "
-        rf"ellip={shape['ellip']:.2f}, PA={shape['pa_deg']:.1f}$^\circ$",
-        fontsize=11)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{measurement['instrument']}_{measurement['band']}_sersic.png"
-    fig.tight_layout()
-    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     return out
 

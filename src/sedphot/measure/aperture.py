@@ -1,7 +1,7 @@
 """
 aperture.py
 
-Stage 5: Mask, Fill, Curve of Growth, Witnesses
+Stage 7: Mask, Fill, Curve of Growth, Witnesses
 ---------------------------------------------------------
 The measurement side of the scene engine. The fitted neighbors and the
 converged background are subtracted, residual neighbor pixels are
@@ -24,6 +24,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.ndimage import binary_dilation
 
+from ..schema import make_row
+from ..units import flux_err_to_mag_err, ujy_to_mag
 from . import recipe
 from .background import ambient_surface
 from .stamp import Stamp
@@ -287,7 +289,7 @@ def plateau_hold(enc: np.ndarray, flux_ap: float,
 def witness_row(
         enc: np.ndarray,
         model_cog: np.ndarray,
-        m12_cat: float | None,
+        m_ap_cat: float | None,
         stamp: Stamp,
         good: np.ndarray,
         mask: np.ndarray,
@@ -309,6 +311,42 @@ def witness_row(
     The witnesses are the reproducibility mechanism: every quantity a
     reader would need to trust (or distrust) the flux is measured and
     recorded, never eyeballed.
+
+    Parameters
+    ----------
+    enc : np.ndarray
+        Measured curve of growth (uJy at each rgrid radius).
+    model_cog : np.ndarray
+        The fitted target model's own curve of growth.
+    m_ap_cat : float or None
+        Catalog-model flux in the aperture (native scene band only).
+    stamp : Stamp
+        This band's stamp.
+    good, mask : np.ndarray
+        Usable-pixel and neighbor-mask maps.
+    twin_frac : float
+        Mirror-filled fraction of the masked aperture area.
+    neighbors, star_img : np.ndarray
+        Subtracted neighbor and star light (counts).
+    bg : dict
+        The converged background (background.bin_plane).
+    track : list of float
+        The background constant's path through the alternation.
+    flood_ujy : float
+        Escaped-glow flux claimed by the flood channel.
+    seeing_arcsec, seeing_src : float, str
+        Band PSF FWHM and its provenance.
+    rgrid : np.ndarray
+        Curve-of-growth radii.
+    aperture_arcsec : float
+        Science aperture radius.
+    solve_info : dict, optional
+        Shape-solve diagnostics (solve.solve_shapes), when one ran.
+
+    Returns
+    -------
+    witness : dict
+        One JSON-ready dict of every per-band witness.
     """
     rr, cf = stamp.rr, stamp.cf
     sb = stamp.sb
@@ -325,7 +363,7 @@ def witness_row(
         excess_growth_uJy=round(growth - own, 1),
         model_own_growth_uJy=round(own, 1),
         m_ap_fit_uJy=round(model_ap, 1),
-        m_ap_cat_uJy=round(m12_cat, 1) if m12_cat is not None else None,
+        m_ap_cat_uJy=round(m_ap_cat, 1) if m_ap_cat is not None else None,
         cov=round(float(good[ap].mean()), 3),
         maskfrac_ap=round(float(mask[ap].mean()), 3),
         twinfrac=round(twin_frac, 2),
@@ -367,6 +405,20 @@ def flux_error(
     """Statistical flux error: inverse variance when the archive serves
     it, global sky rms otherwise. Floors and inflation belong to the
     SED fitter, never to this table.
+
+    Parameters
+    ----------
+    stamp : Stamp
+        This band's stamp (carries the invvar cutout when one exists).
+    good : np.ndarray
+        Usable-pixel map.
+    aperture_arcsec : float
+        Science aperture radius.
+
+    Returns
+    -------
+    error : tuple
+        (flux_err_ujy, error-model label 'ivm' or 'skyrms').
     """
     in_aperture = stamp.rr < aperture_arcsec
     n_aper = int(in_aperture.sum())
@@ -419,9 +471,6 @@ def measurement_to_row(measurement: dict, *, mode: str = 'aperture') -> dict:
     photometry through the same scene fit). Both carry the same
     witnesses and the same statistical error model.
     """
-    from ..schema import make_row
-    from ..units import flux_err_to_mag_err, ujy_to_mag
-
     witness = measurement['witness']
     if mode == 'sersic':
         # NaN when no target model exists to report (blind scene, or

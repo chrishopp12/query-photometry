@@ -382,14 +382,14 @@ def run_measure(
     elif mode == 'sersic':
         print("Forced shape: per-instrument reference-band refit\n")
 
-    # Phase 2.6 -- scene inputs, once per galaxy: the survey catalog and
+    # Phase 3 -- scene inputs, once per galaxy: the survey catalog and
     # confirmed stars (cache-first under Photometry/scene/), the optional
     # patches file, and the cross-field registry.
     scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
                           legacy_dr=legacy_dr, registry_path=registry_path)
     print()
 
-    # Phase 3 -- measure every band, reference band first per instrument.
+    # Phase 4 -- measure every band, reference band first per instrument.
     caches: dict = {}
     references: dict[str, dict] = {}
     for name, products in fetched_products:

@@ -7,8 +7,7 @@ import pandas as pd
 import pytest
 from astropy.coordinates import SkyCoord
 
-import sedphot.catalogs.gaia as gaia
-import sedphot.catalogs.legacy as legacy
+from sedphot.catalogs import gaia, legacy
 from sedphot.units import NANOMAGGY_TO_UJY
 
 COORD = SkyCoord(150.0, 2.0, unit='deg')

@@ -1,7 +1,7 @@
 """
 stars.py
 
-The Measured-Star Stage
+Stage 4: The Measured-Star Stage
 ---------------------------------------------------------
 Confirmed stars leave the component list entirely: each is replaced by
 its own measured circular clipped-median radial profile, subtracted

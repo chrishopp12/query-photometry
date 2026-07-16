@@ -1,7 +1,7 @@
 """
 components.py
 
-Stage 2: Catalog Rows to Scene Components
+Stage 3: Catalog Rows to Scene Components
 ---------------------------------------------------------
 Turn the scene catalog into rendered components: every catalog row
 becomes a fixed profile at its catalog shape, rendered through the
@@ -92,8 +92,9 @@ def apply_patches(cat: pd.DataFrame, patches: dict) -> pd.DataFrame:
         rows = SkyCoord(cat['ra'].values, cat['dec'].values, unit='deg')
         sep = target.separation(rows).arcsec
         idx = int(np.argmin(sep))
-        if sep[idx] > 2.0:
-            print(f"  patch replace_rows: no row within 2\" of "
+        if sep[idx] > recipe.PATCH_MATCH_AS:
+            print(f"  patch replace_rows: no row within "
+                  f"{recipe.PATCH_MATCH_AS:g}\" of "
                   f"({rep['ra']:.5f},{rep['dec']:.5f}); skipped")
             continue
         old = cat.iloc[idx].to_dict()

@@ -3,7 +3,6 @@ sersic.py
 
 Single-Sersic Shape Fit
 ---------------------------------------------------------
-
 Fit one Sersic profile's shape on a chosen band, or accept explicit
 parameters -- the shape source for the SPHEREx forced model and for
 pinning the scene engine's target profile. The Moffat PSF and the

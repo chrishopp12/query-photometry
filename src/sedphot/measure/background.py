@@ -79,9 +79,9 @@ def bin_grid(
     row_starts = np.arange(0, ny - bin_px + 1, bin_px)
     col_starts = np.arange(0, nx - bin_px + 1, bin_px)
     medians = np.full((len(row_starts), len(col_starts)), np.nan)
-    # A vectorized variant of this loop was measured slower at
-    # identical output -- the per-bin blocks are small and cheap.
-    # Measure before optimizing.
+    # A vectorized variant of this loop measures slower at identical
+    # output -- the per-bin blocks are small and cheap. Measure before
+    # optimizing.
     for i, y0 in enumerate(row_starts):
         for j, x0 in enumerate(col_starts):
             block = (slice(y0, y0 + bin_px), slice(x0, x0 + bin_px))

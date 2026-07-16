@@ -1,7 +1,7 @@
 """
 psf.py
 
-PSF Resolution: Empirical Star Kernel, Moffat Fallback
+Stage 2: Empirical PSF, Moffat Fallback
 ---------------------------------------------------------
 Resolve each band's PSF kernel and FWHM, empirical-first: the brightest
 usable confirmed star on the stamp gives a circularized ring-median

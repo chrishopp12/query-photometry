@@ -69,6 +69,10 @@ GATE_RCHISQ = 4.0
 
 PATCH_FILENAME = 'patches.json'   # optional per-galaxy custom inputs
 
+# A patch request (row replacement, free seat) must land on a real
+# catalog row or component within this radius, or it is skipped loudly.
+PATCH_MATCH_AS = 2.0
+
 
 # ------------------------------------
 # Components and margins

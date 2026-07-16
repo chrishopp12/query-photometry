@@ -1,7 +1,7 @@
 """
 seats.py
 
-Stage 3: Seats and the Cross-Field Registry
+Stage 5: Seats and the Cross-Field Registry
 ---------------------------------------------------------
 A "seat" is a component whose shape parameters enter the nonlinear
 solve. Standard, catalog-driven seats: every gated component gets a
@@ -51,9 +51,10 @@ from .render import (pa_map, render_nuker, render_sersic_boxed,
                      sersic_profile, sersic_total)
 from .stamp import Stamp
 
-# Patch free-seat requests must land on a real component.
-PATCH_MATCH_AS = 2.0
 
+# ------------------------------------
+# Implementation constants
+# ------------------------------------
 # Smallest permitted seat size (reference-band pixels).
 SEAT_REFF_MIN_PX = 0.8
 
@@ -198,7 +199,7 @@ def build_seats(
             continue
         best = min(candidates,
                    key=lambda c: np.hypot(c['x'] - fx, c['y'] - fy))
-        if np.hypot(best['x'] - fx, best['y'] - fy) * pix > PATCH_MATCH_AS:
+        if np.hypot(best['x'] - fx, best['y'] - fy) * pix > recipe.PATCH_MATCH_AS:
             print(f"    {tag}free seat at ({request['ra']:.5f},"
                   f"{request['dec']:.5f}) matches no component; skipped")
             continue
