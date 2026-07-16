@@ -18,7 +18,7 @@ Usage:
     sedphot measure  (--name NAME | --ra DEG --dec DEG)
                      (--instruments legacy sdss cfht ... | --all)
                      [--mode {aperture,sersic}] [--aperture 10.0]
-                     [--sky-in 30] [--sky-out 45] [--mask FILE]
+                     [--registry FILE [--registry-update]]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG)
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
     sedphot sed      [--out-dir DIR] [--label STEM]
@@ -27,10 +27,10 @@ Usage:
 
 Examples:
     Resolve a name to coordinates and the default output label:
-        sedphot resolve --name "SDSS J142800.81+570046.3"
+        sedphot resolve --name "NGC 4889"
 
     All catalog photometry for a position, into the current directory:
-        sedphot catalogs --ra 216.988087 --dec 56.987800 --all --legacy-dr dr9
+        sedphot catalogs --ra 194.898792 --dec 27.959528 --all --legacy-dr dr9
 
     Legacy + Pan-STARRS only, into a galaxy directory:
         sedphot catalogs --name "M87" --instruments legacy panstarrs \\

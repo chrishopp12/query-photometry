@@ -10,7 +10,7 @@ sidecars.
 pip install -e .
 
 # resolve a name
-sedphot resolve --name "SDSS J142800.81+570046.3"
+sedphot resolve --name "NGC 4889"
 
 # catalog photometry from every archive, with graceful per-provider fallback
 sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87

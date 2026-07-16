@@ -135,8 +135,8 @@ def query_vizier_mirrors(query_fn: Callable[[str], object], label: str):
     astroquery.vizier.conf.server at runtime does NOT work: VizierClass
     captures the config value in a signature default when astroquery is
     imported, so even instances constructed after the re-point keep the
-    original hostname (verified on astroquery 0.4.11 during the 2026-07-07
-    CDS DNS outage, when the "mirror" attempt still hit the CDS host).
+    original hostname (astroquery 0.4.x behavior) and a "mirror" attempt
+    silently queries the dead host.
 
     An empty result from one mirror may be a genuine no-match, so the next
     mirror is asked before concluding; the cost is one redundant query in the

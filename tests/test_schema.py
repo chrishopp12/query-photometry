@@ -19,8 +19,8 @@ from sedphot.schema import (
 def _row(**overrides):
     base = dict(
         band='Legacy_g', flux_ujy=679.3, flux_err_ujy=1.2, mag=16.82, mag_err=0.002,
-        target_ra=216.988087, target_dec=56.9878, match_ra=216.98809,
-        match_dec=56.98781, sep_arcsec=0.02, flags='', source='Legacy_DR9',
+        target_ra=150.101550, target_dec=2.20482, match_ra=150.10156,
+        match_dec=2.20483, sep_arcsec=0.02, flags='', source='Legacy_DR9',
     )
     base.update(overrides)
     return make_row(**base)

@@ -10,7 +10,8 @@ here -- providers and the measurement engine own their own behavior.
 
 Data products (under <out_dir>/Photometry/):
     <label>_catalog.csv               combined catalog photometry
-    <label>_measured.csv              image measurements (aperture or forced Sersic)
+    <label>_measured.csv              image measurements (scene-fit aperture
+                                      or forced-model flux)
     <label>_sed.png                   combined SED figure
     <label>_*.provenance.json         provenance sidecars
     coverage_catalogs.json            per-provider status, catalog run
@@ -561,10 +562,10 @@ def run_spherex(
                 cutout_half_arcsec=cutout_arcsec / 2.0)
         elif sersic_from is None:
             # Default: the Tractor catalog shape. A wrong shape poisons an
-            # irreplaceable raw table, so this aborts on failure rather
-            # than silently substituting the PSF-degenerate image fit (a
-            # Datalab outage once swapped in an image-fit b/a of 0.28 for
-            # a Tractor 0.41 without a word).
+            # irreplaceable raw table, so a failed lookup ABORTS rather
+            # than silently substituting the PSF-degenerate image fit --
+            # a service outage must never change which shape convention
+            # the extraction ran under.
             try:
                 looked = query_shape(coord, dr=legacy_dr)
             except Exception as e:
