@@ -349,7 +349,11 @@ def measure_band(
     if 'target' in drops or target_shape is not None:
         witness['target_model_uJy'] = round(
             float(target_img.sum() * stamp.cf), 1)
-        if target_comp is not None and target_comp['cat'] > 0:
+        # The refit-vs-catalog ratio only means something on the scene
+        # catalog's own band; on any other band it is a color in
+        # disguise and would read as a refit-quality alarm.
+        if m_ap_cat is not None and target_comp is not None \
+                and target_comp['cat'] > 0:
             witness['target_refit_x_cat'] = round(
                 witness['target_model_uJy'] / target_comp['cat'], 2)
 
