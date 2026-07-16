@@ -304,6 +304,9 @@ def apply_registry(
         by_band = entry.get('components') or {}
         clist = by_band.get(band_key) or by_band.get(instrument)
         if not clist:
+            if by_band:
+                print(f"    {tag}registry: {name} has no components "
+                      f"for {band_key} or {instrument}; not consumed")
             continue
         x0, y0 = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(entry['ra'], entry['dec'], unit='deg'))]
@@ -449,7 +452,10 @@ def harvest_seats(
 
 def load_registry(path: str | Path | None) -> dict:
     """Read a registry file; {} when no path is given or none exists."""
-    if path is None or not Path(path).exists():
+    if path is None:
+        return {}
+    if not Path(path).exists():
+        print(f"  registry: {path} does not exist; starting empty")
         return {}
     with open(path) as handle:
         return json.load(handle)

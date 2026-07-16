@@ -69,8 +69,9 @@ def apply_patches(cat: pd.DataFrame, patches: dict) -> pd.DataFrame:
     'replace_rows' swaps one catalog row for one or more replacement
     rows (e.g. a known double-nucleus decomposition replacing the
     blended catalog row). Each replacement inherits every column of the
-    replaced row and overrides the ones it names. Nothing here is
-    required: no patch file means pure catalog behavior.
+    replaced row and overrides the ones it names -- except 'uJy', which
+    is rederived from flux_r afterward, so replacements set flux_r.
+    Nothing here is required: no patch file means pure catalog behavior.
 
     Parameters
     ----------

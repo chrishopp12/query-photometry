@@ -56,6 +56,8 @@ def conv_same(img: np.ndarray, psf: np.ndarray) -> np.ndarray:
     key = (id(psf), fh, fw)
     ent = _CONV_CACHE.get(key)
     if ent is None or ent[0] is not psf:
+        if len(_CONV_CACHE) > 32:
+            _CONV_CACHE.clear()   # bound the pinned kernels in long loops
         ent = (psf, rfft2(psf, s=(fh, fw)))
         _CONV_CACHE[key] = ent
     out = irfft2(rfft2(img, s=(fh, fw)) * ent[1], s=(fh, fw))

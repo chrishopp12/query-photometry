@@ -18,7 +18,9 @@ Data products (under <out_dir>/Photometry/):
     coverage_measure.json             per-provider status, measurement run
     <Instrument>/                     cached images + QA/ per-band figures
     QA/growth_curves.png              all measured bands, one overlay
-    SPHEREx/table_photometry.csv      raw spectrophotometry (run_spherex)
+    scene/                            cached scene inputs (Tractor, Gaia)
+    SPHEREx/table_photometry.<tag>.csv  raw spectrophotometry, one table
+                                      per extraction config (run_spherex)
 
 Requirements:
     numpy, pandas, astropy
@@ -51,6 +53,10 @@ from .results import (
     write_coverage_report,
 )
 from .schema import rows_to_frame
+
+# Cache directory per image provider, under <out_dir>/Photometry/.
+INSTRUMENT_DIRS = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
+                   'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
 
 
 # ------------------------------------
@@ -330,19 +336,22 @@ def run_measure(
     print(f"\nTarget: RA={coord.ra.deg:.6f}, Dec={coord.dec.deg:+.6f}  "
           f"(aperture {aperture_arcsec:g}\", scene engine)\n")
 
-    instrument_dirs = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
-                       'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
     results: list[ProviderResult] = []
     measurements: list[dict] = []
     rows: list[dict] = []
-    rgrid_arr = (np.asarray(rgrid, dtype=float) if rgrid
+    rgrid_arr = (np.unique(np.asarray(rgrid, dtype=float)) if rgrid
                  else recipe.DEFAULT_RGRID)
+    if not rgrid_arr.min() <= aperture_arcsec <= rgrid_arr.max():
+        raise ValueError(
+            f"--aperture {aperture_arcsec:g}\" lies outside the "
+            f"curve-of-growth grid [{rgrid_arr.min():g}, "
+            f"{rgrid_arr.max():g}]\"; pass --radii covering it")
 
     # Phase 1 -- fetch every provider's images.
     fetched_products: list[tuple[str, list[ImageProduct]]] = []
     for name in instruments:
         print(f"=== {name} images ===")
-        cache_dir = phot_dir / instrument_dirs.get(name, name)
+        cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
         fetch = IMAGE_PROVIDERS[name]
         options: dict = {'bands': bands, 'size_arcsec': cutout_arcsec,
                          'cache_dir': cache_dir}
@@ -395,7 +404,7 @@ def run_measure(
     caches: dict = {}
     references: dict[str, dict] = {}
     for name, products in fetched_products:
-        cache_dir = phot_dir / instrument_dirs.get(name, name)
+        cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
         provider_rows: list[dict] = []
         measured_bands: list[str] = []
         demoted_bands: list[str] = []
@@ -477,8 +486,8 @@ def run_measure(
         "aperture_arcsec": aperture_arcsec,
         "cutout_arcsec": cutout_arcsec,
         "sersic_shape": ({**shape_sky, **shape_origin} if shape_sky
-                         else ('reference-band refit' if mode == 'sersic'
-                               else None)),
+                         else ({'source': 'reference-band refit'}
+                               if mode == 'sersic' else None)),
         "scene": {
             "n_catalog_rows": int(len(scene['cat'])),
             "n_confirmed_stars": int(len(scene['stars'])),
@@ -591,7 +600,8 @@ def run_spherex(
                 raise ValueError(f"--sersic-from {spec!r}: unknown instrument "
                                  f"{instrument!r}; known: {sorted(IMAGE_PROVIDERS)}")
             band = spec.split('_')[-1]
-            cache_dir = Path(out_dir) / "Photometry" / instrument.capitalize()
+            cache_dir = (Path(out_dir) / "Photometry"
+                         / INSTRUMENT_DIRS.get(instrument, instrument))
             options: dict = {'bands': (band,), 'size_arcsec': cutout_arcsec,
                              'cache_dir': cache_dir}
             if instrument == 'legacy':

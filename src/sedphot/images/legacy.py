@@ -162,7 +162,15 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
     for band in bands:
         band_paths = {}
         for kind in ("image", "invvar"):
-            path = cache_dir / f"legacysurvey-{brick}-{kind}-{band}.fits.fz"
+            # The release belongs in the cache name: brick names are
+            # shared across releases, and an untagged cache would let a
+            # dr switch silently reuse the other release's pixels.
+            path = cache_dir / f"legacysurvey-{dr}-{brick}-{kind}-{band}.fits.fz"
+            untagged = cache_dir / f"legacysurvey-{brick}-{kind}-{band}.fits.fz"
+            if not path.exists() and untagged.exists():
+                print(f"  [Legacy] using untagged brick cache "
+                      f"{untagged.name} (assumed {dr})")
+                path = untagged
             if not path.exists():
                 fetched = False
                 for hemi_try in (hemis, 'south' if hemis == 'north' else 'north'):

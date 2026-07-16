@@ -109,8 +109,27 @@ def prepare_scene(
     patches = {}
     patch_path = Path(out_dir) / recipe.PATCH_FILENAME
     if patch_path.exists():
-        with open(patch_path) as handle:
-            patches = json.load(handle)
+        try:
+            with open(patch_path) as handle:
+                patches = json.load(handle)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{patch_path} is not valid JSON: {e}") from e
+        known = {'replace_rows', 'free_seats', 'snap_gated',
+                 'target_refit', 'comment'}
+        unknown = sorted(set(patches) - known)
+        if unknown:
+            print(f"  WARNING {recipe.PATCH_FILENAME}: unrecognized "
+                  f"key(s) {unknown} ignored (known: {sorted(known)})")
+        for entry in patches.get('replace_rows', []):
+            missing = sorted({'ra', 'dec', 'with'} - set(entry))
+            if missing:
+                raise ValueError(f"{patch_path}: replace_rows entry "
+                                 f"missing {missing}")
+        for entry in patches.get('free_seats', []):
+            missing = sorted({'ra', 'dec'} - set(entry))
+            if missing:
+                raise ValueError(f"{patch_path}: free_seats entry "
+                                 f"missing {missing}")
         print(f"  patches: {sorted(patches.keys())}")
     if len(cat):
         cat = apply_patches(cat, patches)
@@ -359,7 +378,8 @@ def measure_band(
         (image - scene_img - bg['img'])[ap_good & ~mask].sum()
         * stamp.cf), 1)
     witness['fill_vs_model_ap_uJy'] = round(fill['fill_vs_model_ap'], 1)
-    if 'target' in drops or target_shape is not None:
+    if ('target' in drops or target_shape is not None) \
+            and target_comp is not None:
         witness['target_model_uJy'] = round(
             float(target_img.sum() * stamp.cf), 1)
         # The refit-vs-catalog ratio only means something on the scene
@@ -441,8 +461,12 @@ def _pin_target(comps: list[dict], target_shape: dict, stamp,
     ellip = float(target_shape['ellip'])
     pa = float(target_shape['pa_deg'])
     theta = theta_from_pa(stamp.wcs, target['x'], target['y'], pa)
-    counts = max(target['cat'], 0.0) / stamp.cf
-    ampl = ampl_from_total(counts, reff_px, n, ellip) if counts else 0.0
+    # Render at a positive amplitude even for a target undetected in
+    # the scene band: the design normalizes every column to unit
+    # in-stamp flux, and a zero render would pin the amplitude at zero
+    # instead of leaving it free.
+    counts = max(target['cat'] / stamp.cf, 1.0)
+    ampl = ampl_from_total(counts, reff_px, n, ellip)
     unconv = sersic_profile([ampl, reff_px, n, ellip, theta,
                              target['x'], target['y']], stamp.shape)
     target['base'] = conv_same(unconv, psf)

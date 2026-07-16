@@ -137,6 +137,8 @@ def _cmd_sed(args: argparse.Namespace) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    if args.registry_update and not args.registry:
+        sys.exit("sedphot run: --registry-update needs --registry PATH")
     coord, label = _resolve_from_args(args)
     run_all(
         coord, label, args.out_dir,
@@ -156,6 +158,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 
 def _cmd_measure(args: argparse.Namespace) -> None:
+    if args.registry_update and not args.registry:
+        sys.exit("sedphot measure: --registry-update needs --registry PATH")
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
     run_measure(
