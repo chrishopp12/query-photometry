@@ -17,7 +17,7 @@ sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87
 
 # fetch images and measure every band with one identical scene recipe
 sedphot measure --ra 194.898792 --dec 27.959528 --instruments cfht legacy \
-    --aperture 12 --legacy-dr dr9
+    --aperture 12
 
 # SPHEREx forced photometry; the Sersic shape comes from the Tractor catalog
 sedphot spherex --name "NGC 4874" --out-dir Clusters/Coma/Galaxies/NGC_4874
