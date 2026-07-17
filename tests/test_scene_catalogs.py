@@ -53,7 +53,7 @@ def serve_once_tap(frame, queries):
 
 
 def scene_frame():
-    """Three Tractor rows in SCENE_COLS order, deliberately not flux-sorted."""
+    """Three Tractor rows in dr9 scene_cols order, deliberately not flux-sorted."""
     return pd.DataFrame({
         'ra': [150.0010, 150.0020, 150.0030],
         'dec': [2.0010, 2.0020, 2.0030],
@@ -106,14 +106,21 @@ def test_gaia_cols_are_the_expected_set():
 
 
 def test_scene_cols_are_the_expected_set():
-    assert legacy.SCENE_COLS == (
+    assert legacy.scene_cols('dr9') == (
         'ra', 'dec', 'type', 'sersic', 'shape_r', 'shape_e1', 'shape_e2',
         'flux_g', 'flux_r', 'flux_z',
         'psfsize_g', 'psfsize_r', 'psfsize_z',
         'rchisq_g', 'rchisq_r', 'rchisq_z',
         'fracflux_r', 'fracin_r',
     )
-    assert tuple(scene_frame().columns) == legacy.SCENE_COLS
+    assert legacy.scene_cols('dr10') == (
+        'ra', 'dec', 'type', 'sersic', 'shape_r', 'shape_e1', 'shape_e2',
+        'flux_g', 'flux_r', 'flux_i', 'flux_z',
+        'psfsize_g', 'psfsize_r', 'psfsize_i', 'psfsize_z',
+        'rchisq_g', 'rchisq_r', 'rchisq_i', 'rchisq_z',
+        'fracflux_r', 'fracin_r',
+    )
+    assert tuple(scene_frame().columns) == legacy.scene_cols('dr9')
 
 
 # ------------------------------------
@@ -132,7 +139,7 @@ def test_query_scene_cache_hit_skips_network(tmp_path, monkeypatch):
     cache = tmp_path / 'scene.csv'
     scene_frame().to_csv(cache, index=False)
     out = legacy.query_scene(COORD, 100.0, cache_path=cache)
-    assert list(out.columns) == list(legacy.SCENE_COLS) + ['uJy']
+    assert list(out.columns) == list(legacy.scene_cols('dr9')) + ['uJy']
     assert out['flux_r'].tolist() == [40.0, 10.0, 4.0]      # brightest-first
     assert out['type'].tolist() == ['PSF', 'SER', 'DEV']    # rows move together
     assert out.index.tolist() == [0, 1, 2]                  # fresh index
@@ -186,5 +193,6 @@ def test_query_scene_selects_release_table_and_rejects_unknown(monkeypatch):
     monkeypatch.setattr(legacy, 'TapPlus', serve_once_tap(scene_frame(), queries))
     legacy.query_scene(COORD, 100.0, dr='dr10')
     assert 'ls_dr10.tractor' in queries[0]
+    assert 'psfsize_i' in queries[0]       # dr10 carries the i-band set
     with pytest.raises(ValueError, match='unknown Legacy release'):
         legacy.query_scene(COORD, 100.0, dr='dr8')

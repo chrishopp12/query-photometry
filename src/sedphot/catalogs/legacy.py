@@ -331,17 +331,20 @@ def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
 # ------------------------------------
 # Scene catalog (full cone)
 # ------------------------------------
-# Columns the scene engine consumes: position and shape to render each
-# source, per-band fluxes to seed amplitudes and colors, per-band PSF
-# sizes for the seeing, and per-band fit-quality diagnostics (reduced
-# chi-square, flux fractions) for downstream gating.
-SCENE_COLS = (
-    'ra', 'dec', 'type', 'sersic', 'shape_r', 'shape_e1', 'shape_e2',
-    'flux_g', 'flux_r', 'flux_z',
-    'psfsize_g', 'psfsize_r', 'psfsize_z',
-    'rchisq_g', 'rchisq_r', 'rchisq_z',
-    'fracflux_r', 'fracin_r',
-)
+def scene_cols(dr: str) -> tuple[str, ...]:
+    """Columns the scene engine consumes, for one data release.
+
+    Position and shape to render each source, then flux / PSF size /
+    reduced chi-square per optical band (DR10 adds the i-band set), then
+    the r-band blend diagnostics. Building the list from the release
+    keeps the query valid on both tables: DR9 has no i-band columns, and
+    a SELECT naming a missing column fails outright.
+    """
+    optical = [band for band in LEGACY_BANDS[dr] if not band.startswith('W')]
+    cols = ['ra', 'dec', 'type', 'sersic', 'shape_r', 'shape_e1', 'shape_e2']
+    for prefix in ('flux', 'psfsize', 'rchisq'):
+        cols.extend(f'{prefix}_{band}' for band in optical)
+    return tuple(cols + ['fracflux_r', 'fracin_r'])
 
 
 def query_scene(
@@ -376,9 +379,9 @@ def query_scene(
     Returns
     -------
     scene_df : pd.DataFrame
-        SCENE_COLS plus a 'uJy' column (flux_r in microjanskys), sorted
-        brightest-first in flux_r with a fresh 0..n-1 index. The frame is
-        identical whether it came from the cache or the network.
+        scene_cols(dr) plus a 'uJy' column (flux_r in microjanskys),
+        sorted brightest-first in flux_r with a fresh 0..n-1 index. The
+        frame is identical whether it came from the cache or the network.
     """
     if dr not in LEGACY_TABLES:
         raise ValueError(f"unknown Legacy release {dr!r}; known: {sorted(LEGACY_TABLES)}")
@@ -392,7 +395,7 @@ def query_scene(
         dec = float(coord.dec.deg)
         radius_deg = radius_arcsec / 3600.0
         query = f"""
-        SELECT {', '.join(SCENE_COLS)}
+        SELECT {', '.join(scene_cols(dr))}
         FROM {table}
         WHERE brick_primary = 1
           AND 't' = q3c_radial_query(ra, dec, {ra:.8f}, {dec:.8f}, {radius_deg:.8f})
