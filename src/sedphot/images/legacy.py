@@ -44,6 +44,7 @@ from astropy.wcs import WCS
 from ..catalogs.legacy import LEGACY_DR_DEFAULT
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
+from .common import warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -90,6 +91,8 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
         paths = [cache_dir / f"legacy_{layer}_{band}.fits" for band in bands]
         if all(p.exists() for p in paths):
             cube_data = None      # cached; skip the request
+            for path in paths:
+                warn_undersized_cache(path, size_arcsec, 'Legacy')
         else:
             url = (f"{VIEWER_URL}?ra={coord.ra.deg:.8f}&dec={coord.dec.deg:.8f}"
                    f"&layer={layer}&pixscale={PIXSCALE}&bands={''.join(bands)}"

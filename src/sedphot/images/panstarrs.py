@@ -29,6 +29,7 @@ from astropy.io import fits
 
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
+from .common import warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -96,7 +97,9 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 print(f"  [PS1] no {band} stack here")
                 continue
             path = cache_dir / f"ps1_{band}.fits"
-            if not path.exists():
+            if path.exists():
+                warn_undersized_cache(path, size_arcsec, 'PS1')
+            else:
                 url = (f"{PS1_FITSCUT}?ra={coord.ra.deg:.8f}&dec={coord.dec.deg:.8f}"
                        f"&size={size_px}&format=fits&red={files[band]}")
                 response = retry_transient(

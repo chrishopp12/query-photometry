@@ -47,6 +47,7 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
+from .common import warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -176,7 +177,9 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 print(f"  [CFHT] no {band} stack here")
                 continue
             path = cache_dir / f"cfht_megapipe_{band}.fits"
-            if not path.exists():
+            if path.exists():
+                warn_undersized_cache(path, size_arcsec, 'CFHT')
+            else:
                 # Order candidate stacks by how well their footprint centers the
                 # target, then take the first that actually covers the stamp
                 # center. SODA returns overlapping stacks in a non-deterministic
