@@ -373,6 +373,16 @@ def run_measure(
             print(f"  {len(fetched)} band image(s) ready")
     print()
 
+    # Nothing to measure: report and stop before the scene queries --
+    # a run with zero images must not spend TAP calls building a scene
+    # no band will ever consume.
+    if not fetched_products:
+        print("No images fetched from any provider; nothing to measure.")
+        print("Provider summary:")
+        print_coverage_summary(results)
+        write_coverage_report(results, phot_dir / "coverage_measure.json")
+        return rows_to_frame([])
+
     # Phase 2 -- sersic mode with an explicit shape request: resolve the
     # one sky shape every band pins the target to. Without a request the
     # target shape is the standard per-instrument reference-band refit.
