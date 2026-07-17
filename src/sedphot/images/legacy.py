@@ -41,6 +41,7 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from ..catalogs.legacy import LEGACY_DR_DEFAULT
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
 
@@ -199,7 +200,7 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
 # Provider entry
 # ------------------------------------
 def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 120.0,
-          cache_dir: str | Path, dr: str = 'dr9',
+          cache_dir: str | Path, dr: str = LEGACY_DR_DEFAULT,
           use_bricks: bool = False) -> list[ImageProduct] | ProviderResult:
     """Fetch Legacy Surveys images at the target.
 
@@ -214,7 +215,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir : str or Path
         Photometry/Legacy/ directory; downloads are cached here.
     dr : str
-        'dr9' or 'dr10'. [default: 'dr9']
+        'dr9' or 'dr10'. [default: LEGACY_DR_DEFAULT]
     use_bricks : bool
         Fetch NERSC brick coadds (image + inverse variance) instead of
         viewer cutouts -- real per-pixel errors at ~40 MB per file.

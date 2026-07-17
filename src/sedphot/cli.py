@@ -29,8 +29,9 @@ Examples:
     Resolve a name to coordinates and the default output label:
         sedphot resolve --name "NGC 4889"
 
-    All catalog photometry for a position, into the current directory:
-        sedphot catalogs --ra 194.898792 --dec 27.959528 --all --legacy-dr dr9
+    All catalog photometry for a position, into the current directory
+    (add --legacy-dr dr10 for the i-band southern release):
+        sedphot catalogs --ra 194.898792 --dec 27.959528 --all
 
     Legacy + Pan-STARRS only, into a galaxy directory:
         sedphot catalogs --name "M87" --instruments legacy panstarrs \\
@@ -45,6 +46,7 @@ import argparse
 import sys
 
 from .catalogs import CATALOG_PROVIDERS
+from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .images import IMAGE_PROVIDERS
 from .pipeline import run_all, run_catalogs, run_measure, run_sed, run_spherex
 from .resolve import resolve_target
@@ -209,9 +211,10 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Query every registered catalog provider")
     p_catalogs.add_argument('--radius', type=float, default=2.0,
                             help="Starting search radius in arcsec [default: 2.0]")
-    p_catalogs.add_argument('--legacy-dr', type=str, default='dr10',
+    p_catalogs.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                             choices=('dr10', 'dr9'),
-                            help="Legacy Surveys data release [default: dr10]")
+                            help="Legacy Surveys data release "
+                                 f"[default: {LEGACY_DR_DEFAULT}]")
     p_catalogs.add_argument('--dered', action='store_true',
                             help="Apply MW dereddening (default: as-measured; "
                                  "corrections recorded per row)")
@@ -259,9 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="PSF FWHM (arcsec) assumed by the --sersic-from "
                                 "shape fit; fitted n and r_eff are "
                                 "PSF-sensitive")
-    p_measure.add_argument('--legacy-dr', type=str, default='dr9',
+    p_measure.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                            choices=('dr10', 'dr9'),
-                           help="Legacy release for images [default: dr9]")
+                           help="Legacy release for images and the scene "
+                                f"catalog [default: {LEGACY_DR_DEFAULT}]")
     p_measure.add_argument('--legacy-bricks', action='store_true',
                            help="Fetch NERSC brick coadds (image + invvar; "
                                 "real per-pixel errors, ~40 MB/file)")
@@ -297,9 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Job poll interval, seconds [default: 5]")
     p_spherex.add_argument('--timeout', type=float, default=3600.0,
                            help="Job timeout, seconds [default: 3600]")
-    p_spherex.add_argument('--legacy-dr', type=str, default='dr9',
+    p_spherex.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                            choices=('dr10', 'dr9'),
-                           help="Legacy release for a shape-fit image [default: dr9]")
+                           help="Legacy release for a shape-fit image "
+                                f"[default: {LEGACY_DR_DEFAULT}]")
     p_spherex.set_defaults(func=_cmd_spherex)
 
     p_sed = subparsers.add_parser(
@@ -335,9 +340,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--sersic-params', nargs=4, type=float, default=None,
                        metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
                        help="Shape for --spherex sersic")
-    p_run.add_argument('--legacy-dr', type=str, default='dr9',
+    p_run.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                        choices=('dr10', 'dr9'),
-                       help="Legacy Surveys data release [default: dr9]")
+                       help="Legacy Surveys data release, all stages "
+                            f"[default: {LEGACY_DR_DEFAULT}]")
     p_run.add_argument('--legacy-bricks', action='store_true',
                        help="Fetch NERSC bricks instead of viewer cutouts")
     p_run.set_defaults(func=_cmd_run)

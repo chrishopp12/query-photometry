@@ -39,7 +39,7 @@ import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from ..catalogs import gaia
-from ..catalogs.legacy import query_scene
+from ..catalogs.legacy import LEGACY_DR_DEFAULT, query_scene
 from . import recipe
 from .aperture import (build_mask, curve, enclosed_at, flux_error,
                        twin_fill, witness_row)
@@ -63,7 +63,7 @@ def prepare_scene(
         phot_dir: str | Path,
         out_dir: str | Path,
         aperture_arcsec: float,
-        legacy_dr: str = 'dr9',
+        legacy_dr: str = LEGACY_DR_DEFAULT,
         registry_path: str | Path | None = None,
 ) -> dict:
     """Fetch and assemble everything the scene needs, once per galaxy.
@@ -86,7 +86,8 @@ def prepare_scene(
     aperture_arcsec : float
         Science aperture radius; scopes the target-substructure rule.
     legacy_dr : str
-        Legacy data release for the scene catalog. [default: 'dr9']
+        Legacy data release for the scene catalog.
+        [default: LEGACY_DR_DEFAULT]
     registry_path : str or Path, optional
         Cross-field registry to consume (and update, if the caller
         saves it back).

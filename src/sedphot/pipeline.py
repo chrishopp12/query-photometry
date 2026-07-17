@@ -34,6 +34,7 @@ import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from .catalogs import CATALOG_PROVIDERS
+from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .dered import apply_dereddening
 from .images import IMAGE_PROVIDERS
 from .measure import recipe
@@ -69,7 +70,7 @@ def run_catalogs(
         *,
         instruments: list[str],
         radius_arcsec: float = 2.0,
-        legacy_dr: str = 'dr10',
+        legacy_dr: str = LEGACY_DR_DEFAULT,
         dered: bool = False,
         target_name: str | None = None,
 ) -> pd.DataFrame:
@@ -88,7 +89,7 @@ def run_catalogs(
     radius_arcsec : float
         Starting search radius per provider. [default: 2.0]
     legacy_dr : str
-        Legacy data release ('dr10' or 'dr9'). [default: 'dr10']
+        Legacy data release ('dr10' or 'dr9'). [default: LEGACY_DR_DEFAULT]
     dered : bool
         Apply MW dereddening (see dered.py tiers). [default: False]
     target_name : str, optional
@@ -258,7 +259,7 @@ def run_measure(
         registry_path: str | None = None,
         registry_update: bool = False,
         dump_arrays: bool = False,
-        legacy_dr: str = 'dr9',
+        legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
@@ -310,7 +311,7 @@ def run_measure(
         Write per-band array bundles under <Inst>/QA/ (debug).
     legacy_dr : str
         Legacy release for the image provider and scene catalog.
-        [default: 'dr9']
+        [default: LEGACY_DR_DEFAULT]
     legacy_bricks : bool
         Fetch NERSC bricks (image + invvar) instead of viewer cutouts.
     hst_proposal_id : str, optional
@@ -524,7 +525,7 @@ def run_spherex(
         poll: float = 5.0,
         timeout: float = 3600.0,
         cutout_arcsec: float = 120.0,
-        legacy_dr: str = 'dr9',
+        legacy_dr: str = LEGACY_DR_DEFAULT,
         target_name: str | None = None,
 ):
     """Fetch the raw SPHEREx spectrophotometry table for the target.
@@ -693,7 +694,7 @@ def run_all(
         registry_update: bool = False,
         spherex_model: str = 'off',
         sersic_params: list[float] | None = None,
-        legacy_dr: str = 'dr9',
+        legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
         target_name: str | None = None,
 ) -> None:

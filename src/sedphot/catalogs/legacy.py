@@ -71,6 +71,12 @@ LEGACY_BANDS = {
     'dr9': ('g', 'r', 'z', 'W1', 'W2', 'W3', 'W4'),
 }
 
+# One default release for every verb -- catalog rows, cutout pixels, and
+# the scene catalog must come from the same reduction, so no stage may
+# default differently from the others. DR10 remains a --legacy-dr flag
+# away where its southern i-band coverage applies.
+LEGACY_DR_DEFAULT = 'dr9'
+
 
 def _columns(band: str) -> tuple[str, str, str]:
     """Tractor flux, inverse-variance, and MW-transmission columns for a band."""
@@ -169,7 +175,8 @@ def _query_once(coord: SkyCoord, radius_arcsec: float, *, dr: str, holder: dict)
     return rows
 
 
-def query(coord: SkyCoord, radius_arcsec: float, *, dr: str = 'dr10') -> ProviderResult:
+def query(coord: SkyCoord, radius_arcsec: float, *,
+          dr: str = LEGACY_DR_DEFAULT) -> ProviderResult:
     """Query the Legacy Tractor catalog for the closest source.
 
     Parameters
@@ -179,7 +186,7 @@ def query(coord: SkyCoord, radius_arcsec: float, *, dr: str = 'dr10') -> Provide
     radius_arcsec : float
         Starting search radius; expands on no-match.
     dr : str
-        Data release, 'dr10' or 'dr9'. [default: 'dr10']
+        Data release, 'dr10' or 'dr9'. [default: LEGACY_DR_DEFAULT]
 
     Returns
     -------
@@ -260,7 +267,7 @@ def shape_from_tractor(type_: str, sersic_n: float, shape_r: float,
 
 
 def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
-                dr: str = 'dr9') -> tuple[dict, dict] | None:
+                dr: str = LEGACY_DR_DEFAULT) -> tuple[dict, dict] | None:
     """Closest-source Tractor shape for a forced source model.
 
     One-shot cone query (no radius expansion: a shape grabbed from a wider
@@ -341,7 +348,7 @@ def query_scene(
         coord: SkyCoord,
         radius_arcsec: float,
         *,
-        dr: str = 'dr9',
+        dr: str = LEGACY_DR_DEFAULT,
         min_flux_nmgy: float = 0.5,
         cache_path: str | Path | None = None,
 ) -> pd.DataFrame:
@@ -358,7 +365,7 @@ def query_scene(
     radius_arcsec : float
         Cone radius.
     dr : str
-        Data release, 'dr10' or 'dr9'. [default: 'dr9']
+        Data release, 'dr10' or 'dr9'. [default: LEGACY_DR_DEFAULT]
     min_flux_nmgy : float
         r-band flux floor (nanomaggies); fainter sources contribute too
         little light to earn a scene component. [default: 0.5]
