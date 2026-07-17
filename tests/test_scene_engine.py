@@ -3,6 +3,8 @@ joint solve, the measurement witnesses, and one synthetic band
 end-to-end through the driver."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -508,3 +510,37 @@ def test_measure_band_end_to_end(tmp_path):
     row = measurement_to_row(measurement)
     assert row['band'] == 'Legacy_r'
     assert 'cov=' in row['flags']
+
+
+def test_prepare_scene_cone_scales_with_the_stamp(tmp_path, monkeypatch):
+    """The query cone floors at the recipe radius for the default stamp
+    and grows past the corners of a larger one, with the radius keyed
+    into the cache names only when it exceeds the floor."""
+    from sedphot.measure import engine
+
+    calls = {}
+
+    def fake_scene(coord, radius, *, dr, min_flux_nmgy, cache_path):
+        calls['scene'] = (radius, Path(cache_path).name)
+        return pd.DataFrame()
+
+    def fake_cone(coord, radius, *, cache_path):
+        calls['gaia'] = (radius, Path(cache_path).name)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(engine, 'query_scene', fake_scene)
+    monkeypatch.setattr(engine.gaia, 'query_cone', fake_cone)
+    coord = SkyCoord(RA, DEC, unit='deg')
+
+    engine.prepare_scene(coord, phot_dir=tmp_path, out_dir=tmp_path,
+                         aperture_arcsec=12.0, cutout_half_arcsec=60.0)
+    assert calls['scene'] == (recipe.QUERY_RADIUS_AS, 'tractor_scene_dr9.csv')
+    assert calls['gaia'] == (recipe.QUERY_RADIUS_AS, 'gaia_scene.csv')
+
+    engine.prepare_scene(coord, phot_dir=tmp_path, out_dir=tmp_path,
+                         aperture_arcsec=12.0, cutout_half_arcsec=120.0)
+    grown = 120.0 * np.sqrt(2.0) + recipe.QUERY_PAD_AS
+    tag = int(round(grown))
+    assert calls['scene'][0] == pytest.approx(grown)
+    assert calls['scene'][1] == f'tractor_scene_dr9_r{tag}.csv'
+    assert calls['gaia'][1] == f'gaia_scene_r{tag}.csv'

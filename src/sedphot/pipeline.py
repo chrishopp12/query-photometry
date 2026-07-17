@@ -398,6 +398,7 @@ def run_measure(
     # patches file, and the cross-field registry.
     scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
                           aperture_arcsec=aperture_arcsec,
+                          cutout_half_arcsec=cutout_arcsec / 2.0,
                           legacy_dr=legacy_dr, registry_path=registry_path)
     print()
 

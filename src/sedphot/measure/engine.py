@@ -63,6 +63,7 @@ def prepare_scene(
         phot_dir: str | Path,
         out_dir: str | Path,
         aperture_arcsec: float,
+        cutout_half_arcsec: float,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         registry_path: str | Path | None = None,
 ) -> dict:
@@ -85,6 +86,8 @@ def prepare_scene(
         (recipe.PATCH_FILENAME) is read from here.
     aperture_arcsec : float
         Science aperture radius; scopes the target-substructure rule.
+    cutout_half_arcsec : float
+        Stamp half-width; sizes the query cone (see recipe.QUERY_PAD_AS).
     legacy_dr : str
         Legacy data release for the scene catalog.
         [default: LEGACY_DR_DEFAULT]
@@ -100,11 +103,20 @@ def prepare_scene(
     """
     cache_dir = Path(phot_dir) / 'scene'
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cat = query_scene(coord, recipe.QUERY_RADIUS_AS, dr=legacy_dr,
+    radius = max(recipe.QUERY_RADIUS_AS,
+                 cutout_half_arcsec * np.sqrt(2.0) + recipe.QUERY_PAD_AS)
+    # The cache name carries the radius only when the stamp pushed it
+    # past the recipe floor: recipe-default runs keep the plain name,
+    # and a larger-stamp run cannot silently reuse a smaller cone.
+    suffix = ('' if radius == recipe.QUERY_RADIUS_AS
+              else f'_r{int(round(radius))}')
+    cat = query_scene(coord, radius, dr=legacy_dr,
                       min_flux_nmgy=recipe.TRACTOR_MIN_NMGY,
-                      cache_path=cache_dir / f'tractor_scene_{legacy_dr}.csv')
-    gaia_cat = gaia.query_cone(coord, recipe.QUERY_RADIUS_AS,
-                               cache_path=cache_dir / 'gaia_scene.csv')
+                      cache_path=cache_dir
+                      / f'tractor_scene_{legacy_dr}{suffix}.csv')
+    gaia_cat = gaia.query_cone(coord, radius,
+                               cache_path=cache_dir
+                               / f'gaia_scene{suffix}.csv')
     stars = confirm_stars(gaia_cat) if len(gaia_cat) else gaia_cat
 
     patches = {}

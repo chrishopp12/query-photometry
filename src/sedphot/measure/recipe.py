@@ -55,7 +55,14 @@ COVERAGE_MIN = 0.95
 # ------------------------------------
 # Scene catalog
 # ------------------------------------
-QUERY_RADIUS_AS = 100.0    # scene-catalog cone radius (Tractor, Gaia)
+# Scene-query cone (Tractor, Gaia). The cone must reach past the stamp's
+# CORNERS or corner sources are simply absent from the scene, so the
+# effective radius is
+#     max(QUERY_RADIUS_AS, stamp half-diagonal + QUERY_PAD_AS)
+# The floor alone covers the default 120-arcsec stamp; larger stamps grow
+# the cone, and the pad keeps some just-off-stamp margin sources in reach.
+QUERY_RADIUS_AS = 100.0
+QUERY_PAD_AS = 15.0
 TRACTOR_MIN_NMGY = 0.5     # r-band flux floor of the Tractor scene query
 TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
 
