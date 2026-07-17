@@ -46,8 +46,6 @@ EXT_COEFF = {
     'GALEX_FUV': 8.06, 'GALEX_NUV': 7.95,
     # WISE (near-zero in the mid-IR)
     'WISE_W1': 0.189, 'WISE_W2': 0.146, 'WISE_W3': 0.0, 'WISE_W4': 0.0,
-    # 2MASS (SF11)
-    '2MASS_J': 0.723, '2MASS_H': 0.460, '2MASS_Ks': 0.310,
 }
 
 

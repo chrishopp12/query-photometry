@@ -38,13 +38,12 @@ from .bands import wave_um
 # ------------------------------------
 # Line style per instrument in the growth-curve overlay.
 INSTRUMENT_STYLE = {"Legacy": "-", "SDSS": "--", "CFHT": ":", "PS1": "-.",
-                    "PanSTARRS": "-.", "HST": "-"}
+                    "HST": "-"}
 
 # Marker per instrument in the SED plot (keyed by the band-label prefix;
 # color already carries the wavelength, so the shape carries the source).
 INSTRUMENT_MARKER = {"Legacy": "o", "CFHT": "^", "SDSS": "s", "PS1": "D",
-                     "JPLUS": "v", "WISE": "P", "GALEX": "*", "HST": "X",
-                     "SPHEREx": "."}
+                     "JPLUS": "v", "WISE": "P", "GALEX": "*", "HST": "X"}
 
 
 # ------------------------------------
