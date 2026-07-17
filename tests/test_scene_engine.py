@@ -22,7 +22,8 @@ from sedphot.measure.psf import moffat_kernel
 from sedphot.measure.render import (ampl_from_total, render_sersic,
                                     sersic_profile)
 from sedphot.measure.seats import (apply_registry, build_seats,
-                                   harvest_seats, registry_name,
+                                   harvest_seats, load_registry,
+                                   registry_name, save_registry,
                                    seat_slices)
 from sedphot.measure.solve import joint_fit
 from sedphot.measure.stamp import Stamp, radii_arcsec
@@ -272,6 +273,16 @@ def test_registry_harvest_then_consume_round_trip():
     lo, hi = recipe.REGISTRY_AMP_BAND
     for c in frozen:
         assert c['amp_lohi'] == (lo * 300.0, hi * 300.0)
+
+
+def test_registry_save_is_atomic_and_round_trips(tmp_path):
+    registry = {'J100000.00+020000.0': {'ra': 150.0, 'dec': 2.0,
+                                        'components': {}}}
+    path = tmp_path / 'registry.json'
+    save_registry(registry, path)
+    assert load_registry(path) == registry
+    # write-then-replace leaves no sibling temp file behind
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_registry_name_deterministic():

@@ -462,6 +462,15 @@ def load_registry(path: str | Path | None) -> dict:
 
 
 def save_registry(registry: dict, path: str | Path) -> None:
-    """Write the registry with stable formatting."""
-    with open(path, 'w') as handle:
+    """Write the registry atomically (write a sibling, then replace).
+
+    Atomicity means an interrupted run can never leave a torn,
+    half-written file behind. It does NOT serialize concurrent writers:
+    two runs updating one registry finish last-writer-wins, so
+    --registry-update sweeps must run one galaxy at a time.
+    """
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    with open(tmp, 'w') as handle:
         json.dump(registry, handle, indent=1, sort_keys=True)
+    tmp.replace(path)

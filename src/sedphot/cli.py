@@ -245,7 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
                                 "shared sources enter as frozen components)")
     p_measure.add_argument('--registry-update', action='store_true',
                            help="Also write this galaxy's solved seats back "
-                                "to --registry")
+                                "to --registry (updates are last-writer-wins; "
+                                "run sweeps serially)")
     p_measure.add_argument('--dump-arrays', action='store_true',
                            help="Write per-band array bundles under <Inst>/QA/ "
                                 "(debug)")
@@ -333,7 +334,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--registry', type=str, default=None,
                        help="Cross-field registry JSON to consume")
     p_run.add_argument('--registry-update', action='store_true',
-                       help="Also write solved seats back to --registry")
+                       help="Also write solved seats back to --registry "
+                            "(last-writer-wins; run sweeps serially)")
     p_run.add_argument('--spherex', type=str, default='off',
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")

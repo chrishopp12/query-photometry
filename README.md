@@ -142,6 +142,8 @@ Two optional inputs extend the scene without touching the code:
   (a bright galaxy appearing in several targets' stamps is solved once
   and consumed everywhere as frozen, tightly-leashed components).
   `--registry-update` writes the current galaxy's solved shapes back.
+  Updates replace the whole file (last writer wins), so run
+  `--registry-update` sweeps one galaxy at a time.
 
 `--mode sersic` reports the fitted target model's flux instead of the
 aperture integral -- forced photometry through the same scene fit. The
