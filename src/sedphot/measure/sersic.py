@@ -1,22 +1,18 @@
 """
 sersic.py
 
-Single-Sersic Shape Fit and Forced Photometry
+Single-Sersic Shape Fit
 ---------------------------------------------------------
-
-The forced-Sersic measurement mode: fit one Sersic profile's shape on a
-chosen band (or accept explicit parameters), then force that fixed shape
-at the target position in every band and solve only the amplitude -- so
-every band shares one consistent profile-weighted aperture.
+Fit one Sersic profile's shape on a chosen band, or accept explicit
+parameters -- the shape source for the SPHEREx forced model and for
+pinning the scene engine's target profile. The Moffat PSF and the
+WCS position-angle transfer helpers live here because every consumer
+of a fitted shape needs them.
 
 Requirements:
     numpy, scipy, astropy
 
 Notes:
-    The forced flux is profile-matched photometry: the total flux of the
-    fixed-shape model. For a band whose light distribution differs from
-    the shape band (color gradients), it is a profile-weighted amplitude,
-    NOT that band's total flux.
     Position angles cross the module boundary as degrees east of north
     and convert to/from pixel-frame theta through each image's WCS, so a
     shape fit on one instrument transfers correctly to any other
@@ -98,50 +94,6 @@ def sersic_basis(
     model = fine.reshape(ny, oversample, nx, oversample).mean(axis=(1, 3))
     convolved = fftconvolve(model, moffat_psf(fwhm_arcsec, pixscale), mode="same")
     return convolved / convolved.sum()
-
-
-def forced_photometry_single(
-        stamp: np.ndarray,
-        weight: np.ndarray,
-        shape: dict,
-        center_px: tuple,
-        fwhm: float,
-        pixscale: float,
-        *,
-        fit_mask: np.ndarray | None = None,
-):
-    """Single-component forced flux: fixed shape and position, amplitude only.
-
-    The amplitude is the weighted least-squares scale of the unit-flux
-    basis, so the returned flux is the model total -- profile-matched
-    photometry, not the band's own total where its light distribution
-    differs from the shape.
-
-    Returns
-    -------
-    flux : float
-        Total flux of the effective-Sersic model (image units).
-    err : float
-        Statistical error, 1 / sqrt(sum(w * basis^2)).
-    model : np.ndarray
-        Rendered model (flux * basis).
-    redchi2 : float
-        Reduced chi2 over the fitted pixels.
-    """
-    basis = sersic_basis({**shape, "xc": center_px[0], "yc": center_px[1]},
-                         fwhm, pixscale, stamp.shape)
-    ok = np.isfinite(stamp) & (weight > 0)
-    if fit_mask is not None:
-        ok &= ~fit_mask
-    data = np.where(ok, stamp, 0.0)   # 0-weight NaNs would still poison sums
-    weights = weight * ok
-    denom = np.sum(weights * basis * basis)
-    flux = float(np.sum(weights * basis * data) / denom)
-    err = float(1.0 / np.sqrt(denom))
-    model = flux * basis
-    ndof = max(int(ok.sum()) - 1, 1)
-    redchi2 = float(np.sum((weights * (data - model) ** 2)[ok]) / ndof)
-    return flux, err, model, redchi2
 
 
 # ------------------------------------
@@ -239,140 +191,4 @@ def fit_sersic_shape(
         xc=float(x + xs.start), yc=float(y + ys.start),
         redchi2=float(2 * fit.cost / ndof),
         success=bool(fit.success),
-    )
-
-
-# ------------------------------------
-# Forced measurement (one band, fixed sky shape)
-# ------------------------------------
-def measure_forced(
-        product,
-        coord,
-        shape_sky: dict,
-        *,
-        sky_in: float,
-        sky_out: float,
-        cutout_half_arcsec: float,
-        user_mask: tuple | None = None,
-        protect_radius: float = 4.0,
-        rgrid=None,
-) -> dict:
-    """Forced single-Sersic flux for one band.
-
-    Parameters
-    ----------
-    product : ImageProduct
-        The band to measure.
-    coord : SkyCoord
-        Forced center.
-    shape_sky : dict
-        Instrument-independent shape: n, reff_arcsec, ellip, pa_deg
-        (position angle E of N).
-    sky_in, sky_out, cutout_half_arcsec, user_mask, protect_radius
-        As in measure_aperture.
-    rgrid : array, optional
-        Radii (arcsec) for the model curve of growth.
-
-    Returns
-    -------
-    measurement : dict
-        Flux/err in uJy, the model and residual stamps, and QA curves.
-    """
-    from ..bands import wave_um as band_wave
-    from .aperture import (COVERAGE_MIN, ApertureCoverageError,
-                           DEFAULT_RGRID, prepare_stamp)
-
-    prep = prepare_stamp(product, coord, cutout_half_arcsec=cutout_half_arcsec,
-                         sky_in=sky_in, sky_out=sky_out, user_mask=user_mask,
-                         protect_radius=protect_radius)
-    sub, mask = prep['stamp'], prep['mask']
-    nodata = prep['nodata']
-    cx, cy = prep['cx'], prep['cy']
-    pixscale, cf = prep['pixscale'], prep['cf']
-    sky_std = prep['sky_std']
-
-    # Coverage gate over the model-dominated region: missing pixels are
-    # excluded from the fit (statistically clean), but when a big piece of
-    # the galaxy itself is gone the amplitude rides on unconstrained wings.
-    cov_radius = float(np.clip(3.0 * float(shape_sky['reff_arcsec']),
-                               2.0, cutout_half_arcsec))
-    core = prep['rr'] < cov_radius
-    coverage = 1.0 - float((nodata & core).sum()) / max(int(core.sum()), 1)
-    if coverage < COVERAGE_MIN:
-        raise ApertureCoverageError(
-            f"coverage {coverage:.2f} < {COVERAGE_MIN:g} within "
-            f"{cov_radius:.1f}\" of the target (off footprint / blank)",
-            coverage)
-
-    theta_px = theta_from_pa(prep['stamp_wcs'], cx, cy, shape_sky['pa_deg'])
-    shape_px = dict(reff=shape_sky['reff_arcsec'] / pixscale, n=shape_sky['n'],
-                    ellip=shape_sky['ellip'], theta=theta_px)
-
-    if product.invvar_path is not None:
-        from astropy.nddata import Cutout2D
-        from .calibrate import load_image
-        invvar_image, _, _ = load_image(product.invvar_path)
-        weight = Cutout2D(invvar_image, (prep['px'], prep['py']),
-                          2 * prep['half_px'] + 1,
-                          mode='partial', fill_value=0.0).data.astype(float)
-        weight[~np.isfinite(weight)] = 0.0
-        err_model = "ivm"
-    else:
-        weight = np.full(sub.shape, 1.0 / sky_std ** 2)
-        err_model = "skyrms"
-    weight[nodata] = 0.0
-
-    flux, err, model, redchi2 = forced_photometry_single(
-        sub, weight, shape_px, (cx, cy), product.seeing_arcsec, pixscale,
-        fit_mask=mask | nodata)
-
-    rgrid = np.asarray(rgrid if rgrid is not None else DEFAULT_RGRID, dtype=float)
-    rr = prep['rr']
-    model_cog = np.array([float(model[rr < radius].sum()) * cf for radius in rgrid])
-
-    return dict(
-        instrument=product.instrument, band=product.band,
-        wave_um=product.wave_um if np.isfinite(product.wave_um)
-        else band_wave(f"{product.instrument}_{product.band}"),
-        pixscale=pixscale, cf=cf,
-        flux_ujy=flux * cf, flux_err_ujy=err * cf, err_model=err_model,
-        redchi2=redchi2,
-        sky_level_ujy=prep['sky_level'] * cf, sky_std_ujy=sky_std * cf,
-        rgrid=rgrid, enclosed_ujy=model_cog,
-        stamp=sub, model=model, rr=rr, mask=mask, mask_mode=prep['mask_mode'],
-        nodata=nodata,
-        cx=cx, cy=cy,
-        shape_sky=shape_sky, sky_in=sky_in, sky_out=sky_out,
-        aperture_arcsec=float('nan'),
-        n_masked_in_aperture=int(mask.sum()),
-        aperture_coverage=coverage,
-        masked_fraction=float((mask & core).sum()) / max(int(core.sum()), 1),
-        cog_slope=float('nan'),   # the model curve is monotonic by construction
-        target_ra=float(coord.ra.deg), target_dec=float(coord.dec.deg),
-    )
-
-
-def forced_to_row(measurement: dict) -> dict:
-    """Convert a forced measurement to a schema table row."""
-    from ..schema import make_row
-    from ..units import flux_err_to_mag_err, ujy_to_mag
-    from .aperture import qa_flags
-
-    flux = measurement['flux_ujy']
-    err = measurement['flux_err_ujy']
-    shape = measurement['shape_sky']
-    return make_row(
-        band=f"{measurement['instrument']}_{measurement['band']}",
-        flux_ujy=flux,
-        flux_err_ujy=err,
-        mag=ujy_to_mag(flux),
-        mag_err=flux_err_to_mag_err(flux, err),
-        target_ra=measurement['target_ra'],
-        target_dec=measurement['target_dec'],
-        match_ra=measurement['target_ra'],
-        match_dec=measurement['target_dec'],
-        sep_arcsec=0.0,
-        flags=qa_flags(measurement),
-        source=(f"sedphot_sersic_n{shape['n']:.2f}_re{shape['reff_arcsec']:.2f}as_"
-                f"{measurement['mask_mode']}mask_{measurement['err_model']}"),
     )

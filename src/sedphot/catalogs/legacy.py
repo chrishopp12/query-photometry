@@ -17,6 +17,12 @@ column -- band identity is the filter, measurement provenance lives in the
 source column. unWISE-forced and AllWISE values therefore share WISE_Wn
 band labels and differ only in source.
 
+Beyond the closest-source provider interface, the same table feeds the
+scene measurement engine: query_scene returns every Tractor source in a
+cone above an r-band flux floor -- shape, per-band flux, PSF-size, and
+fit-quality columns, brightest-first -- for modeling the field around a
+target rather than measuring the target itself.
+
 Column conventions:
     Tractor flux_* are nanomaggies; flux_ivar_* are 1/nanomaggy^2.
     mw_transmission_* are the per-band MW transmission factors (<=1);
@@ -24,7 +30,7 @@ Column conventions:
     in the mw_transmission column.
 
 Requirements:
-    numpy, astropy, astroquery
+    numpy, pandas, astropy, astroquery
 
 Notes:
     Negative Tractor fluxes are legitimate non-detections and are preserved.
@@ -34,8 +40,10 @@ Notes:
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import astropy.units as u
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.utils.tap.core import TapPlus
@@ -43,7 +51,8 @@ from astroquery.utils.tap.core import TapPlus
 from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
 from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
-from ..units import flux_err_to_mag_err, nanomaggy_to_ujy, ujy_to_mag
+from ..units import (NANOMAGGY_TO_UJY, flux_err_to_mag_err, nanomaggy_to_ujy,
+                     ujy_to_mag)
 
 
 # ------------------------------------
@@ -61,6 +70,12 @@ LEGACY_BANDS = {
     'dr10': ('g', 'r', 'i', 'z', 'W1', 'W2', 'W3', 'W4'),
     'dr9': ('g', 'r', 'z', 'W1', 'W2', 'W3', 'W4'),
 }
+
+# One default release for every verb -- catalog rows, cutout pixels, and
+# the scene catalog must come from the same reduction, so no stage may
+# default differently from the others. DR10 remains a --legacy-dr flag
+# away where its southern i-band coverage applies.
+LEGACY_DR_DEFAULT = 'dr9'
 
 
 def _columns(band: str) -> tuple[str, str, str]:
@@ -160,7 +175,8 @@ def _query_once(coord: SkyCoord, radius_arcsec: float, *, dr: str, holder: dict)
     return rows
 
 
-def query(coord: SkyCoord, radius_arcsec: float, *, dr: str = 'dr10') -> ProviderResult:
+def query(coord: SkyCoord, radius_arcsec: float, *,
+          dr: str = LEGACY_DR_DEFAULT) -> ProviderResult:
     """Query the Legacy Tractor catalog for the closest source.
 
     Parameters
@@ -170,7 +186,7 @@ def query(coord: SkyCoord, radius_arcsec: float, *, dr: str = 'dr10') -> Provide
     radius_arcsec : float
         Starting search radius; expands on no-match.
     dr : str
-        Data release, 'dr10' or 'dr9'. [default: 'dr10']
+        Data release, 'dr10' or 'dr9'. [default: LEGACY_DR_DEFAULT]
 
     Returns
     -------
@@ -251,7 +267,7 @@ def shape_from_tractor(type_: str, sersic_n: float, shape_r: float,
 
 
 def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
-                dr: str = 'dr9') -> tuple[dict, dict] | None:
+                dr: str = LEGACY_DR_DEFAULT) -> tuple[dict, dict] | None:
     """Closest-source Tractor shape for a forced source model.
 
     One-shot cone query (no radius expansion: a shape grabbed from a wider
@@ -310,3 +326,98 @@ def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
         return None
     origin = {'source': f"{table} {typ}, sep {float(sep.arcsec[0]):.2f}\""}
     return shape_sky, origin
+
+
+# ------------------------------------
+# Scene catalog (full cone)
+# ------------------------------------
+def scene_cols(dr: str) -> tuple[str, ...]:
+    """Columns the scene engine consumes, for one data release.
+
+    Position and shape to render each source, then flux / PSF size /
+    reduced chi-square per optical band (DR10 adds the i-band set), then
+    the r-band blend diagnostics. Building the list from the release
+    keeps the query valid on both tables: DR9 has no i-band columns, and
+    a SELECT naming a missing column fails outright.
+    """
+    optical = [band for band in LEGACY_BANDS[dr] if not band.startswith('W')]
+    cols = ['ra', 'dec', 'type', 'sersic', 'shape_r', 'shape_e1', 'shape_e2']
+    for prefix in ('flux', 'psfsize', 'rchisq'):
+        cols.extend(f'{prefix}_{band}' for band in optical)
+    return tuple(cols + ['fracflux_r', 'fracin_r'])
+
+
+def query_scene(
+        coord: SkyCoord,
+        radius_arcsec: float,
+        *,
+        dr: str = LEGACY_DR_DEFAULT,
+        min_flux_nmgy: float = 0.5,
+        cache_path: str | Path | None = None,
+) -> pd.DataFrame:
+    """Every Tractor source in a cone for scene construction, cache-first.
+
+    Unlike query(), which reduces to the closest source, this returns the
+    whole field above an r-band flux floor so the measurement engine can
+    model the target's neighbors.
+
+    Parameters
+    ----------
+    coord : SkyCoord
+        Cone center.
+    radius_arcsec : float
+        Cone radius.
+    dr : str
+        Data release, 'dr10' or 'dr9'. [default: LEGACY_DR_DEFAULT]
+    min_flux_nmgy : float
+        r-band flux floor (nanomaggies); fainter sources contribute too
+        little light to earn a scene component. [default: 0.5]
+    cache_path : str or Path, optional
+        CSV cache. When the file exists it is read and returned with no
+        network call; otherwise the query result is written there.
+
+    Returns
+    -------
+    scene_df : pd.DataFrame
+        scene_cols(dr) plus a 'uJy' column (flux_r in microjanskys),
+        sorted brightest-first in flux_r with a fresh 0..n-1 index. The
+        frame is identical whether it came from the cache or the network.
+    """
+    if dr not in LEGACY_TABLES:
+        raise ValueError(f"unknown Legacy release {dr!r}; known: {sorted(LEGACY_TABLES)}")
+
+    cache = Path(cache_path) if cache_path is not None else None
+    if cache is not None and cache.exists():
+        scene_df = pd.read_csv(cache)
+    else:
+        table = LEGACY_TABLES[dr]
+        ra = float(coord.ra.deg)
+        dec = float(coord.dec.deg)
+        radius_deg = radius_arcsec / 3600.0
+        query = f"""
+        SELECT {', '.join(scene_cols(dr))}
+        FROM {table}
+        WHERE brick_primary = 1
+          AND 't' = q3c_radial_query(ra, dec, {ra:.8f}, {dec:.8f}, {radius_deg:.8f})
+          AND flux_r > {min_flux_nmgy}
+        """
+
+        def _run():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tap = TapPlus(url=LEGACY_URL)
+                job = tap.launch_job(query)
+                return job.get_results().to_pandas()
+
+        scene_df = retry_transient(_run, f"Legacy {dr.upper()} scene TAP")
+        if cache is not None:
+            # Write, then read back: the network path returns exactly what
+            # a later cache hit will return (the CSV round trip normalizes
+            # dtypes).
+            scene_df.to_csv(cache, index=False)
+            scene_df = pd.read_csv(cache)
+
+    # Applied after load on both paths, so cache and network agree: a
+    # microjansky mirror of flux_r, then brightest-first ordering.
+    scene_df['uJy'] = scene_df['flux_r'] * NANOMAGGY_TO_UJY
+    return scene_df.sort_values('flux_r', ascending=False).reset_index(drop=True)

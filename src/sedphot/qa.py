@@ -6,11 +6,11 @@ QA and SED Figures
 
 The diagnostic figures every image extraction writes, and the combined SED
 plot. Shared conventions across the figures: asinh/ZScale grayscale stamps,
-cyan aperture markings, gold sky annulus, wavelength-ordered point colors.
+tab:blue aperture markings, tab:green mask contours, wavelength-ordered point colors.
 
 Data products:
-    QA/<inst>_<band>.png          per-band: cutout | masked + regions | growth curve
-    QA/<inst>_<band>_sersic.png   forced mode: data | model | residual | model growth
+    QA/<inst>_<band>.png          per-band scene panels: data | fitted scene |
+                                  residual | masked + filled | curve of growth
     QA/growth_curves.png          enclosed flux vs radius, all bands
     <label>_sed.png               combined SED (catalog + measured points)
 
@@ -38,7 +38,12 @@ from .bands import wave_um
 # ------------------------------------
 # Line style per instrument in the growth-curve overlay.
 INSTRUMENT_STYLE = {"Legacy": "-", "SDSS": "--", "CFHT": ":", "PS1": "-.",
-                    "PanSTARRS": "-.", "HST": "-"}
+                    "HST": "-"}
+
+# Marker per instrument in the SED plot (keyed by the band-label prefix;
+# color already carries the wavelength, so the shape carries the source).
+INSTRUMENT_MARKER = {"Legacy": "o", "CFHT": "^", "SDSS": "s", "PS1": "D",
+                     "JPLUS": "v", "WISE": "P", "GALEX": "*", "HST": "X"}
 
 
 # ------------------------------------
@@ -55,114 +60,79 @@ def _wave_color(wave: float) -> tuple:
 # ------------------------------------
 # Per-band QA
 # ------------------------------------
-def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
-    """Cutout | masked stamp + extraction regions | curve of growth."""
-    stamp = measurement['stamp']
+def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
+    """Data | fitted scene | residual | masked + filled | curve of growth.
+
+    One row per band: the star-subtracted data, the fitted scene
+    (components + background), their residual, the measurement image
+    (masked pixels twin-filled), and the curve of growth against the
+    fitted target model's own curve.
+    """
+    image = measurement['image']
+    scene = measurement['scene']
+    filled = measurement['filled']
     mask = measurement['mask']
+    good = measurement['good']
+    witness = measurement['witness']
     cx, cy = measurement['cx'], measurement['cy']
     pixscale = measurement['pixscale']
     aperture = measurement['aperture_arcsec']
-    sky_in, sky_out = measurement['sky_in'], measurement['sky_out']
 
-    fig, axes = plt.subplots(1, 3, figsize=(13.6, 4.4),
-                             gridspec_kw=dict(width_ratios=[1, 1, 1.25]))
-    norm = ImageNormalize(stamp, interval=ZScaleInterval(), stretch=AsinhStretch())
+    fig, axes = plt.subplots(1, 5, figsize=(21.5, 4.4),
+                             gridspec_kw=dict(width_ratios=[1, 1, 1, 1, 1.3]))
+    shown = np.where(good, image, np.nan)
+    norm = ImageNormalize(shown, interval=ZScaleInterval(),
+                          stretch=AsinhStretch())
     gray = plt.cm.gray.copy()
     gray.set_bad("0.15")
 
-    nodata = measurement.get('nodata')
-    n_deblended = measurement.get('n_deblended', 0)
-    raw = measurement.get('stamp_raw')
-    left = raw if (raw is not None and n_deblended) else stamp
-    shown = left if nodata is None else np.where(nodata, np.nan, left)
-    axes[0].imshow(shown, origin="lower", cmap=gray, norm=norm)
-    axes[0].set_title("cutout (pre-deblend)" if n_deblended
-                      else "cutout (sky-subtracted)", fontsize=10)
-
-    hidden = mask if nodata is None else (mask | nodata)
-    axes[1].imshow(np.where(hidden, np.nan, stamp), origin="lower", cmap=gray,
-                   norm=norm)
-    # The two invisible exclusion sets, tinted: the sky fit's source mask
-    # (gold) and the diagnostic curve's outer fill (orange). Neither
-    # touches the aperture flux; showing them keeps the panel honest about
-    # what the sky and the curve actually saw.
-    from matplotlib.colors import ListedColormap
-    rr_px = np.hypot(*np.meshgrid(np.arange(stamp.shape[1]) - cx,
-                                  np.arange(stamp.shape[0]) - cy)) * pixscale
-    sky_excluded = measurement.get('annulus_srcmask')
-    if sky_excluded is not None:
-        show = sky_excluded & (rr_px > sky_in) & (rr_px < sky_out) & ~hidden
-        axes[1].imshow(np.where(show, 1.0, np.nan), origin="lower",
-                       cmap=ListedColormap(["#eda100"]), alpha=0.4,
-                       interpolation="nearest")
-    outer_fill = measurement.get('outer_fill')
-    if outer_fill is not None:
-        show = outer_fill & ~hidden & (rr_px >= aperture) & (rr_px <= sky_in)
-        axes[1].imshow(np.where(show, 1.0, np.nan), origin="lower",
-                       cmap=ListedColormap(["#eb6834"]), alpha=0.4,
-                       interpolation="nearest")
-    axes[1].add_patch(Circle((cx, cy), aperture / pixscale, fill=False,
-                             ec="cyan", lw=1.2))
-    for radius in (sky_in, sky_out):
-        axes[1].add_patch(Circle((cx, cy), radius / pixscale, fill=False,
-                                 ec="gold", lw=0.9, ls=(0, (4, 3))))
-    mask_title = (f"{measurement['mask_mode']} mask (dark) | "
-                  f"curve fill (orange) | sky-excluded (gold)")
-    if n_deblended:
-        mask_title = f"deblended ({n_deblended} nbr) | " + mask_title
-    coverage = measurement.get('aperture_coverage')
-    if coverage is not None and coverage < 1.0:
-        mask_title += f" | coverage {coverage:.2f}"
-    axes[1].set_title(mask_title, fontsize=9)
-    for ax in axes[:2]:
-        window = (sky_out + 6) / pixscale
+    panels = [
+        (rf"data (bg {witness['bg_sb']:+.3f} $\mu$Jy/as$^2$, "
+         rf"tilt {witness['bg_tilt_sb']:.3f})", shown),
+        ("fitted scene + background", scene),
+        ("residual", np.where(good, image - scene, np.nan)),
+        (f"masked ({witness['maskfrac_ap']:.0%} of aperture) + filled",
+         filled),
+    ]
+    window = float(measurement['rgrid'].max() + 8.0) / pixscale
+    for i, (title, img) in enumerate(panels):
+        ax = axes[i]
+        ax.imshow(img, origin="lower", cmap=gray, norm=norm)
         ax.set_xlim(cx - window, cx + window)
         ax.set_ylim(cy - window, cy + window)
         ax.set_xticks([])
         ax.set_yticks([])
+        ax.set_title(title, fontsize=9)
+        ax.add_patch(Circle((cx, cy), aperture / pixscale, fill=False,
+                            ec="tab:blue", lw=1.0))
+        if i in (2, 3) and mask.any():
+            ax.contour(mask, levels=[0.5], colors="tab:green",
+                       linewidths=0.6)
 
-    axes[2].plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
-                 color="0.25", ms=3, lw=1.2)
-    axes[2].axvline(aperture, color="cyan", lw=1.2)
-    axes[2].axvspan(sky_in, sky_out, color="gold", alpha=0.15)
-    conv = measurement.get('cog_conv_arcsec')
-    if conv is not None and np.isfinite(conv):
-        axes[2].axvline(conv, color="0.55", lw=0.9, ls=":")
-    axes[2].set_yscale("log")
-    axes[2].set_xlabel("aperture radius (arcsec)")
-    axes[2].set_ylabel(r"enclosed flux ($\mu$Jy)")
-    axes[2].grid(alpha=0.25, which="both")
-    parts = [
-        rf"{measurement['flux_ujy']:.1f} $\pm$ "
-        rf"{measurement['flux_err_ujy']:.1f} $\mu$Jy ({aperture:g}\")",
-        measurement['err_model']]
-    slope = measurement.get('cog_slope')
-    if slope is not None and np.isfinite(slope):
-        parts.append(f"slope {slope:+.3f}")
-    if conv is not None:
-        step = measurement.get('cog_step')
-        if np.isfinite(conv) and step is not None and np.isfinite(step):
-            parts.append(rf"step {step:+.2f} past {conv:g}\"")
-        elif not np.isfinite(conv):
-            end = measurement.get('cog_end_slope')
-            parts.append(f"grow {end:+.1%}/as" if end is not None
-                         and np.isfinite(end) else "not converged")
-    # The wide-range fit decomposes the curve into flux + uniform
-    # pedestal: report the pedestal's share OF the aperture flux (the
-    # honest "how much uniform background is in this number"), never
-    # just the fit residual -- a curve that fits well with b != 0 is
-    # pedestal-laden, not flat.
-    ped = measurement.get('cog_pedestal')
-    flux = measurement.get('flux_ujy')
-    if ped is not None and np.isfinite(ped) and flux:
-        parts.append(
-            f"ped {np.pi * ped * aperture ** 2 / abs(flux):+.1%} in ap")
-    rms = measurement.get('cog_fit_rms')
-    if rms is not None and np.isfinite(rms):
-        parts.append(f"resid {rms:.1%}")
-    axes[2].set_title(" | ".join(parts), fontsize=9)
+    ax = axes[4]
+    ax.plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
+            color="C3", ms=3, lw=1.4, label="CoG (data - bg)")
+    ax.plot(measurement['rgrid'], measurement['model_cog'], "k--", lw=1.4,
+            label="fitted target model")
+    ax.axvline(aperture, color="tab:blue", lw=1.0)
+    conv = witness['r_conv_as']
+    if conv > 0:
+        ax.axvline(conv, color="0.55", lw=0.9, ls=":")
+    ax.set_xlabel("aperture radius (arcsec)")
+    ax.set_ylabel(r"enclosed flux ($\mu$Jy)")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    conv_label = f'conv@{conv:.0f}"' if conv > 0 else 'no plateau'
+    ax.set_title(
+        rf'{measurement["flux_ujy"]:.1f} $\pm$ '
+        rf'{measurement["flux_err_ujy"]:.1f} $\mu$Jy ({aperture:g}", '
+        f'{measurement["err_model"]})  excess '
+        f'{witness["excess_growth_uJy"]:+.1f} '
+        f'(own {witness["model_own_growth_uJy"]:+.1f})  {conv_label}',
+        fontsize=9)
 
-    fig.suptitle(f"{measurement['instrument']} {measurement['band']}", fontsize=12)
+    fig.suptitle(f"{measurement['instrument']} {measurement['band']} -- "
+                 f"scene fit", fontsize=12)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{measurement['instrument']}_{measurement['band']}.png"
@@ -173,15 +143,33 @@ def qa_band_figure(measurement: dict, out_dir: str | Path) -> Path:
 
 
 def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
-    """Enclosed flux vs radius for every measured band on one figure."""
+    """Enclosed flux vs radius for every measured band on one figure.
+
+    Colors are wavelength-ordered over the range actually plotted: the
+    absolute SED scale (far-UV through mid-IR) would compress an
+    optical-only band set into near-identical hues.
+    """
+    waves = [m['wave_um'] for m in measurements
+             if np.isfinite(m['wave_um'])]
+    log_lo = np.log10(min(waves)) if waves else 0.0
+    log_hi = np.log10(max(waves)) if waves else 1.0
+    span = max(log_hi - log_lo, 1e-9)
+
+    def band_color(wave: float) -> tuple:
+        if not np.isfinite(wave):
+            return (0.3, 0.3, 0.3, 1.0)
+        return plt.cm.turbo(
+            float(np.clip((np.log10(wave) - log_lo) / span, 0.0, 1.0)))
+
     fig, ax = plt.subplots(figsize=(11, 7))
     for m in measurements:
         style = INSTRUMENT_STYLE.get(m['instrument'], "-")
         ax.plot(m['rgrid'], m['enclosed_ujy'], style,
-                color=_wave_color(m['wave_um']), lw=1.6, alpha=0.85,
+                color=band_color(m['wave_um']), lw=1.6, alpha=0.85,
                 label=f"{m['instrument']} {m['band']}")
     if measurements:
-        ax.axvline(measurements[0]['aperture_arcsec'], color="cyan", lw=1.2)
+        ax.axvline(measurements[0]['aperture_arcsec'], color="tab:blue",
+                   lw=1.2)
     ax.set_yscale("log")
     ax.set_xlabel("aperture radius (arcsec)")
     ax.set_ylabel(r"enclosed flux ($\mu$Jy)")
@@ -193,64 +181,6 @@ def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
     out = out_dir / "growth_curves.png"
     fig.tight_layout()
     fig.savefig(out, dpi=135)
-    plt.close(fig)
-    return out
-
-
-def qa_forced_figure(measurement: dict, out_dir: str | Path) -> Path:
-    """Masked data | forced-Sersic model | residual, plus the model growth curve."""
-    stamp = measurement['stamp']
-    model = measurement['model']
-    mask = measurement['mask']
-    cx, cy = measurement['cx'], measurement['cy']
-    pixscale = measurement['pixscale']
-    sky_in, sky_out = measurement['sky_in'], measurement['sky_out']
-
-    fig, axes = plt.subplots(1, 4, figsize=(16.5, 4.2),
-                             gridspec_kw=dict(width_ratios=[1, 1, 1, 1.2]))
-    norm = ImageNormalize(stamp, interval=ZScaleInterval(), stretch=AsinhStretch())
-    gray = plt.cm.gray.copy()
-    gray.set_bad("0.15")
-
-    axes[0].imshow(np.where(mask, np.nan, stamp), origin="lower", cmap=gray, norm=norm)
-    axes[0].set_title("data (masked)", fontsize=10)
-    axes[1].imshow(model, origin="lower", cmap=gray, norm=norm)
-    axes[1].set_title("forced-Sersic model", fontsize=10)
-    residual = stamp - model
-    axes[2].imshow(np.where(mask, np.nan, residual), origin="lower",
-                   cmap="RdBu_r",
-                   vmin=-5 * measurement['sky_std_ujy'] / measurement['cf'],
-                   vmax=5 * measurement['sky_std_ujy'] / measurement['cf'])
-    axes[2].set_title(rf"residual ($\chi^2_\nu$ = {measurement['redchi2']:.2f})",
-                      fontsize=10)
-    window = (sky_out + 6) / pixscale
-    for ax in axes[:3]:
-        ax.set_xlim(cx - window, cx + window)
-        ax.set_ylim(cy - window, cy + window)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    axes[3].plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
-                 color="0.25", ms=3, lw=1.2)
-    axes[3].axhline(measurement['flux_ujy'], color="cyan", lw=1.0, ls="--")
-    axes[3].set_xlabel("radius (arcsec)")
-    axes[3].set_ylabel(r"enclosed model flux ($\mu$Jy)")
-    axes[3].grid(alpha=0.25)
-    axes[3].set_title(
-        rf"{measurement['flux_ujy']:.1f} $\pm$ {measurement['flux_err_ujy']:.1f} "
-        rf"$\mu$Jy total", fontsize=10)
-
-    shape = measurement['shape_sky']
-    fig.suptitle(
-        f"{measurement['instrument']} {measurement['band']}  |  forced Sersic: "
-        rf"n={shape['n']:.2f}, $r_e$={shape['reff_arcsec']:.2f}\", "
-        rf"ellip={shape['ellip']:.2f}, PA={shape['pa_deg']:.1f}$^\circ$",
-        fontsize=11)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{measurement['instrument']}_{measurement['band']}_sersic.png"
-    fig.tight_layout()
-    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     return out
 
@@ -279,12 +209,18 @@ def plot_sed(
     -------
     outpath : Path
     """
+    from matplotlib.lines import Line2D
+
     fig, ax = plt.subplots(figsize=(10, 6.5))
-    markers = {"catalog": "o", "measured": "s"}
     plotted = 0
+    seen_instruments: list[str] = []
     for label, df in frames.items():
         if df is None or df.empty:
             continue
+        # Fill carries provenance: catalog points are filled, our own
+        # measurements are open; the marker carries the instrument and
+        # the color carries the wavelength.
+        open_face = label == 'measured'
         waves = np.array([wave_um(b) for b in df['band']])
         flux = df['flux_uJy'].to_numpy(dtype=float)
         err = df['flux_err_uJy'].to_numpy(dtype=float)
@@ -295,20 +231,33 @@ def plot_sed(
                   f"{', '.join(dropped)}")
         for i in np.where(ok)[0]:
             color = _wave_color(waves[i])
-            ax.errorbar(waves[i], flux[i], yerr=err[i] if np.isfinite(err[i]) else None,
-                        fmt=markers.get(label, "D"), color=color, ms=6,
-                        mec="k", mew=0.4, elinewidth=1.0, capsize=2)
+            instrument = str(df['band'].iloc[i]).split('_')[0]
+            if instrument not in seen_instruments:
+                seen_instruments.append(instrument)
+            marker = INSTRUMENT_MARKER.get(instrument, 'h')
+            ax.errorbar(waves[i], flux[i],
+                        yerr=err[i] if np.isfinite(err[i]) else None,
+                        fmt=marker, ms=7,
+                        mfc='none' if open_face else color,
+                        mec=color if open_face else 'k',
+                        mew=1.2 if open_face else 0.4,
+                        ecolor=color, elinewidth=1.0, capsize=2)
             plotted += 1
-    # Legend proxies: one entry per table, shape only.
-    for label in frames:
-        if frames[label] is not None and not frames[label].empty:
-            ax.plot([], [], markers.get(label, "D"), color="0.4", mec="k", label=label)
+    handles = [Line2D([], [], marker=INSTRUMENT_MARKER.get(inst, 'h'),
+                      linestyle='', color='0.45', mec='k', label=inst)
+               for inst in sorted(seen_instruments)]
+    handles += [
+        Line2D([], [], marker='o', linestyle='', color='0.45', mec='k',
+               label='catalog (filled)'),
+        Line2D([], [], marker='o', linestyle='', mfc='none', mec='0.2',
+               label='measured (open)'),
+    ]
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"wavelength ($\mu$m)")
     ax.set_ylabel(r"flux ($\mu$Jy)")
     ax.set_title(title or "SED")
-    ax.legend(fontsize=9)
+    ax.legend(handles=handles, fontsize=9, ncol=2)
     ax.grid(alpha=0.25, which="both")
     outpath = Path(outpath)
     outpath.parent.mkdir(parents=True, exist_ok=True)

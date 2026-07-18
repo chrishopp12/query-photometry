@@ -33,15 +33,12 @@ WAVE_UM = {
     'SDSS_u': 0.355, 'SDSS_g': 0.475, 'SDSS_r': 0.622, 'SDSS_i': 0.763, 'SDSS_z': 0.905,
     # CFHT MegaCam
     'CFHT_u': 0.355, 'CFHT_g': 0.475, 'CFHT_r': 0.640, 'CFHT_i': 0.776, 'CFHT_z': 0.925,
-    # Legacy Surveys (BASS/MzLS/DECam) + unWISE forced photometry
+    # Legacy Surveys (BASS/MzLS/DECam)
     'Legacy_g': 0.475, 'Legacy_r': 0.625, 'Legacy_i': 0.755, 'Legacy_z': 0.920,
-    'Legacy_W1': 3.368, 'Legacy_W2': 4.618, 'Legacy_W3': 12.082, 'Legacy_W4': 22.194,
     # Pan-STARRS
     'PS1_g': 0.481, 'PS1_r': 0.617, 'PS1_i': 0.752, 'PS1_z': 0.866, 'PS1_y': 0.962,
-    # WISE (AllWISE)
+    # WISE (both unWISE-forced and AllWISE rows carry this label)
     'WISE_W1': 3.368, 'WISE_W2': 4.618, 'WISE_W3': 12.082, 'WISE_W4': 22.194,
-    # 2MASS
-    '2MASS_J': 1.235, '2MASS_H': 1.662, '2MASS_Ks': 2.159,
     # J-PLUS DR3 (12 filters)
     'JPLUS_uJAVA': 0.3485, 'JPLUS_J0378': 0.3785, 'JPLUS_J0395': 0.3950,
     'JPLUS_J0410': 0.4100, 'JPLUS_J0430': 0.4300, 'JPLUS_gSDSS': 0.4803,

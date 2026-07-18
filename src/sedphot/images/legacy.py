@@ -41,8 +41,10 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from ..catalogs.legacy import LEGACY_DR_DEFAULT
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
+from .common import warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -89,6 +91,8 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
         paths = [cache_dir / f"legacy_{layer}_{band}.fits" for band in bands]
         if all(p.exists() for p in paths):
             cube_data = None      # cached; skip the request
+            for path in paths:
+                warn_undersized_cache(path, size_arcsec, 'Legacy')
         else:
             url = (f"{VIEWER_URL}?ra={coord.ra.deg:.8f}&dec={coord.dec.deg:.8f}"
                    f"&layer={layer}&pixscale={PIXSCALE}&bands={''.join(bands)}"
@@ -162,7 +166,15 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
     for band in bands:
         band_paths = {}
         for kind in ("image", "invvar"):
-            path = cache_dir / f"legacysurvey-{brick}-{kind}-{band}.fits.fz"
+            # The release belongs in the cache name: brick names are
+            # shared across releases, and an untagged cache would let a
+            # dr switch silently reuse the other release's pixels.
+            path = cache_dir / f"legacysurvey-{dr}-{brick}-{kind}-{band}.fits.fz"
+            untagged = cache_dir / f"legacysurvey-{brick}-{kind}-{band}.fits.fz"
+            if not path.exists() and untagged.exists():
+                print(f"  [Legacy] using untagged brick cache "
+                      f"{untagged.name} (assumed {dr})")
+                path = untagged
             if not path.exists():
                 fetched = False
                 for hemi_try in (hemis, 'south' if hemis == 'north' else 'north'):
@@ -191,7 +203,7 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
 # Provider entry
 # ------------------------------------
 def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 120.0,
-          cache_dir: str | Path, dr: str = 'dr9',
+          cache_dir: str | Path, dr: str = LEGACY_DR_DEFAULT,
           use_bricks: bool = False) -> list[ImageProduct] | ProviderResult:
     """Fetch Legacy Surveys images at the target.
 
@@ -206,7 +218,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir : str or Path
         Photometry/Legacy/ directory; downloads are cached here.
     dr : str
-        'dr9' or 'dr10'. [default: 'dr9']
+        'dr9' or 'dr10'. [default: LEGACY_DR_DEFAULT]
     use_bricks : bool
         Fetch NERSC brick coadds (image + inverse variance) instead of
         viewer cutouts -- real per-pixel errors at ~40 MB per file.

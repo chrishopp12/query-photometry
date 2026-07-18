@@ -10,14 +10,14 @@ sidecars.
 pip install -e .
 
 # resolve a name
-sedphot resolve --name "SDSS J142800.81+570046.3"
+sedphot resolve --name "NGC 4889"
 
 # catalog photometry from every archive, with graceful per-provider fallback
 sedphot catalogs --name M87 --all --out-dir Clusters/Virgo/Galaxies/M87
 
-# fetch images and measure every band with one identical aperture recipe
+# fetch images and measure every band with one identical scene recipe
 sedphot measure --ra 194.898792 --dec 27.959528 --instruments cfht legacy \
-    --aperture 25.5 --sky-in 30 --sky-out 43 --legacy-dr dr9
+    --aperture 12
 
 # SPHEREx forced photometry; the Sersic shape comes from the Tractor catalog
 sedphot spherex --name "NGC 4874" --out-dir Clusters/Coma/Galaxies/NGC_4874
@@ -81,38 +81,76 @@ vs AllWISE both label their bands `WISE_Wn` and differ in `source`).
 
 ## Measurement recipe
 
-One recipe for every instrument: stamp at the target -> two-pass sky
-(sigma-clipped annulus: pass one rejects bright peaks, then every detected
-segment is masked and the annulus re-clipped, so the faint sources and
-neighbor wings that bias a deep crowded annulus go too) -> two-channel
-neighbor mask -> azimuthal-profile fill of masked and blank pixels ->
-curve of growth -> aperture flux. Errors use the archive's inverse
-variance when it exists (Legacy bricks, HST weights), sky rms otherwise.
+One recipe for every instrument, built around a scene fit instead of a
+sky annulus:
 
-Pixel ownership is structural, not radial: a detected segment that is not
-the target's is masked wherever it sits -- inside the aperture included --
-while the target's own segment is never masked, however asymmetric its
-envelope. Sources whose isophotes merge with the target are caught by
-subtracting the target's elliptical-median profile and detecting on the
-residual above a local-brightness floor; `--protect-radius` guards only
-that residual channel, and a merged companion inside it stays in the flux
-with only the QA metrics to betray it. For pathological targets pass a
-custom `--mask` (`.npz` staged masks pair with `--mask-ref` for their WCS).
+1. **Scene** -- every Tractor catalog row near the target becomes a
+   rendered component at its catalog shape (Gaia-confirmed stars are
+   replaced by their own measured radial profiles and pre-subtracted).
+   Design columns are normalized to unit in-stamp flux, so every fitted
+   amplitude reads directly in microjanskys.
+2. **Joint fit** -- all component amplitudes solve together against a
+   plane through sigma-clipped bin medians (bin-level outlier rejection;
+   the plane owns cutout-scale background only), alternating until the
+   background converges. A catalog row that declares its own misfit
+   (bright and high reduced chi-square) additionally gets a shape solve:
+   a Sersic core plus a truncated Nuker halo, solved by variable
+   projection with every amplitude re-fit exactly at every trial. The
+   target's own shape is always refit from the pixels -- the catalog
+   informs the photometry only through the neighbors.
+3. **Measure** -- fitted neighbors and background are subtracted,
+   residual neighbor light is masked (model-isophote, star-profile, and
+   ambient-flood channels), masked pixels are reconstructed from their
+   point reflection through the target center (clamped by the model so
+   holes are impossible), and the reported flux is the curve of growth
+   at the aperture. The target model itself is never integrated into
+   the measurement.
 
-Off-footprint and blank pixels are fill-corrected up to 5% of the aperture
-area and demote the band to `no_coverage` beyond that -- or at any
-fraction when they clip the seeing-scale core, where no fill can
-reconstruct the peak. Every measured row carries machine-parsable QA
-tokens in `flags`: `cov` (aperture coverage), `maskfrac` (masked fraction
-of the aperture), `cogslope` (relative outer curve-of-growth slope per
-arcsec; strongly negative means the sky was over-estimated). A warning
-still fires when more than 20% of the aperture is masked.
+Bands are measured per instrument, reference band first: the reference
+solves the shapes, sibling bands re-solve neighbor shapes warm with
+fluxes leashed to color-scaled reference values. The PSF is measured per
+band from the field's own confirmed stars (Moffat fallback when none
+qualifies). A position with no Tractor coverage measures blind -- no
+components, background and curve of growth only -- and says so in its
+flags. Errors use the archive's inverse variance when it exists (Legacy
+bricks), sky rms otherwise.
 
-`--mode sersic` forces one sky-frame Sersic shape (from `--sersic-params`,
-or fit on a band with `--sersic-from`) across all bands and solves only the
-amplitude -- profile-matched photometry, the convention behind the SPHEREx
-work. Fitted n and r_eff are PSF-sensitive: supply `--sersic-seeing`, or
-use `--sersic-params` from a trusted fit.
+Off-footprint and blank pixels demote the band to `no_coverage` past 5%
+of the aperture area -- or at any fraction when they clip the
+seeing-scale core, where no fill can reconstruct the peak. Every
+measured row carries machine-parsable QA tokens in `flags`: `cov`
+(aperture coverage), `maskfrac` (masked fraction of the aperture),
+`twinfrac` (mirror-filled fraction of the masked area), `nbsub`
+(neighbor flux subtracted inside the aperture), `excess` (curve growth
+past the aperture the target model cannot account for), `pedb` (residual
+uniform-background term of the curve), `conv` (radius where the curve
+plateaus and holds; -1 when it never does), `bg` (fitted background
+level), plus `refit`/`atbound`/`reg`/`scene=none` where they apply. The
+full per-band witness set (solve diagnostics, star log, background
+track, the exact recipe constants) rides the `_measured.csv` provenance
+sidecar.
+
+Two optional inputs extend the scene without touching the code:
+
+- `<out-dir>/patches.json` -- per-galaxy custom knowledge: replace a
+  blended catalog row with a known decomposition (`replace_rows`), grant
+  a companion a free shape seat (`free_seats`, optional `snap`), snap
+  gated centers to image peaks (`snap_gated`), or disable the standard
+  target refit (`target_refit: false`). No patch file means pure catalog
+  behavior.
+- `--registry FILE` -- a cross-field registry of solved shared sources
+  (a bright galaxy appearing in several targets' stamps is solved once
+  and consumed everywhere as frozen, tightly-leashed components).
+  `--registry-update` writes the current galaxy's solved shapes back.
+  Updates replace the whole file (last writer wins), so run
+  `--registry-update` sweeps one galaxy at a time.
+
+`--mode sersic` reports the fitted target model's flux instead of the
+aperture integral -- forced photometry through the same scene fit. The
+shape is the standard reference-band refit, a fit on a chosen band
+(`--sersic-from`), or explicit `--sersic-params`; fitted n and r_eff are
+PSF-sensitive, so explicit parameters from a trusted fit are the
+precision path.
 
 ## SPHEREx
 
@@ -153,7 +191,7 @@ outputs are folded in.
 
 ## Requirements
 
-Python 3.11+; numpy, scipy, pandas, astropy, astroquery, photutils,
+Python 3.11+; numpy, scipy, pandas, astropy, astroquery,
 matplotlib, requests, defusedxml (see `pyproject.toml`).
 
 ## License

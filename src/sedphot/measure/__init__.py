@@ -1,13 +1,21 @@
 """
 __init__.py
 
-Image-Based Photometry Engine
+Scene-Based Photometry Engine
 ---------------------------------------------------------
+The measurement half of sedphot: build a scene from the survey catalog,
+subtract measured stars, jointly solve component amplitudes (and shapes,
+where the catalog declares misfit) against a bin-median-plane
+background, then mask residual neighbor light, twin-fill the holes, and
+integrate a curve of growth to the aperture flux -- one identical recipe
+for every instrument, so residual band-to-band differences trace the
+data rather than the method.
 
-The measurement half of sedphot: load a calibrated image, build (or
-accept) a neighbor mask, subtract an annulus sky, and integrate a curve
-of growth to an aperture flux -- one identical recipe for every
-instrument, so residual band-to-band differences trace the data rather
-than the method. sersic.py adds the forced single-Sersic mode.
+The chain, one numbered stage per module: stamp -> psf -> components
+-> stars -> seats -> solve -> aperture -> engine (the per-galaxy
+driver). Shared services stay unnumbered: recipe.py (every constant),
+render.py (image-model primitives), background.py (the one background
+estimator), sersic.py (the single-Sersic shape fit), calibrate.py
+(flux calibration).
 """
 from __future__ import annotations

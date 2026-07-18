@@ -93,40 +93,6 @@ def with_expanding_radius(
     return []
 
 
-def final_radius(
-        radius_arcsec: float,
-        n_rows: int,
-        *,
-        max_retries: int = MAX_RETRIES,
-        expand_factor: float = EXPAND_FACTOR,
-) -> float:
-    """Upper bound on the radius with_expanding_radius could have reached.
-
-    Recorded in coverage reports so a match found only after expansion is
-    visible downstream.
-
-    Parameters
-    ----------
-    radius_arcsec : float
-        Starting search radius.
-    n_rows : int
-        Number of rows the query returned.
-    max_retries : int
-        Attempts with_expanding_radius makes. [default: 5]
-    expand_factor : float
-        Radius multiplier per attempt. [default: 2.0]
-
-    Returns
-    -------
-    radius : float
-        radius_arcsec when rows were found, else the largest radius the
-        expansion could have tried.
-    """
-    if n_rows > 0:
-        return radius_arcsec
-    return radius_arcsec * expand_factor ** (max_retries - 1)
-
-
 def query_vizier_mirrors(query_fn: Callable[[str], object], label: str):
     """Run a VizieR query against each mirror until one returns rows.
 
@@ -135,8 +101,8 @@ def query_vizier_mirrors(query_fn: Callable[[str], object], label: str):
     astroquery.vizier.conf.server at runtime does NOT work: VizierClass
     captures the config value in a signature default when astroquery is
     imported, so even instances constructed after the re-point keep the
-    original hostname (verified on astroquery 0.4.11 during the 2026-07-07
-    CDS DNS outage, when the "mirror" attempt still hit the CDS host).
+    original hostname (astroquery 0.4.x behavior) and a "mirror" attempt
+    silently queries the dead host.
 
     An empty result from one mirror may be a genuine no-match, so the next
     mirror is asked before concluding; the cost is one redundant query in the
