@@ -136,16 +136,18 @@ def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
     neighboring source whose primary brick does not even contain the
     target's pixels. The closest source is (essentially) the target
     itself, and its primary brick is the tile that owns this sky
-    position.
+    position. Selection happens CLIENT-SIDE: the Datalab TAP service
+    rejects ORDER BY q3c_dist, so the query returns the cone's rows and
+    the closest is picked here.
     """
+    import numpy as np
     from astroquery.utils.tap.core import TapPlus
     table = {'dr9': 'ls_dr9.tractor', 'dr10': 'ls_dr10.tractor'}[dr]
     query = f"""
-    SELECT TOP 1 brickname FROM {table}
+    SELECT brickname, ra, dec FROM {table}
     WHERE brick_primary = 1
       AND 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
                                  {60.0 / 3600.0:.8f})
-    ORDER BY q3c_dist(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f})
     """
     from ..retry import retry_transient
 
@@ -161,7 +163,10 @@ def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
         return None
     if len(result) == 0:
         return None
-    brickname = str(result[0]['brickname'])
+    sources = SkyCoord(np.asarray(result['ra'], dtype=float),
+                       np.asarray(result['dec'], dtype=float), unit='deg')
+    closest = int(coord.separation(sources).argmin())
+    brickname = str(result[closest]['brickname'])
     return brickname, _hemisphere(coord, dr)
 
 
