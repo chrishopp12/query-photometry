@@ -288,6 +288,7 @@ def apply_registry(
         band_key: str,
         instrument: str,
         *,
+        protect_px: list[tuple[float, float]] | None = None,
         tag: str = '',
 ) -> tuple[list[dict], list[str]]:
     """Replace catalog rows with a registry entry's frozen components.
@@ -295,7 +296,9 @@ def apply_registry(
     Matched catalog rows are dropped in a first pass (so entries cannot
     eat each other's components), then every frozen component is added
     as a fixed, tightly-leashed design column. Gates die with the rows
-    they belonged to.
+    they belonged to. Entries anchored at the target -- or at any
+    protect_px position (declared target-system members) -- are never
+    consumed: this field measures those fresh.
 
     Parameters
     ----------
@@ -330,7 +333,8 @@ def apply_registry(
     shape_2d = stamp.shape
     ny, nx = shape_2d
     margin_px = recipe.MARGIN_AS / pix
-    target = next((c for c in comps if c['name'] == 'target'), None)
+    protect = [(c['x'], c['y']) for c in comps if c['name'] == 'target']
+    protect.extend(protect_px or [])
     live = []
     for name, entry in registry.items():
         by_band = entry.get('components') or {}
@@ -342,16 +346,15 @@ def apply_registry(
             continue
         x0, y0 = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(entry['ra'], entry['dec'], unit='deg'))]
-        # An entry at the target position is this field's own target
-        # seen from another field. The target is never frozen: it is
-        # measured fresh here, and consuming its entry would add a
-        # leashed copy of the target on top of the free one and split
-        # the light between them.
-        if target is not None and np.hypot(
-                x0 - target['x'], y0 - target['y']) * pix \
-                < recipe.TARGET_MATCH_AS:
-            print(f"    {tag}registry: {name} is this field's target; "
-                  f"not consumed")
+        # An entry at a protected position is this field's own target
+        # (or a declared member of it) seen from another field. The
+        # target is never frozen: it is measured fresh here, and
+        # consuming its entry would add a leashed copy on top of the
+        # free one and split the light between them.
+        if any(np.hypot(x0 - px, y0 - py) * pix < recipe.TARGET_MATCH_AS
+               for px, py in protect):
+            print(f"    {tag}registry: {name} is this field's target "
+                  f"system; not consumed")
             continue
         if -margin_px <= x0 < nx + margin_px \
                 and -margin_px <= y0 < ny + margin_px:

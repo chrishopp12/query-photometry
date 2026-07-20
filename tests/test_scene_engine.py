@@ -595,6 +595,63 @@ def test_measure_band_end_to_end(tmp_path):
     assert 'cov=' in row['flags']
 
 
+def test_target_system_member_is_kept_in_the_aperture(tmp_path):
+    """A declared system member (second nucleus) is neither subtracted
+    nor masked: the aperture flux carries the pair, while an undeclared
+    companion is deblended away."""
+    from sedphot.measure.engine import measure_band
+    from sedphot.results import ImageProduct
+
+    rng = np.random.default_rng(11)
+    nx = ny = 241
+    wcs = make_wcs(nx, ny)
+    psf = moffat_kernel(1.3, PIX)
+    cx = cy = (nx - 1) / 2.0
+    dx_px = 6.0 / PIX                      # companion 6" east, in-aperture
+    f_main, f_comp = 300.0, 150.0
+    image = (inject_sersic((ny, nx), psf, flux=f_main / 3.631,
+                           reff_px=2.0 / PIX, n=2.0, x=cx, y=cy)
+             + inject_sersic((ny, nx), psf, flux=f_comp / 3.631,
+                             reff_px=1.5 / PIX, n=1.5, x=cx + dx_px, y=cy)
+             + 0.03 + rng.normal(0.0, NOISE, (ny, nx)))
+    path = tmp_path / 'legacy_r.fits'
+    fits.PrimaryHDU(data=image.astype(np.float32),
+                    header=wcs.to_header()).writeto(path)
+
+    comp_ra, comp_dec = [float(v) for v in
+                         wcs.pixel_to_world_values(cx + dx_px, cy)]
+    cat = make_catalog([
+        catalog_row(wcs, cx, cy, flux_nmgy=f_main / 3.631, shape_r=2.0),
+        catalog_row(wcs, cx + dx_px, cy, flux_nmgy=f_comp / 3.631,
+                    shape_r=1.5),
+    ])
+    stars = pd.DataFrame(columns=['ra', 'dec', 'phot_g_mean_mag',
+                                  'parallax', 'parallax_error', 'pmra',
+                                  'pmra_error', 'pmdec', 'pmdec_error',
+                                  'ruwe'])
+    product = ImageProduct(provider='legacy', instrument='Legacy',
+                           band='r', path=str(path), calib='nmgy',
+                           invvar_path=None, seeing_arcsec=1.3,
+                           wave_um=0.64)
+    coord = SkyCoord(RA, DEC, unit='deg')
+    rgrid = np.arange(2.0, 26.0, 1.0)
+
+    def run(patches):
+        scene = dict(cat=cat.copy(), stars=stars, patches=patches,
+                     registry={}, registry_path=None)
+        measurement, _ = measure_band(
+            product, coord, scene, None, {}, aperture_arcsec=12.0,
+            cutout_half_arcsec=55.0, rgrid=rgrid)
+        return measurement
+
+    deblended = run({})
+    system = run({'target_system': [{'ra': comp_ra, 'dec': comp_dec}]})
+    assert deblended['flux_ujy'] == pytest.approx(f_main, rel=0.06)
+    assert system['flux_ujy'] == pytest.approx(f_main + f_comp, rel=0.06)
+    # the member is no longer masked, so the mask shrinks
+    assert system['mask'].sum() < deblended['mask'].sum()
+
+
 # ------------------------------------
 # Transfer band: reference shapes carry, fluxes re-solve at color
 # ------------------------------------

@@ -164,6 +164,8 @@ def drop_target_shreds(
                                row.get('dec', rep['dec'])))
         for seat in patches.get('free_seats', []):
             pinned.append((seat['ra'], seat['dec']))
+        for member in patches.get('target_system', []):
+            pinned.append((member['ra'], member['dec']))
         for ra, dec in pinned:
             near = SkyCoord(ra, dec, unit='deg').separation(rows).arcsec
             shred &= ~(near < recipe.PATCH_MATCH_AS)

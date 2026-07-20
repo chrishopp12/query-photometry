@@ -129,7 +129,7 @@ def prepare_scene(
             raise ValueError(f"{patch_path} is not valid JSON: {e}") from e
         known = {'replace_rows', 'free_seats', 'snap_gated',
                  'target_refit', 'target_halo', 'harvest_target',
-                 'comment'}
+                 'target_system', 'comment'}
         unknown = sorted(set(patches) - known)
         if unknown:
             print(f"  WARNING {recipe.PATCH_FILENAME}: unrecognized "
@@ -143,6 +143,11 @@ def prepare_scene(
             missing = sorted({'ra', 'dec'} - set(entry))
             if missing:
                 raise ValueError(f"{patch_path}: free_seats entry "
+                                 f"missing {missing}")
+        for entry in patches.get('target_system', []):
+            missing = sorted({'ra', 'dec'} - set(entry))
+            if missing:
+                raise ValueError(f"{patch_path}: target_system entry "
                                  f"missing {missing}")
         print(f"  patches: {sorted(patches.keys())}")
     if len(cat):
@@ -169,6 +174,34 @@ def order_bands(products: list) -> list:
             return recipe.REFERENCE_PREFERENCE.index(band)
         return len(recipe.REFERENCE_PREFERENCE)
     return sorted(products, key=rank)
+
+
+def _system_names(comps: list[dict], patches: dict, stamp) -> set[str]:
+    """Component names belonging to the target system.
+
+    A patches "target_system" entry declares a component (a second
+    nucleus of a dumbbell, a bound companion) to be the TARGET'S OWN
+    light: it keeps its own component and seat for the solve and the
+    registry, but its fitted model is attributed to the target -- never
+    subtracted, never masked, integrated into the aperture flux.
+    """
+    names = {'target'}
+    for member in patches.get('target_system', []):
+        mx, my = [float(v) for v in stamp.wcs.world_to_pixel(
+            SkyCoord(float(member['ra']), float(member['dec']),
+                     unit='deg'))]
+        best, dist = None, np.inf
+        for comp in comps:
+            d = np.hypot(comp['x'] - mx, comp['y'] - my) * stamp.pixscale
+            if d < dist:
+                best, dist = comp, d
+        if best is not None and dist < recipe.PATCH_MATCH_AS \
+                and best['name'] != 'target':
+            names.add(best['name'])
+        else:
+            print(f"    target_system member at ({member['ra']:.5f},"
+                  f"{member['dec']:.5f}) matches no component; ignored")
+    return names
 
 
 def _seat_colors(seats: list[dict], cat: pd.DataFrame,
@@ -289,8 +322,12 @@ def measure_band(
                              profile_cache=cache['profiles'],
                              gate_radius_arcsec=cutout_half_arcsec) \
         if len(cat) else []
+    system = _system_names(comps, patches, stamp)
     comps, consumed = apply_registry(comps, scene['registry'], stamp,
                                      psf, band_key, product.instrument,
+                                     protect_px=[(c['x'], c['y'])
+                                                 for c in comps
+                                                 if c['name'] in system],
                                      tag=tag)
 
     # Forced mode: pin the target to the given shape and disable the
@@ -343,12 +380,15 @@ def measure_band(
     scene_img = np.zeros_like(image)
     neighbors = np.zeros_like(image)
     target_img = np.zeros_like(image)
+    own_target_ujy = 0.0
     fitted_by: dict[str, np.ndarray] = {}
     for mult, base, owner in zip(fit['mults'], bases, base_owner):
         contribution = max(mult, 0.0) * base
         scene_img += contribution
-        if owner == 'target':
+        if owner in system:
             target_img = target_img + contribution
+            if owner == 'target':
+                own_target_ujy += float(contribution.sum()) * stamp.cf
         else:
             neighbors += contribution
             fitted_by[owner] = fitted_by.get(owner, 0.0) + contribution
@@ -394,15 +434,18 @@ def measure_band(
     witness['fill_vs_model_ap_uJy'] = round(fill['fill_vs_model_ap'], 1)
     if ('target' in drops or target_shape is not None) \
             and target_comp is not None:
+        # System total: declared members count as target light (this is
+        # the flux a forced/sersic-mode row reports).
         witness['target_model_uJy'] = round(
             float(target_img.sum() * stamp.cf), 1)
         # The refit-vs-catalog ratio only means something on the scene
-        # catalog's own band; on any other band it is a color in
-        # disguise and would read as a refit-quality alarm.
+        # catalog's own band, and compares the TARGET'S OWN seats to
+        # its own catalog row -- system members would read as runaway
+        # refit.
         if m_ap_cat is not None and target_comp is not None \
                 and target_comp['cat'] > 0:
             witness['target_refit_x_cat'] = round(
-                witness['target_model_uJy'] / target_comp['cat'], 2)
+                own_target_ujy / target_comp['cat'], 2)
 
     flux_ap = enclosed_at(rgrid, enc, aperture_arcsec)
     err_ujy, err_model = flux_error(stamp, good,
