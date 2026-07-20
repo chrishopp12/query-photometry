@@ -224,6 +224,26 @@ def test_build_seats_standard_set():
     assert all(len(s['p0']) == recipe.SEAT_NPARAMS for s in seats)
 
 
+def test_target_is_the_closest_row_not_every_row_in_match():
+    """A double nucleus straddling the requested position: the closest
+    row is the target; the companion keeps its own component identity
+    (it must stay eligible for a free seat, and must not be dropped by
+    the target-seat replacement)."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    rows = [
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=40.0),
+        catalog_row(stamp.wcs, stamp.cx + 2.4, stamp.cy,
+                    flux_nmgy=200.0),      # brighter, 1.2" off-center
+    ]
+    comps = build_components(make_catalog(rows), stamp, psf, 1.3)
+    names = sorted(c['name'] for c in comps)
+    assert names.count('target') == 1
+    target = next(c for c in comps if c['name'] == 'target')
+    assert target['cat'] == pytest.approx(40.0 * 3.631, rel=1e-3)
+    assert any(c['name'].startswith('src') for c in comps)
+
+
 def test_build_seats_target_halo_grants_the_gated_pair():
     stamp = make_stamp(np.zeros((240, 240)))
     psf = moffat_kernel(1.3, PIX)

@@ -129,13 +129,23 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
 # Brick route
 # ------------------------------------
 def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
-    """(brickname, hemisphere) at the target position, from the Tractor catalog."""
+    """(brickname, hemisphere) at the target position, from the Tractor catalog.
+
+    The CLOSEST brick-primary source names the brick: bricks overlap by
+    ~20 arcsec, so near a tile boundary an unordered match can return a
+    neighboring source whose primary brick does not even contain the
+    target's pixels. The closest source is (essentially) the target
+    itself, and its primary brick is the tile that owns this sky
+    position.
+    """
     from astroquery.utils.tap.core import TapPlus
     table = {'dr9': 'ls_dr9.tractor', 'dr10': 'ls_dr10.tractor'}[dr]
     query = f"""
     SELECT TOP 1 brickname FROM {table}
-    WHERE 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
+    WHERE brick_primary = 1
+      AND 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
                                  {60.0 / 3600.0:.8f})
+    ORDER BY q3c_dist(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f})
     """
     from ..retry import retry_transient
 

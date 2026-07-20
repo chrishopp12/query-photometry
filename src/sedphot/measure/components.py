@@ -229,19 +229,29 @@ def build_components(
     pix = stamp.pixscale
     cf = stamp.cf
     margin_px = recipe.MARGIN_AS / pix
+    positions = {}
     for irow, row in cat.iterrows():
         x, y = [float(v) for v in stamp.wcs.world_to_pixel(
             SkyCoord(float(row['ra']), float(row['dec']), unit='deg'))]
+        positions[irow] = (x, y, np.hypot(x - stamp.cx, y - stamp.cy) * pix)
+    # The target is the CLOSEST row within the match radius -- one row,
+    # never every row within it. A close companion (a double nucleus,
+    # a tight pair straddling the requested position) must keep its own
+    # component identity or it silently vanishes from the model when
+    # target seats replace the 'target' base.
+    in_match = {irow: d for irow, (_, _, d) in positions.items()
+                if d < recipe.TARGET_MATCH_AS}
+    target_irow = min(in_match, key=in_match.get) if in_match else None
+    for irow, row in cat.iterrows():
+        x, y, dist_arcsec = positions[irow]
         inside = (0 <= x < shape_2d[1]) and (0 <= y < shape_2d[0])
         near = (-margin_px <= x < shape_2d[1] + margin_px
                 and -margin_px <= y < shape_2d[0] + margin_px)
-        dist_arcsec = np.hypot(x - stamp.cx, y - stamp.cy) * pix
         # Components are named by CATALOG ROW, not running count: the
         # component list differs between bands (margin cuts on different
         # grids), and that must not shift the identity of every later
         # source -- solved shapes transfer across bands by name.
-        name = ('target' if dist_arcsec < recipe.TARGET_MATCH_AS
-                else f'src{irow}')
+        name = 'target' if irow == target_irow else f'src{irow}'
         shape = shape_from_tractor(row['type'], row['sersic'],
                                    row['shape_r'], row['shape_e1'],
                                    row['shape_e2'])
