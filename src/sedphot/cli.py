@@ -142,7 +142,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     if args.registry_update and not args.registry:
         sys.exit("sedphot run: --registry-update needs --registry PATH")
     coord, label = _resolve_from_args(args)
-    run_all(
+    failures = run_all(
         coord, label, args.out_dir,
         skip=args.skip,
         radius_arcsec=args.radius,
@@ -157,6 +157,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         legacy_bricks=args.legacy_bricks,
         target_name=args.name,
     )
+    if failures:
+        sys.exit(1)
 
 
 def _cmd_measure(args: argparse.Namespace) -> None:

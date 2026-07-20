@@ -161,8 +161,11 @@ def retry_transient(
 
     Raises
     ------
-    The last exception if every attempt fails.
+    The last exception if every attempt fails, or ValueError when
+    attempts is not at least 1.
     """
+    if attempts < 1:
+        raise ValueError(f"attempts must be >= 1, got {attempts}")
     delay = base_delay
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):

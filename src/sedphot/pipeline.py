@@ -708,9 +708,16 @@ def run_all(
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
         target_name: str | None = None,
-) -> None:
-    """Everything: catalogs -> images + aperture measurement -> SPHEREx
+) -> dict[str, str]:
+    """Everything: catalogs -> images + scene measurement -> SPHEREx
     (opt-in) -> combined SED plot, with per-provider graceful fallback.
+
+    Stages are isolated: a stage that dies (a scene-catalog outage, a
+    SPHEREx shape abort) is recorded and the remaining stages still
+    run, so one failure cannot cost a batch galaxy its other products.
+    A measure death that precedes the stage's own coverage report
+    leaves an error entry in coverage_measure.json; a report the stage
+    already wrote is never overwritten.
 
     Parameters
     ----------
@@ -720,28 +727,73 @@ def run_all(
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
     Other parameters as in run_catalogs / run_measure.
+
+    Returns
+    -------
+    failures : dict
+        Stage name -> detail for every stage that failed (an exception,
+        or a SPHEREx error status); empty when everything succeeded.
+        The run verb exits nonzero on a non-empty return.
     """
     skip = set(skip or [])
     catalog_set = [name for name in CATALOG_PROVIDERS if name not in skip]
     image_set = [name for name in IMAGE_PROVIDERS if name not in skip]
+    failures: dict[str, str] = {}
 
     print("\n===== catalogs =====")
-    run_catalogs(coord, label, out_dir, instruments=catalog_set,
-                 radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
-                 dered=dered, target_name=target_name)
+    try:
+        run_catalogs(coord, label, out_dir, instruments=catalog_set,
+                     radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
+                     dered=dered, target_name=target_name)
+    except Exception as e:
+        failures['catalogs'] = f"{type(e).__name__}: {e}"
+        print(f"catalogs stage FAILED: {failures['catalogs']}")
 
     print("\n===== images + measurement =====")
-    run_measure(coord, label, out_dir, instruments=image_set,
-                aperture_arcsec=aperture_arcsec, cutout_arcsec=cutout_arcsec,
-                registry_path=registry_path, registry_update=registry_update,
-                legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
-                target_name=target_name)
+    coverage_path = Path(out_dir) / "Photometry" / "coverage_measure.json"
+    before = coverage_path.stat().st_mtime if coverage_path.exists() else None
+    try:
+        run_measure(coord, label, out_dir, instruments=image_set,
+                    aperture_arcsec=aperture_arcsec,
+                    cutout_arcsec=cutout_arcsec,
+                    registry_path=registry_path,
+                    registry_update=registry_update,
+                    legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                    target_name=target_name)
+    except Exception as e:
+        failures['measure'] = f"{type(e).__name__}: {e}"
+        print(f"measure stage FAILED: {failures['measure']}")
+        after = (coverage_path.stat().st_mtime if coverage_path.exists()
+                 else None)
+        if after == before:
+            coverage_path.parent.mkdir(parents=True, exist_ok=True)
+            write_coverage_report([ProviderResult(
+                provider='measure', status=STATUS_ERROR,
+                message=failures['measure'])], coverage_path)
 
     if spherex_model != 'off':
         print("\n===== SPHEREx =====")
-        run_spherex(coord, label, out_dir, model=spherex_model,
-                    sersic_params=sersic_params, legacy_dr=legacy_dr,
-                    target_name=target_name)
+        try:
+            result = run_spherex(coord, label, out_dir, model=spherex_model,
+                                 sersic_params=sersic_params,
+                                 legacy_dr=legacy_dr,
+                                 target_name=target_name)
+        except Exception as e:
+            failures['spherex'] = f"{type(e).__name__}: {e}"
+            print(f"SPHEREx stage FAILED: {failures['spherex']}")
+        else:
+            if result.status == STATUS_ERROR:
+                failures['spherex'] = result.message or STATUS_ERROR
 
     print("\n===== SED =====")
-    run_sed(label, out_dir)
+    try:
+        run_sed(label, out_dir)
+    except Exception as e:
+        failures['sed'] = f"{type(e).__name__}: {e}"
+        print(f"SED stage FAILED: {failures['sed']}")
+
+    if failures:
+        print("\nStage failures:")
+        for stage, detail in failures.items():
+            print(f"  {stage}: {detail}")
+    return failures

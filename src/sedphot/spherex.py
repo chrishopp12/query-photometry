@@ -646,7 +646,9 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
     """Record one extraction in the manifest (the tag decoder ring).
 
     The manifest is a regenerable convenience index; the per-table
-    provenance sidecars remain authoritative.
+    provenance sidecars remain authoritative. Written atomically
+    (sibling, then replace) so an interrupted run cannot leave a torn
+    index behind.
     """
     manifest_path = spherex_dir / MANIFEST_NAME
     manifest = {"kind": "spherex_extractions", "entries": {}}
@@ -664,7 +666,9 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
         "indexed": datetime.datetime.now().astimezone().isoformat(
             timespec="seconds"),
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp.replace(manifest_path)
 
 
 # ------------------------------------
