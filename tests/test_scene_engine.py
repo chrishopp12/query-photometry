@@ -244,6 +244,37 @@ def test_target_is_the_closest_row_not_every_row_in_match():
     assert any(c['name'].startswith('src') for c in comps)
 
 
+def test_free_seat_snap_never_lands_on_the_target():
+    """A blended pair on a blurry grid: the free seat's snap finds the
+    target's peak; the seat must keep its requested position instead of
+    seating itself on top of the target."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    rows = [
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=200.0,
+                    shape_r=2.0),
+        catalog_row(stamp.wcs, stamp.cx + 4.0, stamp.cy, flux_nmgy=50.0,
+                    shape_r=1.5),      # companion 2" east
+    ]
+    cat = make_catalog(rows)
+    comps = build_components(cat, stamp, psf, 1.3)
+    # a bright peak AT the target: the snap box (2") reaches it
+    image = inject_sersic(stamp.data.shape, psf, flux=200.0,
+                          reff_px=2.0 / PIX, n=2.0,
+                          x=stamp.cx, y=stamp.cy)
+    comp = next(c for c in comps if c['name'] != 'target')
+    ra, dec = [float(v) for v in stamp.wcs.pixel_to_world_values(
+        comp['x'], comp['y'])]
+    seats, _ = build_seats(
+        comps, {'free_seats': [{'ra': ra, 'dec': dec, 'snap': True}],
+                'target_refit': False}, stamp, image)
+    seat = next(s for s in seats if s['kind'] == 'sersic')
+    sep = np.hypot(*(np.array(stamp.wcs.world_to_pixel_values(
+        seat['ra'], seat['dec']), dtype=float)
+        - np.array([stamp.cx, stamp.cy]))) * PIX
+    assert sep > recipe.TARGET_MATCH_AS   # did not seat on the target
+
+
 def test_build_seats_target_halo_grants_the_gated_pair():
     stamp = make_stamp(np.zeros((240, 240)))
     psf = moffat_kernel(1.3, PIX)

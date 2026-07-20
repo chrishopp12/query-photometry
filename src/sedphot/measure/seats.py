@@ -204,7 +204,21 @@ def build_seats(
                   f"{request['dec']:.5f}) matches no component; skipped")
             continue
         if request.get('snap'):
-            fx, fy = snap_to_peak(image, fx, fy, pix)
+            sx, sy = snap_to_peak(image, fx, fy, pix)
+            target = next((c for c in comps if c['name'] == 'target'),
+                          None)
+            # On a coarse or blurry grid the peak of a tight blend IS
+            # the target; snapping there would seat this component on
+            # top of the target and solve it to nothing. Keep the
+            # requested position instead -- declared positions beat a
+            # blended peak.
+            if target is not None and np.hypot(
+                    sx - target['x'], sy - target['y']) * pix \
+                    < recipe.TARGET_MATCH_AS:
+                print(f"    {tag}free seat snap landed on the target "
+                      f"(blended peak); keeping the requested position")
+            else:
+                fx, fy = sx, sy
         shape = best['shape']
         reff_hi = recipe.FREE_SEAT_REFF_MAX_AS / pix
         if shape is not None:
