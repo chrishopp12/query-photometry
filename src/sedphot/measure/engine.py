@@ -128,7 +128,8 @@ def prepare_scene(
         except json.JSONDecodeError as e:
             raise ValueError(f"{patch_path} is not valid JSON: {e}") from e
         known = {'replace_rows', 'free_seats', 'snap_gated',
-                 'target_refit', 'comment'}
+                 'target_refit', 'target_halo', 'harvest_target',
+                 'comment'}
         unknown = sorted(set(patches) - known)
         if unknown:
             print(f"  WARNING {recipe.PATCH_FILENAME}: unrecognized "
@@ -414,7 +415,9 @@ def measure_band(
     if registry_update and fit['seats_local']:
         harvest_seats(scene['registry'], fit['seats_local'],
                       fit['seat_params'], fit['seat_amps'], stamp,
-                      band_key=band_key, tag=tag)
+                      band_key=band_key,
+                      include_target=bool(patches.get('harvest_target')),
+                      tag=tag)
 
     if dump_dir is not None:
         Path(dump_dir).mkdir(parents=True, exist_ok=True)

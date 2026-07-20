@@ -224,6 +224,58 @@ def test_build_seats_standard_set():
     assert all(len(s['p0']) == recipe.SEAT_NPARAMS for s in seats)
 
 
+def test_build_seats_target_halo_grants_the_gated_pair():
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    _, comps = _components_with_gated(stamp, psf)
+    seats, drops = build_seats(comps, {'target_halo': True}, stamp,
+                               stamp.data)
+    target_kinds = sorted(s['kind'] for s in seats
+                          if s['owner'] == 'target')
+    assert target_kinds == ['nuker', 'sersic']
+    assert 'target' in drops
+
+
+def test_harvest_include_target_writes_the_target_entry():
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    _, comps = _components_with_gated(stamp, psf)
+    seats, _ = build_seats(comps, {'target_halo': True}, stamp,
+                           stamp.data)
+    params = np.concatenate([s['p0'] for s in seats])
+    amps = [300.0] * len(seats)
+    withheld: dict = {}
+    harvest_seats(withheld, seats, params, amps, stamp,
+                  band_key='Legacy_r')
+    written: dict = {}
+    harvest_seats(written, seats, params, amps, stamp,
+                  band_key='Legacy_r', include_target=True)
+    target = next(c for c in comps if c['name'] == 'target')
+    target_name = registry_name(*[float(v) for v in
+                                  stamp.wcs.pixel_to_world_values(
+                                      target['x'], target['y'])])
+    assert target_name not in withheld
+    assert target_name in written
+    assert len(written[target_name]['components']['Legacy_r']) == 2
+
+
+def test_apply_registry_never_consumes_the_target(capsys):
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    _, comps = _components_with_gated(stamp, psf)
+    target = next(c for c in comps if c['name'] == 'target')
+    ra, dec = [float(v) for v in stamp.wcs.pixel_to_world_values(
+        target['x'], target['y'])]
+    registry = {'self': dict(ra=ra, dec=dec, components={
+        'Legacy_r': [dict(kind='sersic', ra=ra, dec=dec, ellip=0.1,
+                          pa=0.0, reff_as=1.5, n=2.0, flux_ref=300.0)]})}
+    out, consumed = apply_registry(comps, registry, stamp, psf,
+                                   'Legacy_r', 'Legacy')
+    assert consumed == []
+    assert [c['name'] for c in out] == [c['name'] for c in comps]
+    assert "this field's target" in capsys.readouterr().out
+
+
 def test_build_seats_patch_disables_refit_and_no_target_survives():
     stamp = make_stamp(np.zeros((240, 240)))
     psf = moffat_kernel(1.3, PIX)

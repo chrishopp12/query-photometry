@@ -224,11 +224,42 @@ def build_seats(
     # The target refit is STANDARD: the target's shape is always solved
     # from the data, so the catalog informs the photometry only through
     # the neighbors, never through the target itself. A patch may set
-    # "target_refit": false to disable it per galaxy. A catalog with no
-    # row at the target position has nothing to refit.
+    # "target_refit": false to disable it per galaxy, or
+    # "target_halo": true to grant the target the gated-style core +
+    # halo pair instead -- for a target whose own envelope must be
+    # solved in its own centered field (the one field that sees the
+    # whole envelope) rather than inferred from a neighbor's clipped
+    # view. A catalog with no row at the target position has nothing
+    # to refit.
     target = next((c for c in comps if c['name'] == 'target'), None)
     if patches.get('target_refit', True) and target is not None:
         shape = target['shape']
+        x, y = target['x'], target['y']
+        if patches.get('target_halo') and shape is not None:
+            core_hi = recipe.GATED_CORE_REFF_MAX_AS / pix
+            p0_core = [min(shape['reff_px'], 0.95 * core_hi),
+                       min(shape['n'], 5.9), min(shape['ellip'], 0.91),
+                       shape['pa'], 0.0, 0.0]
+            seats.append(_seat(
+                'sersic', 'target', wcs, x, y, p0_core,
+                [SEAT_REFF_MIN_PX, n_lo, 0.0,
+                 shape['pa'] - recipe.PA_BOX_DEG, -dxy, -dxy],
+                [core_hi, n_hi, recipe.SERSIC_E_MAX,
+                 shape['pa'] + recipe.PA_BOX_DEG, dxy, dxy]))
+            seats.append(_seat(
+                'nuker', 'target', wcs, x, y,
+                [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
+                 shape['pa'], 0.0, 0.0],
+                [recipe.NUKER_RB_AS[0] / pix, recipe.NUKER_BETA[0], 0.0,
+                 shape['pa'] - recipe.PA_BOX_DEG, -dxy_out, -dxy_out],
+                [recipe.NUKER_RB_AS[1] / pix, recipe.NUKER_BETA[1],
+                 recipe.NUKER_E_MAX,
+                 shape['pa'] + recipe.PA_BOX_DEG, dxy_out, dxy_out]))
+            drops.add('target')
+            return seats, drops
+        if patches.get('target_halo'):
+            print(f"    {tag}target_halo needs an extended target "
+                  f"shape; falling back to the standard refit")
         reff_hi = recipe.REFIT_REFF_MAX_AS / pix
         if shape is not None:
             p0 = [min(shape['reff_px'], 0.98 * reff_hi),
@@ -237,7 +268,7 @@ def build_seats(
         else:
             p0 = [1.2 / pix, 2.0, 0.1, 0.0, 0.0, 0.0]
         seats.append(_seat(
-            'sersic', 'target', wcs, target['x'], target['y'], p0,
+            'sersic', 'target', wcs, x, y, p0,
             [SEAT_REFF_MIN_PX, n_lo, 0.0, p0[3] - recipe.PA_BOX_DEG,
              -dxy, -dxy],
             [reff_hi, n_hi, recipe.SERSIC_E_MAX,
@@ -299,6 +330,7 @@ def apply_registry(
     shape_2d = stamp.shape
     ny, nx = shape_2d
     margin_px = recipe.MARGIN_AS / pix
+    target = next((c for c in comps if c['name'] == 'target'), None)
     live = []
     for name, entry in registry.items():
         by_band = entry.get('components') or {}
@@ -310,6 +342,17 @@ def apply_registry(
             continue
         x0, y0 = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(entry['ra'], entry['dec'], unit='deg'))]
+        # An entry at the target position is this field's own target
+        # seen from another field. The target is never frozen: it is
+        # measured fresh here, and consuming its entry would add a
+        # leashed copy of the target on top of the free one and split
+        # the light between them.
+        if target is not None and np.hypot(
+                x0 - target['x'], y0 - target['y']) * pix \
+                < recipe.TARGET_MATCH_AS:
+            print(f"    {tag}registry: {name} is this field's target; "
+                  f"not consumed")
+            continue
         if -margin_px <= x0 < nx + margin_px \
                 and -margin_px <= y0 < ny + margin_px:
             live.append((name, clist, x0, y0))
@@ -388,14 +431,17 @@ def harvest_seats(
         stamp: Stamp,
         *,
         band_key: str,
+        include_target: bool = False,
         tag: str = '',
 ) -> list[str]:
-    """Merge one band's solved non-target seats into the registry.
+    """Merge one band's solved seats into the registry.
 
-    The target seat is never written: a target refit is field-specific
-    by definition, and any other field sees this galaxy through its own
-    catalog row. Re-harvesting a band replaces that band's component
-    list, so a re-run cannot double an entry.
+    The target seat is written only with include_target: normally a
+    target refit is field-specific, but a shared source measured AS THE
+    TARGET is the one field that views it centered -- the right vantage
+    to write, instead of whichever neighbor's clipped view solved it
+    first. Re-harvesting a band replaces that band's component list,
+    so a re-run cannot double an entry.
 
     Parameters
     ----------
@@ -425,7 +471,7 @@ def harvest_seats(
     fresh: dict[str, list[dict]] = {}
     anchors: dict[str, tuple[float, float]] = {}
     for seat, sl, amp in zip(seats, seat_slices(seats), seat_amps):
-        if seat['owner'] == 'target':
+        if seat['owner'] == 'target' and not include_target:
             continue
         q = np.asarray(params[sl], float)
         name = registry_name(seat['ra'], seat['dec'])
