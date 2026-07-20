@@ -27,3 +27,20 @@ def test_spherex_ok_exits_zero(monkeypatch):
     monkeypatch.setattr(sys, 'argv',
                         ['sedphot', 'spherex', '--ra', '10.0', '--dec', '20.0'])
     assert cli.main() is None
+
+
+def test_run_stage_failure_exits_nonzero(monkeypatch):
+    monkeypatch.setattr(cli, 'run_all',
+                        lambda *a, **k: {'measure': 'RuntimeError: boom'})
+    monkeypatch.setattr(sys, 'argv',
+                        ['sedphot', 'run', '--ra', '10.0', '--dec', '20.0'])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+
+
+def test_run_clean_exits_zero(monkeypatch):
+    monkeypatch.setattr(cli, 'run_all', lambda *a, **k: {})
+    monkeypatch.setattr(sys, 'argv',
+                        ['sedphot', 'run', '--ra', '10.0', '--dec', '20.0'])
+    assert cli.main() is None

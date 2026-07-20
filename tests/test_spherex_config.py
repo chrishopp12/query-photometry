@@ -202,3 +202,16 @@ def test_sub_threshold_sersic_flagged_as_point_source(monkeypatch, tmp_path, cap
     sidecar = json.loads(
         (spherex_dir / f"table_photometry.{tag}.provenance.json").read_text())
     assert sidecar["model"]["effectively_point_source"] is True
+
+
+def test_manifest_write_is_atomic_and_accumulates(tmp_path):
+    spherex_mod._index_extraction(
+        tmp_path, "sersic-abc123", "table_photometry.sersic-abc123.csv",
+        config_payload(SHAPE, 15, MJD), shape_origin="test", n_rows=3)
+    spherex_mod._index_extraction(
+        tmp_path, "psf-def456", "table_photometry.psf-def456.csv",
+        config_payload(None, 15, MJD), n_rows=5)
+    manifest = json.loads((tmp_path / "extractions.json").read_text())
+    assert set(manifest["entries"]) == {"sersic-abc123", "psf-def456"}
+    # write-then-replace leaves no sibling temp file behind
+    assert [p.name for p in tmp_path.iterdir()] == ["extractions.json"]

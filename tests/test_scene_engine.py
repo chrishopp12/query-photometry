@@ -523,6 +523,103 @@ def test_measure_band_end_to_end(tmp_path):
     assert 'cov=' in row['flags']
 
 
+# ------------------------------------
+# Transfer band: reference shapes carry, fluxes re-solve at color
+# ------------------------------------
+def test_order_bands_puts_the_reference_first():
+    from sedphot.measure.engine import order_bands
+    from sedphot.results import ImageProduct
+
+    def product(band):
+        return ImageProduct(provider='legacy', instrument='Legacy',
+                            band=band, path='', calib='nmgy')
+
+    ordered = order_bands([product('g'), product('z'), product('r')])
+    assert [p.band for p in ordered] == ['r', 'z', 'g']
+
+
+def test_transfer_band_recovers_sibling_fluxes(tmp_path):
+    from sedphot.measure.engine import measure_band
+    from sedphot.results import ImageProduct
+
+    nx = ny = 241
+    wcs = make_wcs(nx, ny)
+    psf = moffat_kernel(1.3, PIX)
+    cx = cy = (nx - 1) / 2.0
+    cf = 3.631
+    color = 0.5              # g = color * r, in catalog and in the sky
+
+    # target + one ungated neighbor outside the aperture (15") whose
+    # wings still contaminate it; truths are measured from the rendered
+    # injections (the center-sampled render makes them differ from the
+    # nominal flux at this reff)
+    tgt = inject_sersic((ny, nx), psf, flux=300.0 / cf,
+                        reff_px=2.0 / PIX, n=2.0, x=cx, y=cy)
+    nbr = inject_sersic((ny, nx), psf, flux=150.0 / cf,
+                        reff_px=1.5 / PIX, n=2.0, x=cx + 30, y=cy)
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    in_ap = np.hypot(xx - cx, yy - cy) * PIX < 12.0
+    tgt_total = tgt.sum() * cf
+    tgt_ap = (tgt * in_ap).sum() * cf
+    nbr_ap = (nbr * in_ap).sum() * cf
+
+    # g catalog fluxes carry the color the transfer leash must scale by
+    row_t = catalog_row(wcs, cx, cy, flux_nmgy=300.0 / cf, shape_r=2.0)
+    row_n = catalog_row(wcs, cx + 30, cy, flux_nmgy=150.0 / cf,
+                        shape_r=1.5)
+    for row in (row_t, row_n):
+        row['flux_g'] = row['flux_r'] * color
+    cat = make_catalog([row_t, row_n])
+
+    def write_band(band, scale, seed):
+        rng = np.random.default_rng(seed)
+        image = (scale * (tgt + nbr) + 0.03
+                 + rng.normal(0.0, NOISE, (ny, nx)))
+        path = tmp_path / f'legacy_{band}.fits'
+        fits.PrimaryHDU(data=image.astype(np.float32),
+                        header=wcs.to_header()).writeto(path)
+        return ImageProduct(provider='legacy', instrument='Legacy',
+                            band=band, path=str(path), calib='nmgy',
+                            invvar_path=None, seeing_arcsec=1.3,
+                            wave_um=0.64 if band == 'r' else 0.48)
+
+    product_r = write_band('r', 1.0, 11)
+    product_g = write_band('g', color, 12)
+    coord = SkyCoord(RA, DEC, unit='deg')
+    stars = pd.DataFrame(columns=['ra', 'dec', 'phot_g_mean_mag',
+                                  'parallax', 'parallax_error', 'pmra',
+                                  'pmra_error', 'pmdec', 'pmdec_error',
+                                  'ruwe'])
+    scene = dict(cat=cat, stars=stars, patches={}, registry={},
+                 registry_path=None)
+    rgrid = np.arange(2.0, 26.0, 1.0)
+    caches = {}
+
+    measurement_r, ref = measure_band(
+        product_r, coord, scene, None, caches, aperture_arcsec=12.0,
+        cutout_half_arcsec=55.0, rgrid=rgrid)
+    assert measurement_r['flux_ujy'] == pytest.approx(tgt_ap, rel=0.05)
+    assert measurement_r['witness']['nbsub_ap_uJy'] == pytest.approx(
+        nbr_ap, rel=0.2)
+    assert ref is not None and 'target' in ref['drops']
+    assert ref['col_flux'][0] == pytest.approx(tgt_total, rel=0.1)
+
+    measurement_g, ref_g = measure_band(
+        product_g, coord, scene, ref, caches, aperture_arcsec=12.0,
+        cutout_half_arcsec=55.0, rgrid=rgrid)
+    assert ref_g is None      # only the reference band returns one
+    assert measurement_g['witness']['seat_owners'] == ['target']
+    # the sibling flux re-solves at its own color inside the leash
+    assert measurement_g['flux_ujy'] == pytest.approx(color * tgt_ap,
+                                                      rel=0.05)
+    # neighbor subtraction lands at the sibling color too
+    assert measurement_g['witness']['nbsub_ap_uJy'] == pytest.approx(
+        color * nbr_ap, rel=0.2)
+    # the frozen-shape target model re-solves at the sibling color
+    assert measurement_g['witness']['target_model_uJy'] == pytest.approx(
+        color * tgt_total, rel=0.1)
+
+
 def test_prepare_scene_cone_scales_with_the_stamp(tmp_path, monkeypatch):
     """The query cone floors at the recipe radius for the default stamp
     and grows past the corners of a larger one, with the radius keyed

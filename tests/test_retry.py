@@ -1,7 +1,7 @@
 """query_vizier_mirrors: the fallback must actually re-point the server."""
 import pytest
 
-from sedphot.retry import VIZIER_MIRRORS, query_vizier_mirrors
+from sedphot.retry import VIZIER_MIRRORS, query_vizier_mirrors, retry_transient
 
 
 def test_error_falls_through_to_mirror():
@@ -48,6 +48,12 @@ def test_all_errors_return_none():
         raise ConnectionError("everything is down")
 
     assert query_vizier_mirrors(query, "test") is None
+
+
+def test_retry_transient_rejects_nonpositive_attempts():
+    # attempts < 1 would fall through to `raise None`; refuse it up front.
+    with pytest.raises(ValueError):
+        retry_transient(lambda: "rows", "test", attempts=0)
 
 
 def test_astroquery_vizier_server_kwarg_takes_effect():
