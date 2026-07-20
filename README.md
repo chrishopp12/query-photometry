@@ -35,7 +35,7 @@ sedphot run --name "NGC 4889" --out-dir Clusters/Coma/Galaxies/NGC_4889
 | `measure`  | Fetch images, measure every band -> `<label>_measured.csv` + QA figures |
 | `spherex`  | Raw SPHEREx spectrophotometry table (IRSA), forced-Sersic (default) or PSF model |
 | `sed`      | Combined flux-vs-wavelength figure from the tables in `out-dir` |
-| `run`      | catalogs -> measure -> SPHEREx (opt-in) -> SED plot |
+| `run`      | catalogs -> measure -> SPHEREx (opt-in) -> SED plot; stages are isolated (a dead stage is recorded and the rest still run) and the verb exits nonzero if any stage failed |
 
 ## Providers
 
