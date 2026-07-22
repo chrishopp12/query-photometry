@@ -360,6 +360,25 @@ def measure_band(
         aperture_arcsec=aperture_arcsec, tag=tag)
     image = raw - star_img
 
+    # A masked-mode star (in-zone revert) has no column and nothing
+    # subtracted: its light is still in the pixels. The solve must not
+    # see it -- an unmodeled bright source in the fitting pixels pulls
+    # the target refit and the background exactly like the original
+    # deletion bug did, one stage later. Its predicted footprint
+    # leaves the solve's pixel set; the measurement-side mask and fill
+    # handle it after the fit as before.
+    good_fit = good
+    masked_mode = {rec['comp'] for rec in star_log
+                   if rec.get('mode') == 'masked'}
+    if masked_mode:
+        exclude = np.zeros_like(good)
+        for name, footprint in star_masks:
+            if name in masked_mode:
+                exclude |= footprint > recipe.K_ISO * stamp.sigma
+        good_fit = good & ~exclude
+        print(f"    {tag}solve excludes {int(exclude.sum())} px under "
+              f"masked star(s) {sorted(masked_mode)}")
+
     # Seats: the reference band builds them and re-solves shapes inside
     # the alternation; transfer bands reuse them by name with fluxes
     # leashed to the reference band's solution.
@@ -376,7 +395,7 @@ def measure_band(
         fit_ref = dict(ref)
         fit_ref['col_color'] = _seat_colors(seats, cat, comps,
                                             product.band)
-    fit = joint_fit(image, good, stamp, psf, comps, seats, drops,
+    fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
                     ref=fit_ref)
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']

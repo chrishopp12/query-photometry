@@ -655,6 +655,58 @@ def test_measure_band_end_to_end(tmp_path):
     assert 'cov=' in row['flags']
 
 
+def test_masked_star_light_is_excluded_from_the_solve(tmp_path):
+    """A bright star in the aperture zone whose profile starves: no
+    column, footprint masked -- and the solve must not fit its pixels.
+    The target refit stays true and the aperture flux stays the
+    target's (the star reconstructed away by mask + twin fill)."""
+    from sedphot.measure.engine import measure_band
+    from sedphot.results import ImageProduct
+
+    rng = np.random.default_rng(21)
+    nx = ny = 241
+    wcs = make_wcs(nx, ny)
+    psf = moffat_kernel(1.3, PIX)
+    cx = cy = (nx - 1) / 2.0
+    dx_px = 8.0 / PIX
+    f_target, f_star = 300.0, 900.0
+    image = (inject_sersic((ny, nx), psf, flux=f_target / 3.631,
+                           reff_px=2.0 / PIX, n=2.0, x=cx, y=cy)
+             + inject_sersic((ny, nx), psf, flux=f_star / 3.631,
+                             reff_px=0.8, n=0.6, x=cx + dx_px, y=cy)
+             + 0.03 + rng.normal(0.0, NOISE, (ny, nx)))
+    path = tmp_path / 'legacy_r.fits'
+    fits.PrimaryHDU(data=image.astype(np.float32),
+                    header=wcs.to_header()).writeto(path)
+
+    cat = make_catalog([
+        catalog_row(wcs, cx, cy, flux_nmgy=f_target / 3.631, shape_r=2.0),
+        catalog_row(wcs, cx + dx_px, cy, flux_nmgy=f_star / 3.631,
+                    type_='PSF', shape_r=0.0),
+    ])
+    star_sky = wcs.pixel_to_world(cx + dx_px, cy)
+    stars = pd.DataFrame([dict(ra=float(star_sky.ra.deg),
+                               dec=float(star_sky.dec.deg),
+                               phot_g_mean_mag=16.0)])
+    scene = dict(cat=cat, stars=stars, patches={}, registry={},
+                 registry_path=None)
+    product = ImageProduct(provider='legacy', instrument='Legacy',
+                           band='r', path=str(path), calib='nmgy',
+                           invvar_path=None, seeing_arcsec=1.3,
+                           wave_um=0.64)
+    measurement, _ = measure_band(
+        product, SkyCoord(RA, DEC, unit='deg'), scene, None, {},
+        aperture_arcsec=12.0, cutout_half_arcsec=55.0,
+        rgrid=np.arange(2.0, 26.0, 1.0))
+
+    witness = measurement['witness']
+    assert witness['stars'][0]['mode'] == 'masked'
+    # the solve never saw the star: the refit is the target's own
+    assert witness['target_refit_x_cat'] == pytest.approx(1.0, abs=0.15)
+    # and the aperture flux is the target's, the star filled away
+    assert measurement['flux_ujy'] == pytest.approx(f_target, rel=0.10)
+
+
 def test_target_system_member_is_kept_in_the_aperture(tmp_path):
     """A declared system member (second nucleus) is neither subtracted
     nor masked: the aperture flux carries the pair, while an undeclared
