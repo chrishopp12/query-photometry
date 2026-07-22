@@ -214,7 +214,16 @@ PA_BOX_DEG = 95.0       # position-angle freedom about the catalog value
 SNAP_BOX_AS = 2.0       # snap-to-peak search box (nearest local maximum)
 
 SOLVE_NFEV = 450        # optimizer budget per shape solve
-SOLVE_FSCALE = 3.0      # soft-L1 scale, in units of the pixel sigma
+SOLVE_FSCALE = 3.0      # soft-L1 scale, in units of the pixel scale
+
+# Fractional model-error floor in the shape solve's per-pixel scale:
+# scale = sky rms + this x |source counts|. Against a bare scalar sky
+# sigma, a bright core's model imperfection reads as thousands of
+# sigma; the soft-L1 loss saturates there, gradients flatten, and the
+# optimizer burns its whole budget on micro-steps (worst on deep
+# stacks with no inverse-variance map). No pixel is trusted beyond a
+# few percent of its own flux.
+SOLVE_MODEL_ERR_FRAC = 0.02
 
 # Amplitude ceiling for fixed components and reference-band seats, as a
 # multiple of the catalog expectation. Pure safety: an unbounded

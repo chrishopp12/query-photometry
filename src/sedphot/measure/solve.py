@@ -230,8 +230,12 @@ def solve_shapes(
     nuker_starts = [sl.start for seat, sl in zip(seats, seat_slices(seats))
                     if seat['kind'] == 'nuker']
 
+    # Per-pixel loss scale: sky rms plus a fractional model-error
+    # floor on the source counts (recipe.SOLVE_MODEL_ERR_FRAC).
+    scale = sigma + recipe.SOLVE_MODEL_ERR_FRAC * np.abs(y)
+
     def fun(p):
-        resid = inner(p) / sigma
+        resid = inner(p) / scale
         pens = [100.0 * max(0.0, np.hypot(p[i0 + 4], p[i0 + 5]) - p[i0])
                 for i0 in nuker_starts]
         return np.append(resid, pens)
