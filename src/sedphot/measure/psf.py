@@ -187,6 +187,14 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
         if not (edge < sx < data.shape[1] - edge
                 and edge < sy < data.shape[0] - edge):
             continue
+        # Never measure a kernel inside the target's structured zone:
+        # the rings would measure the envelope, at high S/N.
+        if np.hypot(sx - stamp.cx, sy - stamp.cy) * pixscale \
+                < recipe.PSF_EXCLUDE_TARGET_AS:
+            print(f"  psf: star G={gmag:.1f} is inside the target's "
+                  f"{recipe.PSF_EXCLUDE_TARGET_AS:g}\" zone; not a "
+                  f"kernel candidate")
+            continue
         candidates.append((gmag, sx, sy))
     candidates.sort()
 
@@ -252,22 +260,71 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
             prof = np.where(mids >= graft_radius, moffat * scale, prof)
             graft_note = f'+moffat wings r>{graft_radius:.1f}as'
 
-        # Render the circular profile onto a square kernel and normalize.
-        # The box never outgrows the measured profile's support: beyond
-        # the last ring the interpolation would cut a hard circular
-        # step inside the taper zone.
-        support_px = int(2 * RING_END_AS / pixscale)
-        size = max(min(int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm
-                                 / pixscale)), support_px) | 1,
-                   KERNEL_MIN_PX)
-        center = size // 2
-        kyy, kxx = np.indices((size, size))
-        kr = np.hypot(kyy - center, kxx - center) * pixscale
-        kernel = np.interp(kr, mids, prof, right=0.0)
-        if float(kernel.sum()) <= 0:
+        # Render the circular profile onto a square kernel. The box
+        # never outgrows the measured profile's support: beyond the
+        # last ring the interpolation would cut a hard circular step
+        # inside the taper zone.
+        def render(prof_use, fwhm_use):
+            support_px = int(2 * RING_END_AS / pixscale)
+            size = max(min(int(round(recipe.MOFFAT_KERNEL_FWHM
+                                     * fwhm_use / pixscale)),
+                           support_px) | 1, KERNEL_MIN_PX)
+            center = size // 2
+            kyy, kxx = np.indices((size, size))
+            kr = np.hypot(kyy - center, kxx - center) * pixscale
+            kernel = np.interp(kr, mids, prof_use, right=0.0)
+            total = float(kernel.sum())
+            if total <= 0:
+                return None, 1.0
+            wings = float(kernel[kr > 2 * fwhm_use].sum()) / total
+            return kernel, wings
+
+        kernel, wings = render(prof, fwhm)
+        if kernel is not None and wings > recipe.PSF_WING_FRAC_MAX:
+            # Contaminated wings on a (possibly) clean core: re-derive
+            # the FWHM from the inner rings alone and force the graft
+            # early -- the measurement keeps the core, the analytic
+            # continuation takes the wings. High-S/N contamination
+            # never trips the noise-triggered graft, so this is its
+            # deliberate sibling.
+            inner = mids < recipe.PSF_GRAFT_FORCE_AS
+            if (np.isfinite(prof[inner]).sum() >= 4
+                    and float(np.nanmin(prof[inner])) < 0.5):
+                fwhm_core = 2.0 * float(np.interp(
+                    0.5, prof[inner][::-1], mids[inner][::-1]))
+                gamma = fwhm_core / (2 * np.sqrt(2 ** (1 / MOFFAT_BETA)
+                                                 - 1))
+                moffat = (1 + (mids / gamma) ** 2) ** -MOFFAT_BETA
+                # Anchor the analytic wings to the CLEAN CORE, never
+                # to the graft point: contamination at the graft
+                # radius would scale itself straight back into the
+                # wings it was meant to replace.
+                win = (mids > 0.6 * fwhm_core) & (mids < 1.5 * fwhm_core)
+                scale = (float(np.median(prof[win] / moffat[win]))
+                         if win.sum() >= 2 else 1.0)
+                j = int(np.argmin(np.abs(mids
+                                         - recipe.PSF_GRAFT_FORCE_AS)))
+                prof_fixed = np.where(mids >= mids[j], moffat * scale,
+                                      prof)
+                kernel2, wings2 = render(prof_fixed, fwhm_core)
+                if kernel2 is not None \
+                        and wings2 <= recipe.PSF_WING_FRAC_MAX:
+                    kernel, wings, fwhm = kernel2, wings2, fwhm_core
+                    graft_note = (f'+forced moffat wings r>'
+                                  f'{recipe.PSF_GRAFT_FORCE_AS:g}as')
+                else:
+                    kernel = None
+            else:
+                kernel = None
+        if kernel is None:
+            print(f"  psf: star G={gmag:.1f} kernel rejected "
+                  f"(contaminated wings); trying the next candidate")
             continue
+        dx = (sx - stamp.cx) * pixscale
+        dy = (sy - stamp.cy) * pixscale
         return (_edge_taper(kernel), fwhm,
-                f'empirical star (G={gmag:.1f}){graft_note}')
+                f'empirical star (G={gmag:.1f}, {dx:+.0f},{dy:+.0f}\" '
+                f'from target, wings {wings:.0%}){graft_note}')
     return None
 
 

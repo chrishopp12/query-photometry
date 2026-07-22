@@ -224,6 +224,35 @@ def test_build_seats_standard_set():
     assert all(len(s['p0']) == recipe.SEAT_NPARAMS for s in seats)
 
 
+def test_point_source_renders_at_subpixel_position():
+    """The delta split bilinearly: the rendered base's centroid lands
+    at the requested fractional position, not the nearest pixel."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    rows = [catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=50.0),
+            catalog_row(stamp.wcs, stamp.cx + 30.37, stamp.cy + 10.61,
+                        flux_nmgy=100.0, type_='PSF', shape_r=0.0)]
+    comps = build_components(make_catalog(rows), stamp, psf, 1.3)
+    point = next(c for c in comps if c['shape'] is None)
+    yy, xx = np.indices(point['base'].shape)
+    total = point['base'].sum()
+    cx_m = float((point['base'] * xx).sum() / total)
+    cy_m = float((point['base'] * yy).sum() / total)
+    assert cx_m == pytest.approx(point['x'], abs=0.05)
+    assert cy_m == pytest.approx(point['y'], abs=0.05)
+
+
+def test_flags_carry_the_farfield_witness():
+    witness = dict(cov=1.0, maskfrac_ap=0.01, twinfrac=1.0,
+                   nbsub_ap_uJy=2.0, excess_growth_uJy=1.0,
+                   ped_b_sb=0.001, r_conv_as=15.0, bg_sb=0.002,
+                   farfield_sb=0.1234)
+    flags = qa_flags(witness, n_comps=3, consumed=[])
+    assert 'far=+0.1234' in flags
+    witness['farfield_sb'] = None
+    assert 'far=' not in qa_flags(witness, n_comps=3, consumed=[])
+
+
 def test_target_is_the_closest_row_not_every_row_in_match():
     """A double nucleus straddling the requested position: the closest
     row is the target; the companion keeps its own component identity

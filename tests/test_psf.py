@@ -32,8 +32,12 @@ def make_stamp(data, pixscale=0.5):
                  sigma=sigma, farfield_sb=None)
 
 
-def star_field(amp=10.0, offset_px=(0.0, 0.0), shape=(161, 161), seed=42):
-    """Noise stamp with one beta=3 Moffat star; return (stamp, star coord)."""
+def star_field(amp=10.0, offset_px=(0.0, 120.0), shape=(321, 321), seed=42):
+    """Noise stamp with one beta=3 Moffat star; return (stamp, star coord).
+
+    The default offset (30" north on the 80" stamp) keeps the star
+    outside the PSF_EXCLUDE_TARGET_AS zone so it remains a kernel
+    candidate."""
     rng = np.random.default_rng(seed)
     data = rng.normal(0.0, 0.005, size=shape)
     sx = (shape[1] - 1) / 2.0 + offset_px[0]
@@ -73,8 +77,41 @@ def test_gmag_outside_window_is_skipped(gmag):
 def test_star_near_edge_is_skipped():
     # the star's center is 2 arcsec from the stamp edge: on the image,
     # but inside the 3-arcsec core margin, so it never becomes a candidate
-    stamp, star = star_field(offset_px=(72.0, 0.0))
+    stamp, star = star_field(offset_px=(152.0, 0.0))
     assert empirical_psf(stamp, star_table(star)) is None
+
+
+def test_star_inside_target_zone_is_not_a_kernel_candidate():
+    # a perfectly good star 15 arcsec from the target: its rings would
+    # measure the target's structure, so it never builds a kernel
+    stamp, star = star_field(offset_px=(60.0, 0.0))
+    assert empirical_psf(stamp, star_table(star)) is None
+
+
+def test_contaminated_wings_force_the_early_graft():
+    # the c17 geometry: a bright extended blob at the stamp center
+    # whose declining skirt falls across the star's rings -- a gradient
+    # the star's own background annulus cannot cancel. High-S/N
+    # contamination never trips the noise graft; the wing-fraction
+    # ceiling must force the early graft instead.
+    stamp, star = star_field()
+    sx, sy = [float(v) for v in stamp.wcs.world_to_pixel(star)]
+    yy, xx = np.indices(stamp.data.shape)
+    # a broad companion 8" from the star: its gradient across the
+    # rings does NOT cancel against the star's own background annulus
+    # (centered smooth structure does -- the medians circularize it
+    # away, which is the builder's own robustness)
+    r_b = np.hypot(yy - sy, xx - (sx + 8.0 / PIX)) * PIX
+    gamma_b = 10.0 / 1.0196
+    stamp.data[...] = stamp.data + 3.0 * (1 + (r_b / gamma_b) ** 2) ** -3.0
+    result = empirical_psf(stamp, star_table(star))
+    assert result is not None
+    kernel, fwhm, provenance = result
+    assert 'forced moffat wings' in provenance
+    c = kernel.shape[0] // 2
+    kyy, kxx = np.indices(kernel.shape)
+    kr = np.hypot(kyy - c, kxx - c) * PIX
+    assert float(kernel[kr > 2 * fwhm].sum()) <= 0.10 + 1e-6
 
 
 def test_faint_star_gets_moffat_wing_graft():

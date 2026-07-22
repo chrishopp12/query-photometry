@@ -280,8 +280,19 @@ def build_components(
                 base = moffat_wings(counts, seeing_arcsec / pix, x, y,
                                     shape_2d)
             else:
+                # Bilinear sub-pixel placement: dumping the whole flux
+                # into the nearest pixel offsets the rendered star by
+                # up to half a pixel, and subtracting an offset model
+                # leaves a dipole residual at every point source.
                 img = np.zeros(shape_2d)
-                img[int(round(y)), int(round(x))] = counts
+                ix, iy = int(np.floor(x)), int(np.floor(y))
+                wx, wy = x - ix, y - iy
+                for px, py, w in ((ix, iy, (1 - wx) * (1 - wy)),
+                                  (ix + 1, iy, wx * (1 - wy)),
+                                  (ix, iy + 1, (1 - wx) * wy),
+                                  (ix + 1, iy + 1, wx * wy)):
+                    if 0 <= px < shape_2d[1] and 0 <= py < shape_2d[0]:
+                        img[py, px] = counts * w
                 base = conv_same(img, psf)
             comps.append(dict(base=base,
                               flux0=max(float(base.sum()) * cf, 1e-9),

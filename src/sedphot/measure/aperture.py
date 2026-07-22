@@ -102,6 +102,13 @@ def build_mask(
     for comp in comps:
         if comp['name'] == 'target' or comp['name'] not in fitted_by:
             continue
+        if comp.get('star_reverted'):
+            # A reverted star is by definition not a well-solved
+            # neighbor: its residuals are not confined to the core.
+            # Its mask is the full fitted-model isophote, uncapped --
+            # the star-channel philosophy applied to a leashed model.
+            mask |= fitted_by[comp['name']] > recipe.K_ISO * sigma
+            continue
         dx, dy = xx - comp['x'], yy - comp['y']
         if comp['shape'] is None:
             geo = (dx * dx + dy * dy) < (recipe.GEO_SEEING_FLOOR
@@ -451,6 +458,11 @@ def qa_flags(witness: dict, *, n_comps: int, consumed: list[str]) -> str:
         f"conv={witness['r_conv_as']:.0f}",
         f"bg={witness['bg_sb']:+.4f}",
     ]
+    # The independent far-field level rides next to the fitted plane
+    # constant: a sign or scale contradiction between the two is the
+    # background-ownership warning (flag only; never a demotion).
+    if witness.get('farfield_sb') is not None:
+        tokens.append(f"far={witness['farfield_sb']:+.4f}")
     if witness.get('target_refit_x_cat') is not None:
         tokens.append(f"refit={witness['target_refit_x_cat']:.2f}")
     solve = witness.get('solve')
