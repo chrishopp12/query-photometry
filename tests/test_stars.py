@@ -176,8 +176,73 @@ def test_failed_profile_reverts_to_the_catalog_component():
     assert star_masks == []
     assert float(star_img.sum()) == 0.0
     assert [c['name'] for c in pruned] == ['target', 'src1']
-    assert star_log[0]['reverted'] is True
+    assert star_log[0]['reverted'] == 'starved'
+    assert star_log[0]['mode'] == 'leashed'
     assert star_log[0]['profile_uJy'] < 0.8 * 800.0
+    kept = next(c for c in pruned if c['name'] == 'src1')
+    assert kept['star_reverted'] and not kept['gate']
+    lo, hi = kept['amp_lohi']
+    assert lo == pytest.approx(0.5 * 800.0) and hi == pytest.approx(2.0 * 800.0)
+
+
+def test_contaminated_profile_reverts_and_zone_masks_without_column():
+    """Above the ceiling = contaminated -> revert; and inside the
+    aperture zone the reverted star gets a footprint mask and NO
+    column, with nothing subtracted."""
+    rng = np.random.default_rng(9)
+    shape = (480, 480)
+    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
+    xs, ys = cx + 32.0, cy            # 8": inside aperture 12 + buffer
+    target_blob = moffat_blob(shape, cx, cy, 500.0, 4.0, PIX)
+    star_blob = moffat_blob(shape, xs, ys, 300.0, 6.0, PIX)
+    # a bright shelf under the star fattens its rings -> contamination
+    shelf = np.exp(-(((np.indices(shape)[1] - xs) * PIX / 30) ** 2
+                     + ((np.indices(shape)[0] - ys) * PIX / 30) ** 2))
+    data = (rng.normal(0.0, 0.05, size=shape) + target_blob + star_blob
+            + 2.0 * shelf)
+    stamp = make_stamp(data, pixscale=PIX)
+    comps = [make_comp('target', 500.0, cx, cy, target_blob),
+             make_comp('src1', 300.0, xs, ys, star_blob)]
+    stars = star_rows(stamp, [(xs, ys, 16.5)])
+
+    star_img, star_masks, pruned, star_log = subtract_stars(
+        stamp, stamp.data, stamp.good, comps, stars, 0.0,
+        aperture_arcsec=12.0)
+
+    assert star_log[0]['reverted'] == 'contaminated'
+    assert star_log[0]['mode'] == 'masked'
+    assert float(star_img.sum()) == 0.0            # nothing subtracted
+    assert [n for n, _ in star_masks] == ['src1']  # footprint mask
+    assert [c['name'] for c in pruned] == ['target']   # no column
+
+
+def test_color_scaled_threshold_passes_a_red_stars_blue_band():
+    """A profile at 40% of the r-band catalog passes when the color
+    says the star only emits 40% there -- reversion must fire on
+    failure, not on stellar color."""
+    rng = np.random.default_rng(3)
+    shape = (480, 480)
+    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
+    xs, ys = cx + 120.0, cy
+    star_blob = moffat_blob(shape, xs, ys, 400.0, 6.0, PIX)  # true flux
+    data = rng.normal(0.0, 0.05, size=shape) + star_blob
+    stamp = make_stamp(data, pixscale=PIX)
+    comps = [make_comp('target', 100.0, cx, cy,
+                       moffat_blob(shape, cx, cy, 100.0, 4.0, PIX)),
+             make_comp('src1', 1000.0, xs, ys, star_blob)]  # cat = r flux
+    comps[1]['irow'] = 5
+    stars = star_rows(stamp, [(xs, ys, 16.0)])
+
+    _, _, _, log_neutral = subtract_stars(
+        stamp, stamp.data, stamp.good,
+        [dict(c) for c in comps], stars, 0.0)
+    _, _, _, log_color = subtract_stars(
+        stamp, stamp.data, stamp.good,
+        [dict(c) for c in comps], stars, 0.0,
+        colors={comps[1]['irow']: 0.4})
+
+    assert log_neutral[0].get('reverted') == 'starved'   # 400 vs 1000
+    assert log_color[0]['mode'] == 'measured'            # 400 vs 400
 
 
 def test_two_gaia_rows_same_component_treated_once():

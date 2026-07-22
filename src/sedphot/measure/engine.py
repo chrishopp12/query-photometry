@@ -204,6 +204,21 @@ def _system_names(comps: list[dict], patches: dict, stamp) -> set[str]:
     return names
 
 
+def _band_colors(cat: pd.DataFrame, band: str) -> dict[int, float]:
+    """Catalog row index -> this band's flux over the reference flux
+    (nearest listed catalog band); clamped, neutral when unknown."""
+    col = recipe.BAND_COLOR_COL.get(band.lower(), 'flux_r')
+    out = {}
+    for irow in range(len(cat)):
+        flux_ref = float(cat.iloc[irow]['flux_r'])
+        flux_band = float(cat.iloc[irow].get(col, np.nan))
+        usable = (np.isfinite(flux_band) and np.isfinite(flux_ref)
+                  and flux_ref > 0 and flux_band > 0)
+        out[irow] = (float(np.clip(flux_band / flux_ref, 0.05, 20.0))
+                     if usable else 1.0)
+    return out
+
+
 def _seat_colors(seats: list[dict], cat: pd.DataFrame,
                  comps: list[dict], band: str) -> list[float]:
     """Color factor per transferred seat column: this band's catalog
@@ -340,7 +355,9 @@ def measure_band(
     # Stars leave the problem here.
     bg0 = bin_plane(raw, good, stamp.rr, stamp.pixscale)
     star_img, star_masks, comps, star_log = subtract_stars(
-        stamp, raw, good, comps, stars, bg0['const'], tag=tag)
+        stamp, raw, good, comps, stars, bg0['const'],
+        colors=_band_colors(cat, product.band) if len(cat) else None,
+        aperture_arcsec=aperture_arcsec, tag=tag)
     image = raw - star_img
 
     # Seats: the reference band builds them and re-solves shapes inside

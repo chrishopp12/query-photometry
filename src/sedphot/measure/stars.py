@@ -173,6 +173,8 @@ def subtract_stars(
         stars: pd.DataFrame,
         level: float,
         *,
+        colors: dict | None = None,
+        aperture_arcsec: float | None = None,
         tag: str = '',
 ) -> tuple[np.ndarray, list[tuple[str, np.ndarray]], list[dict], list[dict]]:
     """Replace confirmed-star components with measured profiles.
@@ -203,6 +205,12 @@ def subtract_stars(
         phot_g_mean_mag columns.
     level : float
         Background level (counts) under each measurement.
+    colors : dict, optional
+        Catalog row index -> band/reference color factor; thresholds
+        and leashes judge against color-scaled catalog fluxes.
+    aperture_arcsec : float, optional
+        Science aperture radius; with the target present it defines
+        the no-column zone for reverted stars.
     tag : str
         Run-log prefix. [default: '']
 
@@ -222,6 +230,7 @@ def subtract_stars(
     star_masks, star_log = [], []
     scene0 = sum(c['base'] for c in comps)
     treated_base = np.zeros_like(raw)
+    target = next((c for c in comps if c['name'] == 'target'), None)
 
     # Match every confirmed star to its nearest component. The target
     # is never treated; fainter components keep their catalog model.
@@ -234,8 +243,15 @@ def subtract_stars(
             d = np.hypot(c['x'] - sx, c['y'] - sy) * pix
             if d < bestd:
                 best, bestd = c, d
-        if (best is None or best['name'] == 'target'
-                or best['cat'] < recipe.STAR_MIN_UJY):
+        if best is None:
+            inside = (0 <= sx < raw.shape[1]) and (0 <= sy < raw.shape[0])
+            if inside:
+                print(f"    {tag}Gaia star G="
+                      f"{float(srow['phot_g_mean_mag']):.1f} has no "
+                      f"catalog component within "
+                      f"{recipe.TARGET_MATCH_AS:g}\"; unmodeled")
+            continue
+        if best['name'] == 'target' or best['cat'] < recipe.STAR_MIN_UJY:
             continue
         matched.append((best, sx, sy, srow))
 
@@ -253,36 +269,59 @@ def subtract_stars(
             level, sx, sy, pix, stamp.rr, stamp.sigma,
             extra_exclude=star_img > stamp.sigma)
         flux = float(prof.sum() * cf)
-        # A profile that cannot account for the catalog flux is a
-        # failed measurement, not a subtraction: removing the component
-        # on its word would delete the source from the scene while its
-        # light stays in the data -- unmodeled, unmasked, and landing
-        # in the target and the background.
-        if flux < recipe.STAR_PROFILE_MIN_FRAC * best['cat']:
-            # The kept component never gates: halo-seat freedom is for
-            # misfit galaxies, and this source is Gaia-flagged either
-            # way -- a wrong halo on a star costs more than a missing
-            # halo on a galaxy. A patch can free a specific one.
-            best['gate'] = False
+        gmag = float(srow['phot_g_mean_mag'])
+        color = (colors or {}).get(best.get('irow', -1), 1.0)
+        expected = color * best['cat']
+        head = (f"    {tag}STAR {best['name']} ({best['cat']:.0f} uJy "
+                f"cat x{color:.2f} color, G={gmag:.1f})")
+
+        if (recipe.STAR_PROFILE_MIN_FRAC * expected <= flux
+                <= recipe.STAR_PROFILE_MAX_FRAC * expected):
+            star_img += prof
+            treated_base += best['base']
+            star_masks.append((best['name'], prof))
             star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
-                                 gmag=float(srow['phot_g_mean_mag']),
-                                 profile_uJy=round(flux, 1),
-                                 reverted=True))
-            print(f"    {tag}STAR {best['name']} ({best['cat']:.0f} uJy "
-                  f"cat, G={srow['phot_g_mean_mag']:.1f}): profile "
-                  f"{flux:.0f} uJy < "
-                  f"{recipe.STAR_PROFILE_MIN_FRAC:.0%} of catalog; "
-                  f"keeping the catalog component")
+                                 gmag=gmag, profile_uJy=round(flux, 1),
+                                 mode='measured'))
+            print(f"{head}: measured profile {flux:.0f} uJy "
+                  f"pre-subtracted")
             continue
-        star_img += prof
-        treated_base += best['base']
-        star_masks.append((best['name'], prof))
-        star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
-                             gmag=float(srow['phot_g_mean_mag']),
-                             profile_uJy=round(flux, 1)))
-        print(f"    {tag}STAR {best['name']} ({best['cat']:.0f} uJy cat, "
-              f"G={srow['phot_g_mean_mag']:.1f}): measured profile "
-              f"{flux:.0f} uJy pre-subtracted")
+
+        # The measurement failed -- starved below the floor or
+        # contaminated above the ceiling. Subtracting it, or deleting
+        # the component on its word, would move light that was never
+        # the star's. The fallback depends on where the star sits.
+        reason = ('contaminated' if flux
+                  > recipe.STAR_PROFILE_MAX_FRAC * expected else 'starved')
+        in_zone = (aperture_arcsec is not None and target is not None
+                   and np.hypot(best['x'] - target['x'],
+                                best['y'] - target['y']) * pix
+                   < aperture_arcsec + recipe.STAR_ZONE_BUFFER_AS)
+        if in_zone:
+            # Inside the aperture zone a free point-source column is
+            # an absorber of target light: no column at all. The
+            # predicted (color-scaled catalog) footprint is masked and
+            # the twin fill reconstructs beneath it.
+            star_masks.append((best['name'], best['base'] * color))
+            star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
+                                 gmag=gmag, profile_uJy=round(flux, 1),
+                                 reverted=reason, mode='masked'))
+            print(f"{head}: profile {flux:.0f} uJy is {reason}; in the "
+                  f"aperture zone -> masked + filled, no column")
+        else:
+            # Outside the zone the catalog component stays, amplitude
+            # leashed to the color-scaled expectation so a wrong solve
+            # can neither excavate nor absorb. It never gates.
+            best['gate'] = False
+            best['star_reverted'] = True
+            best['amp_lohi'] = (
+                recipe.STAR_REVERT_AMP_BAND[0] * expected,
+                recipe.STAR_REVERT_AMP_BAND[1] * expected)
+            star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
+                                 gmag=gmag, profile_uJy=round(flux, 1),
+                                 reverted=reason, mode='leashed'))
+            print(f"{head}: profile {flux:.0f} uJy is {reason}; "
+                  f"keeping the catalog component, amplitude leashed")
 
     treated = {name for name, _ in star_masks}
     comps = [c for c in comps if c['name'] not in treated]

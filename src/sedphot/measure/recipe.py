@@ -127,12 +127,27 @@ STAR_MIN_UJY = 100.0      # fainter confirmed stars keep their catalog component
 STAR_PROF_MAX_AS = 45.0   # measured stellar-profile terminus
 STAR_RING_MIN_PX = 40     # a profile ring votes only with this many pixels
 
-# A measured profile recovering less than this fraction of the catalog
-# flux is a FAILED measurement (rings starved by the target-region and
-# bright-neighbor exclusions -- or the "star" is a galaxy with spurious
-# Gaia astrometry). The source then KEEPS its catalog component: light
-# must never leave the scene without something accounting for it.
+# A measured profile recovering less than MIN_FRAC of the (color-
+# scaled) catalog flux is a FAILED measurement (rings starved by the
+# target-region and bright-neighbor exclusions -- or the "star" is a
+# galaxy with spurious Gaia astrometry). One recovering more than
+# MAX_FRAC is a CONTAMINATED measurement (rings sitting in another
+# source's light; subtracting it would excavate). Either way the
+# source reverts: light must never leave the scene without something
+# accounting for it. Thresholds are judged against the catalog flux
+# scaled to the band through BAND_COLOR_COL, so a red star's honest
+# faintness in g cannot read as failure.
 STAR_PROFILE_MIN_FRAC = 0.8
+STAR_PROFILE_MAX_FRAC = 1.3
+
+# A reverted star inside the aperture zone gets NO design column: a
+# free point-source column there can absorb target light wholesale
+# (and its over-subtraction cannot be masked after the fact). Its
+# predicted catalog-amplitude footprint is masked and twin-filled
+# instead. Beyond the zone the component stays, with its amplitude
+# leashed to the color-scaled catalog expectation.
+STAR_ZONE_BUFFER_AS = 3.0
+STAR_REVERT_AMP_BAND = (0.5, 2.0)
 
 
 # ------------------------------------
@@ -297,6 +312,17 @@ PSF_STAR_GMAG = (15.8, 19.5)
 # star's measured outer rings are noise, and a monotone-floored noise
 # wing is systematically zero.
 PSF_WING_SNR = 5.0
+
+# Kernel cleanliness. No PSF candidate within the target's structured
+# zone: rings there measure the target's envelope, not the star (and
+# the contamination is high-S/N, so the noise-triggered graft cannot
+# catch it). A kernel carrying more than the wing-fraction ceiling
+# beyond twice its own FWHM is contaminated regardless of source --
+# clean PSFs sit near 4% -- and retries with the graft forced at
+# PSF_GRAFT_FORCE_AS: measured core, analytic wings.
+PSF_EXCLUDE_TARGET_AS = 25.0
+PSF_WING_FRAC_MAX = 0.10
+PSF_GRAFT_FORCE_AS = 2.5
 
 
 # ------------------------------------
