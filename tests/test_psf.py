@@ -89,11 +89,8 @@ def test_star_inside_target_zone_is_not_a_kernel_candidate():
 
 
 def test_contaminated_wings_force_the_early_graft():
-    # the c17 geometry: a bright extended blob at the stamp center
-    # whose declining skirt falls across the star's rings -- a gradient
-    # the star's own background annulus cannot cancel. High-S/N
-    # contamination never trips the noise graft; the wing-fraction
-    # ceiling must force the early graft instead.
+    # High-S/N contamination never trips the noise graft; the
+    # wing-fraction ceiling must catch it and force the early graft.
     stamp, star = star_field()
     sx, sy = [float(v) for v in stamp.wcs.world_to_pixel(star)]
     yy, xx = np.indices(stamp.data.shape)
