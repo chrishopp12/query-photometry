@@ -259,6 +259,11 @@ def subtract_stars(
         # light stays in the data -- unmodeled, unmasked, and landing
         # in the target and the background.
         if flux < recipe.STAR_PROFILE_MIN_FRAC * best['cat']:
+            # The kept component never gates: halo-seat freedom is for
+            # misfit galaxies, and this source is Gaia-flagged either
+            # way -- a wrong halo on a star costs more than a missing
+            # halo on a galaxy. A patch can free a specific one.
+            best['gate'] = False
             star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
                                  gmag=float(srow['phot_g_mean_mag']),
                                  profile_uJy=round(flux, 1),
