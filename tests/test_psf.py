@@ -35,9 +35,9 @@ def make_stamp(data, pixscale=0.5):
 def star_field(amp=10.0, offset_px=(0.0, 120.0), shape=(321, 321), seed=42):
     """Noise stamp with one beta=3 Moffat star; return (stamp, star coord).
 
-    The default offset (30" north on the 80" stamp) keeps the star
-    outside the PSF_EXCLUDE_TARGET_AS zone so it remains a kernel
-    candidate."""
+    Offsets and shape are PIXELS at PIX = 0.25"/px: the default puts
+    the star 30" north on the 80" stamp -- outside the 25" kernel
+    exclusion zone (still a candidate), 10" inside the edge margin."""
     rng = np.random.default_rng(seed)
     data = rng.normal(0.0, 0.005, size=shape)
     sx = (shape[1] - 1) / 2.0 + offset_px[0]
