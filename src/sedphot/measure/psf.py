@@ -55,6 +55,7 @@ PEAK_MIN_SIGMA = 20.0         # star peak floor, x the stamp's global sigma
 FWHM_SANITY_AS = (0.4, 3.5)   # plausible measured-FWHM window
 GRAFT_MAX_AS = 8.0            # graft only when rings fail inside this radius
 KERNEL_MIN_PX = 25            # kernel size floor (odd pixels)
+TAPER_START_FRAC = 0.8        # edge taper begins at this fraction of the radius
 
 
 # ------------------------------------
@@ -108,11 +109,37 @@ def resolve_seeing(
     return fallback_arcsec, fallback_label
 
 
+def _edge_taper(kernel: np.ndarray) -> np.ndarray:
+    """Roll a kernel smoothly to exactly zero at its array edge.
+
+    A finite kernel truncates its wings at a square boundary: every
+    bright point source then renders as a box in the fitted scene, and
+    the step survives into the residuals at the background plane's own
+    scale on deep stacks. A cosine taper over the outer radius removes
+    the discontinuity; the kernel returns renormalized to unit sum.
+    """
+    size = kernel.shape[0]
+    center = size // 2
+    yy, xx = np.indices(kernel.shape)
+    rr = np.hypot(yy - center, xx - center)
+    r_edge = float(center)
+    r0 = TAPER_START_FRAC * r_edge
+    taper = np.ones_like(kernel)
+    outer = rr > r0
+    taper[outer] = 0.5 * (1.0 + np.cos(
+        np.pi * np.clip((rr[outer] - r0) / max(r_edge - r0, 1e-9),
+                        0.0, 1.0)))
+    taper[rr >= r_edge] = 0.0
+    tapered = kernel * taper
+    return tapered / tapered.sum()
+
+
 def moffat_kernel(seeing_arcsec: float, pixscale: float) -> np.ndarray:
-    """Unit-sum Moffat kernel sized by the seeing (no fixed-size truncation)."""
+    """Unit-sum Moffat kernel sized by the seeing, edge-tapered."""
     fwhm_px = seeing_arcsec / pixscale
     size = int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm_px)) | 1   # odd
-    return moffat_psf(seeing_arcsec, pixscale, size=max(size, KERNEL_MIN_PX))
+    return _edge_taper(
+        moffat_psf(seeing_arcsec, pixscale, size=max(size, KERNEL_MIN_PX)))
 
 
 # ------------------------------------
@@ -226,16 +253,21 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
             graft_note = f'+moffat wings r>{graft_radius:.1f}as'
 
         # Render the circular profile onto a square kernel and normalize.
-        size = max(int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm / pixscale)) | 1,
+        # The box never outgrows the measured profile's support: beyond
+        # the last ring the interpolation would cut a hard circular
+        # step inside the taper zone.
+        support_px = int(2 * RING_END_AS / pixscale)
+        size = max(min(int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm
+                                 / pixscale)), support_px) | 1,
                    KERNEL_MIN_PX)
         center = size // 2
         kyy, kxx = np.indices((size, size))
         kr = np.hypot(kyy - center, kxx - center) * pixscale
         kernel = np.interp(kr, mids, prof, right=0.0)
-        total = float(kernel.sum())
-        if total <= 0:
+        if float(kernel.sum()) <= 0:
             continue
-        return kernel / total, fwhm, f'empirical star (G={gmag:.1f}){graft_note}'
+        return (_edge_taper(kernel), fwhm,
+                f'empirical star (G={gmag:.1f}){graft_note}')
     return None
 
 

@@ -100,7 +100,7 @@ def test_resolve_psf_moffat_fallback():
     kernel, fwhm, provenance = resolve_psf(stamp, None, no_stars)
     assert provenance == 'provider default (moffat fallback)'
     assert fwhm == 1.0
-    assert kernel.shape == (25, 25)     # 8 x (1.0 / 0.5) px -> floored to 25
+    assert kernel.shape == (33, 33)     # 16 x (1.0 / 0.5) px -> odd 33
     assert kernel.sum() == pytest.approx(1.0)
 
     stamp.header['SEEING'] = 1.7        # a sane header keyword wins next
@@ -142,10 +142,16 @@ def test_resolve_seeing_falls_back():
     assert provenance == 'survey default'
 
 
-def test_moffat_kernel_floor_and_normalization():
-    small = moffat_kernel(0.8, 0.5)     # 8 x 1.6 px rounds to 13 -> floor 25
-    assert small.shape == (25, 25)
+def test_moffat_kernel_sizing_taper_and_normalization():
+    small = moffat_kernel(0.8, 0.5)     # 16 x 1.6 px -> 26 -> odd 27
+    assert small.shape == (27, 27)
     assert small.sum() == pytest.approx(1.0)
-    big = moffat_kernel(3.0, 0.5)       # 8 x 6 px -> 48 -> odd 49
-    assert big.shape == (49, 49)
+    big = moffat_kernel(3.0, 0.5)       # 16 x 6 px -> 96 -> odd 97
+    assert big.shape == (97, 97)
     assert big.sum() == pytest.approx(1.0)
+    # the edge taper reaches exactly zero on the whole boundary: no
+    # square step can survive into a rendered scene
+    assert float(big[0, :].max()) == 0.0
+    assert float(big[-1, :].max()) == 0.0
+    assert float(big[:, 0].max()) == 0.0
+    assert float(big[:, -1].max()) == 0.0

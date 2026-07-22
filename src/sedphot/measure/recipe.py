@@ -274,7 +274,11 @@ TARGET_MASK_FREE_AS = 0.0
 # ------------------------------------
 # PSF
 # ------------------------------------
-MOFFAT_KERNEL_FWHM = 8.0   # kernel half-extent in FWHM units
+# Kernel width in FWHM units. Wide enough that under 0.1% of a
+# beta=3 Moffat's flux falls outside the box; the edge taper rolls the
+# remainder smoothly to zero so no square boundary survives into the
+# rendered scene.
+MOFFAT_KERNEL_FWHM = 16.0
 
 # Empirical-PSF star window: bright enough for measurable wings, faint
 # enough to avoid saturated cores.
