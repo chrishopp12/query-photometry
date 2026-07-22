@@ -127,6 +127,13 @@ STAR_MIN_UJY = 100.0      # fainter confirmed stars keep their catalog component
 STAR_PROF_MAX_AS = 45.0   # measured stellar-profile terminus
 STAR_RING_MIN_PX = 40     # a profile ring votes only with this many pixels
 
+# A measured profile recovering less than this fraction of the catalog
+# flux is a FAILED measurement (rings starved by the target-region and
+# bright-neighbor exclusions -- or the "star" is a galaxy with spurious
+# Gaia astrometry). The source then KEEPS its catalog component: light
+# must never leave the scene without something accounting for it.
+STAR_PROFILE_MIN_FRAC = 0.8
+
 
 # ------------------------------------
 # Background: one owner, one estimator

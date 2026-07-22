@@ -154,6 +154,32 @@ def test_subtract_stars_brightest_first_and_gates():
     assert abs(residual[near2].sum()) < 0.1 * blob2[near2].sum()
 
 
+def test_failed_profile_reverts_to_the_catalog_component():
+    """A confirmed star too close to the target for its rings to vote
+    must KEEP its catalog component -- deleting it would leave its
+    light in the data with nothing accounting for it."""
+    rng = np.random.default_rng(5)
+    shape = (480, 480)
+    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
+    xs, ys = cx + 32.0, cy            # 8" east: inside the ring exclusion
+    target_blob = moffat_blob(shape, cx, cy, 500.0, 4.0, PIX)
+    star_blob = moffat_blob(shape, xs, ys, 800.0, 6.0, PIX)
+    data = rng.normal(0.0, 0.05, size=shape) + target_blob + star_blob
+    stamp = make_stamp(data, pixscale=PIX)
+    comps = [make_comp('target', 500.0, cx, cy, target_blob),
+             make_comp('src1', 800.0, xs, ys, star_blob)]
+    stars = star_rows(stamp, [(xs, ys, 16.0)])
+
+    star_img, star_masks, pruned, star_log = subtract_stars(
+        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+
+    assert star_masks == []
+    assert float(star_img.sum()) == 0.0
+    assert [c['name'] for c in pruned] == ['target', 'src1']
+    assert star_log[0]['reverted'] is True
+    assert star_log[0]['profile_uJy'] < 0.8 * 800.0
+
+
 def test_two_gaia_rows_same_component_treated_once():
     rng = np.random.default_rng(3)
     shape = (240, 240)

@@ -252,10 +252,26 @@ def subtract_stars(
             raw - star_img, good, scene0 - best['base'] - treated_base,
             level, sx, sy, pix, stamp.rr, stamp.sigma,
             extra_exclude=star_img > stamp.sigma)
+        flux = float(prof.sum() * cf)
+        # A profile that cannot account for the catalog flux is a
+        # failed measurement, not a subtraction: removing the component
+        # on its word would delete the source from the scene while its
+        # light stays in the data -- unmodeled, unmasked, and landing
+        # in the target and the background.
+        if flux < recipe.STAR_PROFILE_MIN_FRAC * best['cat']:
+            star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
+                                 gmag=float(srow['phot_g_mean_mag']),
+                                 profile_uJy=round(flux, 1),
+                                 reverted=True))
+            print(f"    {tag}STAR {best['name']} ({best['cat']:.0f} uJy "
+                  f"cat, G={srow['phot_g_mean_mag']:.1f}): profile "
+                  f"{flux:.0f} uJy < "
+                  f"{recipe.STAR_PROFILE_MIN_FRAC:.0%} of catalog; "
+                  f"keeping the catalog component")
+            continue
         star_img += prof
         treated_base += best['base']
         star_masks.append((best['name'], prof))
-        flux = float(prof.sum() * cf)
         star_log.append(dict(comp=best['name'], cat_uJy=best['cat'],
                              gmag=float(srow['phot_g_mean_mag']),
                              profile_uJy=round(flux, 1)))
