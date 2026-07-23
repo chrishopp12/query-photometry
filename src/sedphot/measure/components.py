@@ -49,15 +49,18 @@ def gated_row(row: pd.Series, dist_arcsec: float) -> bool:
     """Whether a catalog row qualifies for the double-profile shape solve.
 
     The second profile exists to fix MISFIT, and the catalog's reduced
-    chi-square is its own misfit statement -- the necessary condition.
-    Point-source rows and the target itself never gate.
+    chi-square is its own misfit statement -- the necessary condition,
+    within the window where the model family is plausible: past the
+    ceiling the same statistic means "not a galaxy model at all" and
+    a shape solve can only rail. Point-source rows and the target
+    itself never gate.
     """
     if dist_arcsec < recipe.TARGET_MATCH_AS:
         return False
     if str(row['type']).strip() in ('PSF', 'DUP'):
         return False
     return (row['uJy'] > recipe.GATE_FLUX_UJY
-            and row['rchisq_r'] > recipe.GATE_RCHISQ)
+            and recipe.GATE_RCHISQ < row['rchisq_r'] < recipe.GATE_RCHISQ_MAX)
 
 
 # ------------------------------------

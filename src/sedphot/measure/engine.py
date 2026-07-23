@@ -43,6 +43,7 @@ from ..catalogs.legacy import LEGACY_DR_DEFAULT, query_scene
 from . import recipe
 from .aperture import (build_mask, curve, enclosed_at, flux_error,
                        twin_fill, witness_row)
+from .artifacts import find_artifacts
 from .background import bin_plane
 from .components import apply_patches, build_components, drop_target_shreds
 from .psf import resolve_psf
@@ -352,6 +353,44 @@ def measure_band(
         patches['target_refit'] = False
         _pin_target(comps, target_shape, stamp, psf)
 
+    # Artifacts: mask, never fit. Pixels far beyond both the sky and
+    # the catalog scene's own claim (bleed trails, satellite streaks)
+    # leave the usable map exactly like nodata. A catalog wreck
+    # (rchisq_r past the gate ceiling) is the catalog's echo of the
+    # artifact itself and may not claim pixels here; components
+    # centered on masked pixels leave the scene with them, and the
+    # coverage gate re-judges the aperture.
+    artifact_as2, artifact_ujy = 0.0, 0.0
+    if comps:
+        wrecks = (set(cat.index[cat['rchisq_r'] > recipe.GATE_RCHISQ_MAX])
+                  if 'rchisq_r' in cat else set())
+        pred = np.zeros_like(raw)
+        protect = np.zeros_like(raw)
+        for c in comps:
+            if c['name'] in system:
+                protect += c['base']
+            if c['irow'] not in wrecks:
+                pred += c['base']
+        art, artifact_as2 = find_artifacts(raw, good, pred, protect,
+                                           stamp.rr, stamp.sigma,
+                                           stamp.pixscale)
+        if artifact_as2 > 0:
+            artifact_ujy = float(raw[art].sum() * stamp.cf)
+            good = good & ~art
+            ny_a, nx_a = art.shape
+            voided = [c['name'] for c in comps
+                      if c['name'] not in system
+                      and 0 <= int(round(c['y'])) < ny_a
+                      and 0 <= int(round(c['x'])) < nx_a
+                      and art[int(round(c['y'])), int(round(c['x']))]]
+            if voided:
+                comps = [c for c in comps if c['name'] not in voided]
+            print(f"    {tag}artifact: {artifact_as2:.0f} as2 "
+                  f"({artifact_ujy:.0f} uJy) masked, never fit"
+                  + (f"; voids {voided}" if voided else ""))
+            check_coverage(stamp, aperture_arcsec=aperture_arcsec,
+                           seeing_arcsec=seeing, nodata=~good)
+
     # Stars leave the problem here.
     bg0 = bin_plane(raw, good, stamp.rr, stamp.pixscale)
     star_img, star_masks, comps, star_log = subtract_stars(
@@ -455,6 +494,8 @@ def measure_band(
                           solve_info=solve_info)
     witness['stars'] = star_log
     witness['n_comps'] = len(comps)
+    witness['artifact_as2'] = round(artifact_as2, 1)
+    witness['artifact_uJy'] = round(artifact_ujy, 1)
     witness['gated'] = [c['name'] for c in comps
                         if c['shape'] is not None and c['gate']]
     witness['seat_owners'] = sorted(drops)

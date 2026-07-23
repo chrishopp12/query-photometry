@@ -88,6 +88,9 @@ def test_gated_row_truth_table():
                                         rchisq_r=8.0)), 20.0)
     assert not gated_row(pd.Series(dict(type='SER', uJy=500.0,
                                         rchisq_r=1.0)), 20.0)
+    # past the ceiling the misfit statement means "not a galaxy model"
+    assert not gated_row(pd.Series(dict(type='SER', uJy=500.0,
+                                        rchisq_r=5e4)), 20.0)
 
 
 def test_build_components_names_normalization_and_margin():

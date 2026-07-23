@@ -188,6 +188,7 @@ def check_coverage(
         *,
         aperture_arcsec: float,
         seeing_arcsec: float,
+        nodata: np.ndarray | None = None,
 ) -> float:
     """Data-sufficiency gate for the science aperture.
 
@@ -205,6 +206,10 @@ def check_coverage(
         Science aperture radius.
     seeing_arcsec : float
         Band PSF FWHM; sets the protected core radius.
+    nodata : np.ndarray, optional
+        Unusable-pixel map override -- the stamp's own map augmented
+        with masks discovered later (artifact pixels), so the gate can
+        re-judge the aperture. [default: the stamp's map]
 
     Returns
     -------
@@ -216,15 +221,16 @@ def check_coverage(
     ApertureCoverageError
         When the aperture cannot be honestly measured.
     """
+    bad = stamp.nodata if nodata is None else nodata
     in_aperture = stamp.rr < aperture_arcsec
     n_aper = int(in_aperture.sum())
-    coverage = 1.0 - float((stamp.nodata & in_aperture).sum()) / max(n_aper, 1)
+    coverage = 1.0 - float((bad & in_aperture).sum()) / max(n_aper, 1)
     if coverage < recipe.COVERAGE_MIN:
         raise ApertureCoverageError(
             f"aperture coverage {coverage:.2f} < {recipe.COVERAGE_MIN:g} "
-            f"(off footprint / blank pixels)", coverage)
+            f"(off footprint / blank / artifact pixels)", coverage)
     core_radius = max(3.0, 2.0 * seeing_arcsec)
-    if (stamp.nodata & (stamp.rr < core_radius)).any():
+    if (bad & (stamp.rr < core_radius)).any():
         raise ApertureCoverageError(
             f"blank pixels inside the {core_radius:g}\" core (aperture "
             f"coverage {coverage:.2f}) -- no fill can reconstruct a "

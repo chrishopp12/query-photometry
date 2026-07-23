@@ -463,6 +463,8 @@ def qa_flags(witness: dict, *, n_comps: int, consumed: list[str]) -> str:
     # background-ownership warning (flag only; never a demotion).
     if witness.get('farfield_sb') is not None:
         tokens.append(f"far={witness['farfield_sb']:+.4f}")
+    if witness.get('artifact_as2'):
+        tokens.append(f"art={witness['artifact_as2']:.0f}")
     if witness.get('target_refit_x_cat') is not None:
         tokens.append(f"refit={witness['target_refit_x_cat']:.2f}")
     solve = witness.get('solve')

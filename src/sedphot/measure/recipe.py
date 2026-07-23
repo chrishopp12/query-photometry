@@ -76,8 +76,16 @@ TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
 # field, and a RADIAL reach keeps the gate census identical on every
 # instrument (a square-stamp test would admit corner sources on a
 # rotated grid that an aligned grid excludes).
+#
+# The ceiling: far past the gate threshold, reduced chi-square flips
+# meaning from "this galaxy needs an envelope" to "these pixels are not
+# a galaxy model at all" (bleed trails and their shredded catalog
+# echoes). Such a row neither gates NOR claims pixels in the artifact
+# test -- a shape solve pointed at it can only rail its parameters
+# trying to become the artifact.
 GATE_FLUX_UJY = 100.0
 GATE_RCHISQ = 4.0
+GATE_RCHISQ_MAX = 1000.0
 
 # Ownership of blended catalog rows. A row inside the science aperture
 # whose fracflux says the light at its position is dominated by OTHER
@@ -323,6 +331,21 @@ PSF_WING_SNR = 5.0
 PSF_EXCLUDE_TARGET_AS = 25.0
 PSF_WING_FRAC_MAX = 0.10
 PSF_GRAFT_FORCE_AS = 2.5
+
+
+# ------------------------------------
+# Artifacts: mask, never fit
+# ------------------------------------
+# Catastrophic-pixel gate. A pixel is artifact when it sits
+# ARTIFACT_SIG x sigma above the outer level AND ARTIFACT_RATIO x the
+# catalog scene's own claim there: an under-predicted real source
+# fails the ratio test, a bleed trail is orders of magnitude past
+# both. Regions below ARTIFACT_AREA_MIN are left to the flood channel.
+# Broad structure at the noise scale is background machinery, not
+# artifact -- a per-pixel threshold cannot see it and must not try.
+ARTIFACT_SIG = 20.0
+ARTIFACT_RATIO = 5.0
+ARTIFACT_AREA_MIN = 15.0     # arcsec^2
 
 
 # ------------------------------------
