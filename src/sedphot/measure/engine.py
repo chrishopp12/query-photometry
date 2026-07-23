@@ -361,6 +361,7 @@ def measure_band(
     # centered on masked pixels leave the scene with them, and the
     # coverage gate re-judges the aperture.
     artifact_as2, artifact_ujy = 0.0, 0.0
+    artifact_mask = None
     if comps:
         wrecks = (set(cat.index[cat['rchisq_r'] > recipe.GATE_RCHISQ_MAX])
                   if 'rchisq_r' in cat else set())
@@ -375,6 +376,7 @@ def measure_band(
                                            stamp.rr, stamp.sigma,
                                            stamp.pixscale)
         if artifact_as2 > 0:
+            artifact_mask = art
             artifact_ujy = float(raw[art].sum() * stamp.cf)
             good = good & ~art
             ny_a, nx_a = art.shape
@@ -575,7 +577,7 @@ def measure_band(
         cx=stamp.cx, cy=stamp.cy,
         image=image, scene=scene_img + bg['img'],
         filled=np.where(contributing, fill['filled'], np.nan),
-        mask=mask, good=good)
+        mask=mask, good=good, artifact=artifact_mask)
     return measurement, new_ref
 
 

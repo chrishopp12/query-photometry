@@ -94,12 +94,13 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
         (f"masked ({witness['maskfrac_ap']:.0%} of aperture) + filled",
          filled),
     ]
-    window = float(measurement['rgrid'].max() + 8.0) / pixscale
+    # Full stamp, always: a window cropped to the analysis radius hides
+    # exactly the field context (edge artifacts, off-window monsters)
+    # that most needs a human eye.
+    artifact = measurement.get('artifact')
     for i, (title, img) in enumerate(panels):
         ax = axes[i]
         ax.imshow(img, origin="lower", cmap=gray, norm=norm)
-        ax.set_xlim(cx - window, cx + window)
-        ax.set_ylim(cy - window, cy + window)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_title(title, fontsize=9)
@@ -108,6 +109,9 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
         if i in (2, 3) and mask.any():
             ax.contour(mask, levels=[0.5], colors="tab:green",
                        linewidths=0.6)
+        if i in (0, 3) and artifact is not None:
+            ax.contour(artifact, levels=[0.5], colors="orange",
+                       linewidths=1.0)
 
     ax = axes[4]
     ax.plot(measurement['rgrid'], measurement['enclosed_ujy'], "o-",
