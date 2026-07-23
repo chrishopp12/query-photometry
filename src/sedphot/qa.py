@@ -73,6 +73,11 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
     filled = measurement['filled']
     mask = measurement['mask']
     good = measurement['good']
+    # The residual and measurement panels show the field the curve of
+    # growth actually integrates: the mesh removal included.
+    mesh = measurement.get('mesh')
+    if mesh is None:
+        mesh = np.zeros_like(image)
     witness = measurement['witness']
     cx, cy = measurement['cx'], measurement['cy']
     pixscale = measurement['pixscale']
@@ -90,9 +95,10 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
         (rf"data (bg {witness['bg_sb']:+.3f} $\mu$Jy/as$^2$, "
          rf"tilt {witness['bg_tilt_sb']:.3f})", shown),
         ("fitted scene + background", scene),
-        ("residual", np.where(good, image - scene, np.nan)),
-        (f"masked ({witness['maskfrac_ap']:.0%} of aperture) + filled",
-         filled),
+        (rf"residual $-$ mesh (mesh {witness.get('mesh_ap_uJy', 0):+.1f} "
+         rf"$\mu$Jy in ap)", np.where(good, image - scene - mesh, np.nan)),
+        (f"masked ({witness['maskfrac_ap']:.0%} of aperture) + filled "
+         f"$-$ mesh", filled - mesh),
     ]
     # Full stamp, always: a window cropped to the analysis radius hides
     # exactly the field context (edge artifacts, off-window monsters)

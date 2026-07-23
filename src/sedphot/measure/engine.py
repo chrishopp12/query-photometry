@@ -623,7 +623,7 @@ def measure_band(
         seeing_arcsec=float(seeing),
         pixscale=stamp.pixscale, cf=stamp.cf,
         cx=stamp.cx, cy=stamp.cy,
-        image=image, scene=scene_img + bg['img'],
+        image=image, scene=scene_img + bg['img'], mesh=mesh,
         filled=np.where(contributing, fill['filled'], np.nan),
         mask=mask, good=good, artifact=artifact_mask)
     return measurement, new_ref
