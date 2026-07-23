@@ -143,6 +143,27 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
 
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Cache-complete short circuit: when every requested band's stack
+    # is already on disk (or, with no request, ANY bands are cached),
+    # the CADC round trip's only product would be a band list the
+    # cached filenames already encode -- and a CADC outage must not
+    # stall a fully offline re-measure.
+    cached = {p.name.split('_')[-1].split('.')[0]: p
+              for p in sorted(cache_dir.glob('cfht_megapipe_?.fits'))}
+    wanted_now = tuple(bands) if bands else tuple(sorted(cached))
+    if cached and all(band in cached for band in wanted_now):
+        for band in wanted_now:
+            warn_undersized_cache(cached[band], size_arcsec, 'CFHT')
+        print(f"  [CFHT] cached stacks cover "
+              f"{''.join(wanted_now)}; skipping the CADC query")
+        return [ImageProduct(
+            provider='cfht', instrument='CFHT', band=band,
+            path=str(cached[band]), calib='photzp',
+            seeing_arcsec=SEEING,
+            wave_um=WAVE_UM.get(band, float('nan')))
+            for band in wanted_now]
+
     radius = (size_arcsec / 2.0) * u.arcsec
 
     try:

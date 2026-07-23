@@ -71,6 +71,21 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir.mkdir(parents=True, exist_ok=True)
     size_px = int(round(size_arcsec / PIXSCALE))
 
+    # Cache-complete short circuit: the filenames listing exists to
+    # locate stacks for download; with every requested band cached
+    # there is nothing to locate.
+    paths = {band: cache_dir / f"ps1_{band}.fits" for band in bands}
+    if all(p.exists() for p in paths.values()):
+        for band, p in paths.items():
+            warn_undersized_cache(p, size_arcsec, 'PS1')
+        print(f"  [PS1] cached cutouts cover {''.join(bands)}; "
+              f"skipping the listing query")
+        return [ImageProduct(
+            provider='panstarrs', instrument='PS1', band=band,
+            path=str(paths[band]), calib='ps1', seeing_arcsec=SEEING,
+            wave_um=WAVE_UM.get(band, float('nan')))
+            for band in bands]
+
     try:
         listing = retry_transient(
             lambda: requests.get(

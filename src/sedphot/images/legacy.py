@@ -173,10 +173,22 @@ def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
 def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
                   dr: str) -> list[ImageProduct]:
     """NERSC brick coadds: image + invvar per band, cached, hemisphere fallback."""
-    resolved = _resolve_brick(coord, dr)
-    if resolved is None:
-        return []
-    brick, hemis = resolved
+    # Cache-first brick identity: the brickname is already encoded in
+    # any cached coadd's filename, so a re-measure never needs the TAP
+    # resolution (nor survives its outages) once the files exist.
+    cached = sorted(cache_dir.glob(f'legacysurvey-{dr}-*-image-*.fits.fz')) \
+        or sorted(cache_dir.glob('legacysurvey-*-image-*.fits.fz'))
+    if cached:
+        brick = cached[0].name.replace(f'legacysurvey-{dr}-', '') \
+            .replace('legacysurvey-', '').split('-image-')[0]
+        hemis = _hemisphere(coord, dr)
+        print(f"  [Legacy] brick {brick} from cached coadds; "
+              f"skipping the TAP resolution")
+    else:
+        resolved = _resolve_brick(coord, dr)
+        if resolved is None:
+            return []
+        brick, hemis = resolved
     products: list[ImageProduct] = []
     for band in bands:
         band_paths = {}
