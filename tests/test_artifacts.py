@@ -296,3 +296,41 @@ def test_bleed_through_the_aperture_demotes(tmp_path):
     rows = [_catalog_row(wcs, cx, cy, flux_nmgy=300.0 / 3.631)]
     with pytest.raises(ApertureCoverageError):
         _measure(tmp_path, image, rows)
+
+
+def test_registry_component_claims_its_own_light():
+    """A consumed frozen component's base is at physical amplitude, so
+    its real light is claimed and the detector never masks it."""
+    from sedphot.measure.seats import apply_registry
+    from sedphot.measure.stamp import Stamp
+    from astropy.io import fits as afits
+
+    ny = nx = 201
+    wcs = _make_wcs(nx, ny)
+    cx = cy = (nx - 1) / 2.0
+    rng = np.random.default_rng(21)
+    sky = wcs.pixel_to_world(cx + 50.0, cy)
+    entry = {'J0': dict(ra=float(sky.ra.deg), dec=float(sky.dec.deg),
+                        components={'Legacy_r': [dict(
+                            kind='sersic', ra=float(sky.ra.deg),
+                            dec=float(sky.dec.deg), ellip=0.1, pa=0.0,
+                            flux_ref=500.0, reff_as=2.0, n=2.0)]})}
+    data = rng.normal(0.0, NOISE, (ny, nx))
+    stamp = Stamp(data=data, wcs=wcs, header=afits.Header(), cx=cx, cy=cy,
+                  pixscale=PIX, cf=1.0,
+                  rr=radii_arcsec((ny, nx), cx, cy, PIX),
+                  nodata=np.zeros((ny, nx), bool), sigma=NOISE,
+                  farfield_sb=None)
+    psf = moffat_kernel(1.3, PIX)
+    comps, consumed = apply_registry([], entry, stamp, psf, 'Legacy_r',
+                                     'Legacy')
+    assert consumed == ['J0']
+    frozen = comps[0]
+    # the base carries the solved flux, not a unit shape
+    assert float(frozen['base'].sum()) * stamp.cf == pytest.approx(500.0,
+                                                                   rel=0.05)
+    # and light at that amplitude is claimed: the detector stays quiet
+    raw = data + frozen['base']
+    mask, area, _ = find_artifacts(raw, ~stamp.nodata, frozen['base'],
+                                   stamp.rr, NOISE, PIX)
+    assert area == 0.0

@@ -407,11 +407,16 @@ def apply_registry(
                                     rc['ellip'], theta, x, y, shape_2d,
                                     psf, pix)
             in_stamp = float(base.sum()) * cf
-            if in_stamp < recipe.MARGIN_MIN_UJY:
-                continue
             flux_ref = float(rc['flux_ref'])
+            if in_stamp <= 0 or flux_ref < recipe.MARGIN_MIN_UJY:
+                continue
+            # Every component's base is at PHYSICAL amplitude -- the
+            # claim tests, star-stage exclusions, and ownership zones
+            # all read it that way. A unit shape column here would
+            # claim nothing and read as artifact over its own light.
+            base = base * (flux_ref / in_stamp)
             out.append(dict(
-                base=base, flux0=max(in_stamp, 1e-9), shape=None,
+                base=base, flux0=max(flux_ref, 1e-9), shape=None,
                 name=f'{name}.{j}', irow=-1, cat=flux_ref,
                 amp_lohi=(recipe.REGISTRY_AMP_BAND[0] * flux_ref,
                           recipe.REGISTRY_AMP_BAND[1] * flux_ref),
