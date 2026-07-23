@@ -68,10 +68,33 @@ def test_empirical_psf_recovers_star_fwhm():
     assert kernel.shape[0] >= 25
 
 
-@pytest.mark.parametrize('gmag', [15.7, 19.6])
+@pytest.mark.parametrize('gmag', [15.7, 22.1])
 def test_gmag_outside_window_is_skipped(gmag):
     stamp, star = star_field()
     assert empirical_psf(stamp, star_table(star, gmag=gmag)) is None
+
+
+def test_faint_star_passes_on_peak_signal():
+    # a G=20.5 star with a strong measured peak is a kernel star: the
+    # peak-S/N and ring guards do the vetting, not a magnitude window
+    stamp, star = star_field()
+    result = empirical_psf(stamp, star_table(star, gmag=20.5))
+    assert result is not None
+    assert result[2].startswith('empirical star (G=20.5')
+
+
+def test_faint_star_below_the_peak_floor_is_rejected():
+    stamp, star = star_field(amp=0.05)      # ~10 sigma peak: under the floor
+    assert empirical_psf(stamp, star_table(star, gmag=20.5)) is None
+
+
+@pytest.mark.parametrize('seeing,pixscale',
+                         [(1.0, 0.262), (0.8, 0.187), (1.4, 0.396),
+                          (2.4, 0.25)])
+def test_moffat_kernel_measures_at_its_nominal_width(seeing, pixscale):
+    from sedphot.measure.psf import _kernel_fwhm
+    kernel = moffat_kernel(seeing, pixscale)
+    assert _kernel_fwhm(kernel, pixscale) == pytest.approx(seeing, rel=0.02)
 
 
 def test_star_near_edge_is_skipped():

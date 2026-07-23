@@ -312,9 +312,12 @@ TARGET_MASK_FREE_AS = 0.0
 # rendered scene.
 MOFFAT_KERNEL_FWHM = 16.0
 
-# Empirical-PSF star window: bright enough for measurable wings, faint
-# enough to avoid saturated cores.
-PSF_STAR_GMAG = (15.8, 19.5)
+# Empirical-PSF star window. The bright limit is the saturation guard;
+# the faint limit is only a loose candidate cap -- the peak-S/N floor
+# and the ring guards are the real filter, and they scale with each
+# stamp's own depth where a fixed magnitude cannot: a deep stack's
+# best kernel star is often fainter than any shallow-survey window.
+PSF_STAR_GMAG = (15.8, 22.0)
 
 # Profile rings below this S/N hand off to a Moffat wing graft: a faint
 # star's measured outer rings are noise, and a monotone-floored noise
