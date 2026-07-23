@@ -159,7 +159,9 @@ def test_query_scene_network_writes_cache_then_reuses(tmp_path, monkeypatch):
     assert len(queries) == 1
     assert 'ls_dr9.tractor' in queries[0]
     assert 'brick_primary = 1' in queries[0]
-    assert 'flux_r > 0.5' in queries[0]
+    # The floor spans every optical band: an r-only floor silently
+    # drops very red sources that are bright in z and invisible in r.
+    assert '(flux_g > 0.5 OR flux_r > 0.5 OR flux_z > 0.5)' in queries[0]
     second = legacy.query_scene(COORD, 100.0, cache_path=cache)
     assert len(queries) == 1
     pd.testing.assert_frame_equal(first, second)
@@ -194,5 +196,6 @@ def test_query_scene_selects_release_table_and_rejects_unknown(monkeypatch):
     legacy.query_scene(COORD, 100.0, dr='dr10')
     assert 'ls_dr10.tractor' in queries[0]
     assert 'psfsize_i' in queries[0]       # dr10 carries the i-band set
+    assert 'flux_i > 0.5' in queries[0]    # ... and the floor spans it
     with pytest.raises(ValueError, match='unknown Legacy release'):
         legacy.query_scene(COORD, 100.0, dr='dr8')

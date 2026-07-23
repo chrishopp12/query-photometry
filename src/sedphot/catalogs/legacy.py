@@ -358,8 +358,8 @@ def query_scene(
     """Every Tractor source in a cone for scene construction, cache-first.
 
     Unlike query(), which reduces to the closest source, this returns the
-    whole field above an r-band flux floor so the measurement engine can
-    model the target's neighbors.
+    whole field above a flux floor so the measurement engine can model
+    the target's neighbors.
 
     Parameters
     ----------
@@ -370,8 +370,12 @@ def query_scene(
     dr : str
         Data release, 'dr10' or 'dr9'. [default: LEGACY_DR_DEFAULT]
     min_flux_nmgy : float
-        r-band flux floor (nanomaggies); fainter sources contribute too
-        little light to earn a scene component. [default: 0.5]
+        Flux floor (nanomaggies) applied to the BRIGHTEST of the
+        release's optical bands: fainter sources contribute too little
+        light in any band to earn a scene component, while an r-only
+        floor silently drops very red sources that are bright in z and
+        invisible in r -- unmodeled, unmasked point sources in the red
+        bands. [default: 0.5]
     cache_path : str or Path, optional
         CSV cache. When the file exists it is read and returned with no
         network call; otherwise the query result is written there.
@@ -394,12 +398,16 @@ def query_scene(
         ra = float(coord.ra.deg)
         dec = float(coord.dec.deg)
         radius_deg = radius_arcsec / 3600.0
+        optical = [band for band in LEGACY_BANDS[dr]
+                   if not band.startswith('W')]
+        floor = ' OR '.join(f'flux_{band} > {min_flux_nmgy}'
+                            for band in optical)
         query = f"""
         SELECT {', '.join(scene_cols(dr))}
         FROM {table}
         WHERE brick_primary = 1
           AND 't' = q3c_radial_query(ra, dec, {ra:.8f}, {dec:.8f}, {radius_deg:.8f})
-          AND flux_r > {min_flux_nmgy}
+          AND ({floor})
         """
 
         def _run():
