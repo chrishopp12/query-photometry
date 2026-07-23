@@ -357,8 +357,8 @@ def measure_band(
     # the catalog scene's own claim (bleed trails, satellite streaks)
     # leave the usable map exactly like nodata. A catalog wreck
     # (rchisq_r past the gate ceiling) is the catalog's echo of the
-    # artifact itself and may not claim pixels here; components
-    # centered on masked pixels leave the scene with them, and the
+    # artifact itself and may not claim pixels here; a component whose
+    # claim the mask mostly OWNS leaves the scene with it, and the
     # coverage gate re-judges the aperture.
     artifact_as2, artifact_ujy = 0.0, 0.0
     artifact_mask = None
@@ -375,12 +375,28 @@ def measure_band(
             artifact_mask = art
             artifact_ujy = float(raw[art].sum() * stamp.cf)
             good = good & ~art
+            # Void by footprint OWNERSHIP, never center membership: a
+            # component leaves the scene only when the mask covers the
+            # MAJORITY of its claim (its render above sigma). A broad
+            # source nicked by a narrow artifact keeps its column and
+            # solves from its clean pixels -- the design excises the
+            # masked rows -- while a row whose light sits wholly
+            # inside the artifact is its catalog echo and goes with it.
             ny_a, nx_a = art.shape
-            voided = [c['name'] for c in comps
-                      if c['name'] not in system
-                      and 0 <= int(round(c['y'])) < ny_a
-                      and 0 <= int(round(c['x'])) < nx_a
-                      and art[int(round(c['y'])), int(round(c['x']))]]
+            voided = []
+            for c in comps:
+                if c['name'] in system:
+                    continue
+                claim = c['base'] > stamp.sigma
+                if claim.any():
+                    owned = float(art[claim].mean())
+                else:
+                    cy_i, cx_i = int(round(c['y'])), int(round(c['x']))
+                    owned = (float(art[cy_i, cx_i])
+                             if 0 <= cy_i < ny_a and 0 <= cx_i < nx_a
+                             else 0.0)
+                if owned > 0.5:
+                    voided.append(c['name'])
             if voided:
                 comps = [c for c in comps if c['name'] not in voided]
             print(f"    {tag}artifact: {artifact_as2:.0f} as2 "

@@ -138,7 +138,7 @@ def test_bleed_is_masked_its_row_voided_and_the_flux_clean(tmp_path):
     image = (render_sersic([ampl, 2.0 / PIX, 2.0, 0.0, 0.0, cx, cy],
                            (ny, nx), psf)
              + 0.02 + rng.normal(0.0, NOISE, (ny, nx)))
-    image[38:43, 20:220] += 30.0         # the bleed: ~600 sigma, 41" south
+    image[36:47, 20:220] += 30.0         # the bleed: ~600 sigma, 41" south
     wcs = _make_wcs(nx, ny)
     rows = [
         _catalog_row(wcs, cx, cy, flux_nmgy=f_target / 3.631),
@@ -156,6 +156,63 @@ def test_bleed_is_masked_its_row_voided_and_the_flux_clean(tmp_path):
     assert 'art=' in measurement_to_row(m)['flags']
     # the trail's pixels left the usable map (stamp frame: 10 px offset)
     assert not m['good'][30, 100]
+
+
+def test_broad_source_nicked_by_a_narrow_artifact_is_kept(tmp_path):
+    """A narrow strip through a broad neighbor's center must not void
+    it: the mask owns only a sliver of its claim, so the component
+    stays and its amplitude solves from the clean pixels alone."""
+    from sedphot.measure.engine import measure_band
+    from sedphot.results import ImageProduct
+
+    rng = np.random.default_rng(14)
+    nx = ny = 241
+    psf = moffat_kernel(1.3, PIX)
+    cx = cy = (nx - 1) / 2.0
+    f_target, f_nb = 300.0, 400.0
+    dx = 40.0                              # neighbor 20" east
+    image = (render_sersic([ampl_from_total(f_target / 3.631, 2.0 / PIX,
+                                            2.0, 0.0),
+                            2.0 / PIX, 2.0, 0.0, 0.0, cx, cy],
+                           (ny, nx), psf)
+             + render_sersic([ampl_from_total(f_nb / 3.631, 4.0 / PIX,
+                                              1.0, 0.0),
+                              4.0 / PIX, 1.0, 0.0, 0.0, cx + dx, cy],
+                             (ny, nx), psf)
+             + 0.02 + rng.normal(0.0, NOISE, (ny, nx)))
+    # a 3-px vertical strip straight through the neighbor's center
+    image[:, int(cx + dx) - 1:int(cx + dx) + 2] += 30.0
+    wcs = _make_wcs(nx, ny)
+    rows = [_catalog_row(wcs, cx, cy, flux_nmgy=f_target / 3.631),
+            _catalog_row(wcs, cx + dx, cy, flux_nmgy=f_nb / 3.631,
+                         shape_r=4.0)]
+    path = tmp_path / 'legacy_r.fits'
+    fits.PrimaryHDU(data=image.astype(np.float32),
+                    header=wcs.to_header()).writeto(path)
+    cat = pd.DataFrame(rows).sort_values(
+        'flux_r', ascending=False).reset_index(drop=True)
+    stars = pd.DataFrame(columns=['ra', 'dec', 'phot_g_mean_mag',
+                                  'parallax', 'parallax_error', 'pmra',
+                                  'pmra_error', 'pmdec', 'pmdec_error',
+                                  'ruwe'])
+    scene = dict(cat=cat, stars=stars, patches={}, registry={},
+                 registry_path=None)
+    product = ImageProduct(provider='legacy', instrument='Legacy',
+                           band='r', path=str(path), calib='nmgy',
+                           invvar_path=None, seeing_arcsec=1.3,
+                           wave_um=0.64)
+    m, _ = measure_band(
+        product, SkyCoord(RA, DEC, unit='deg'), scene, None, {},
+        aperture_arcsec=12.0, cutout_half_arcsec=55.0,
+        rgrid=np.arange(2.0, 26.0, 1.0), dump_dir=str(tmp_path))
+    witness = m['witness']
+    assert witness['artifact_as2'] > 50.0
+    assert witness['n_comps'] == 2            # the broad neighbor stays
+    z = np.load(tmp_path / 'Legacy_r_arrays.npz')
+    nb_amp = [a for a, o in zip(z['amps'], z['owners']) if o != 'target']
+    # its amplitude comes from the clean pixels, not the strip
+    assert nb_amp[0] == pytest.approx(f_nb, rel=0.3)
+    assert m['flux_ujy'] == pytest.approx(f_target, rel=0.10)
 
 
 def test_artifact_nicking_the_aperture_is_twin_filled(tmp_path):
