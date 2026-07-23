@@ -134,12 +134,46 @@ def _edge_taper(kernel: np.ndarray) -> np.ndarray:
     return tapered / tapered.sum()
 
 
+def _kernel_fwhm(kernel: np.ndarray, pixscale: float) -> float:
+    """Measured FWHM (arcsec) of a rendered kernel: azimuthal-median
+    radial profile, interpolated at half peak."""
+    size = kernel.shape[0]
+    center = size // 2
+    yy, xx = np.indices(kernel.shape)
+    r_as = np.hypot(yy - center, xx - center) * pixscale
+    edges = np.arange(0.0, (center - 1) * pixscale, 0.25 * pixscale)
+    mids = 0.5 * (edges[1:] + edges[:-1])
+    prof = np.array([np.median(kernel[(r_as >= lo) & (r_as < hi)])
+                     if ((r_as >= lo) & (r_as < hi)).any() else np.nan
+                     for lo, hi in zip(edges, edges[1:])])
+    finite = np.isfinite(prof)
+    prof = prof[finite] / kernel[center, center]
+    mids = mids[finite]
+    return 2.0 * float(np.interp(0.5, prof[::-1], mids[::-1]))
+
+
 def moffat_kernel(seeing_arcsec: float, pixscale: float) -> np.ndarray:
-    """Unit-sum Moffat kernel sized by the seeing, edge-tapered."""
+    """Unit-sum Moffat kernel that MEASURES at the requested seeing.
+
+    A kernel is only as sharp as it renders: pixel integration broadens
+    a nominal-width Moffat by several percent at survey sampling, and a
+    kernel broader than the true PSF is a floor no shape solve can get
+    under -- the refit rails its size parameters trying. The rendered
+    width is measured and the input width iterated until they agree;
+    the box stays sized by the requested seeing.
+    """
     fwhm_px = seeing_arcsec / pixscale
-    size = int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm_px)) | 1   # odd
-    return _edge_taper(
-        moffat_psf(seeing_arcsec, pixscale, size=max(size, KERNEL_MIN_PX)))
+    size = max(int(round(recipe.MOFFAT_KERNEL_FWHM * fwhm_px)) | 1,
+               KERNEL_MIN_PX)
+    width = seeing_arcsec
+    kernel = _edge_taper(moffat_psf(width, pixscale, size=size))
+    for _ in range(3):
+        measured = _kernel_fwhm(kernel, pixscale)
+        if abs(measured - seeing_arcsec) <= 0.01 * seeing_arcsec:
+            break
+        width = max(width * seeing_arcsec / measured, 0.3 * pixscale)
+        kernel = _edge_taper(moffat_psf(width, pixscale, size=size))
+    return kernel
 
 
 # ------------------------------------
