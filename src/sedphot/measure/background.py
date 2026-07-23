@@ -230,3 +230,58 @@ def ambient_surface(
     yy, xx = np.indices((ny, nx))
     return interp(np.stack([yy.ravel(), xx.ravel()],
                            axis=1)).reshape((ny, nx))
+
+
+# ------------------------------------
+# The measurement-side residual mesh
+# ------------------------------------
+def residual_mesh(
+        resid: np.ndarray,
+        vote: np.ndarray,
+        pixscale: float,
+) -> np.ndarray:
+    """Post-fit background surface: the bin-median mesh of the residual.
+
+    Built on light no model claimed -- image minus fitted scene minus
+    the plane -- and subtracted only inside the curve of growth, never
+    fed back into any fit. The construction bounds its resolution to
+    background scales: 5-arcsec bin medians, one-bin Gaussian smoothing
+    (NaN-interpolating, so non-voting bins fill from neighbors), and a
+    bilinear return to pixels with queries CLAMPED to the bin-center
+    hull (no extrapolation growth at the stamp edge). Structure sharper
+    than about two bins -- cores, PSF residuals, fit dipoles -- is
+    invisible to it by construction, so the mesh can only ever own
+    background-scale light, and a well-fit source leaves it nothing
+    to take.
+
+    Parameters
+    ----------
+    resid : np.ndarray
+        Fit residual (counts): image - fitted scene - background plane.
+    vote : np.ndarray
+        Pixels allowed to vote (usable and not neighbor-masked).
+    pixscale : float
+        Pixel scale (arcsec/px).
+
+    Returns
+    -------
+    mesh : np.ndarray
+        The residual background surface per pixel (counts); zeros when
+        fewer than nine bins vote.
+    """
+    row_starts, col_starts, bin_px, medians = bin_grid(resid, vote,
+                                                       pixscale)
+    if np.isfinite(medians).sum() <= 8:
+        return np.zeros_like(resid)
+    smoothed = convolve(medians, Gaussian2DKernel(1.0), boundary='extend',
+                        nan_treatment='interpolate', preserve_nan=False)
+    interp = RegularGridInterpolator(
+        (row_starts + bin_px / 2.0, col_starts + bin_px / 2.0), smoothed,
+        bounds_error=False, fill_value=None)
+    ny, nx = resid.shape
+    yy, xx = np.indices((ny, nx))
+    ys = np.clip(yy.ravel(), row_starts[0] + bin_px / 2.0,
+                 row_starts[-1] + bin_px / 2.0)
+    xs = np.clip(xx.ravel(), col_starts[0] + bin_px / 2.0,
+                 col_starts[-1] + bin_px / 2.0)
+    return interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)

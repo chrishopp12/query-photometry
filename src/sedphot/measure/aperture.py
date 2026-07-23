@@ -403,14 +403,84 @@ def witness_row(
 # ------------------------------------
 # Error model
 # ------------------------------------
+def empap_error(
+        resid: np.ndarray,
+        vote: np.ndarray,
+        stamp: Stamp,
+        *,
+        aperture_arcsec: float,
+) -> tuple[float, int]:
+    """Empty-aperture flux error: the measured scatter of the statistic
+    the row reports.
+
+    Source-free apertures are placed on the FINAL residual (fitted
+    scene, plane, and mesh all subtracted) and their robust scatter is
+    the standard deviation of "an aperture flux containing no target"
+    -- pixel correlation, leftover background structure, and confusion
+    included by measurement, where sigma x sqrt(N) assumes them away.
+    Placements avoid the target zone, must fit on the stamp, and need
+    90 percent votable pixels (partly-masked apertures stay, rescaled
+    -- real target apertures have masked pixels too). The RNG is
+    seeded: a re-measure reproduces its error bar exactly.
+
+    Parameters
+    ----------
+    resid : np.ndarray
+        Final residual (counts): image - scene - plane - mesh, zeroed
+        on unusable pixels.
+    vote : np.ndarray
+        Pixels allowed to participate (usable and not neighbor-masked).
+    stamp : Stamp
+        This band's stamp.
+    aperture_arcsec : float
+        Science aperture radius.
+
+    Returns
+    -------
+    error : tuple
+        (err_ujy, n_placed); err_ujy is 0.0 when fewer than
+        recipe.EMPAP_MIN_APS placements fit (caller keeps the
+        white-noise value).
+    """
+    rng = np.random.default_rng(0)
+    ny, nx = resid.shape
+    ap_px = aperture_arcsec / stamp.pixscale
+    yy, xx = np.indices((ny, nx))
+    exclude_as = aperture_arcsec + recipe.BG_RMIN_AS
+    sums: list[float] = []
+    tries = 0
+    while len(sums) < recipe.EMPAP_N and tries < 100 * recipe.EMPAP_N:
+        tries += 1
+        x = rng.uniform(ap_px, nx - 1 - ap_px)
+        y = rng.uniform(ap_px, ny - 1 - ap_px)
+        if np.hypot(x - stamp.cx, y - stamp.cy) * stamp.pixscale \
+                < exclude_as:
+            continue
+        inside = np.hypot(yy - y, xx - x) * stamp.pixscale \
+            < aperture_arcsec
+        ok = inside & vote
+        n_in = int(inside.sum())
+        n_ok = int(ok.sum())
+        if n_in == 0 or n_ok < 0.9 * n_in:
+            continue
+        sums.append(float(resid[ok].sum()) * n_in / n_ok)
+    if len(sums) < recipe.EMPAP_MIN_APS:
+        return 0.0, len(sums)
+    values = np.asarray(sums) * stamp.cf
+    mad = float(np.median(np.abs(values - np.median(values))))
+    return 1.4826 * mad, len(sums)
+
+
 def flux_error(
         stamp: Stamp,
         good: np.ndarray,
         *,
         aperture_arcsec: float,
 ) -> tuple[float, str]:
-    """Statistical flux error: inverse variance when the archive serves
-    it, global sky rms otherwise. Floors and inflation belong to the
+    """White-noise flux error: inverse variance when the archive serves
+    it, global sky rms otherwise -- the FLOOR under the measured
+    empty-aperture error (empap_error), kept for stamps too small to
+    place enough empty apertures. Floors and inflation belong to the
     SED fitter, never to this table.
 
     Parameters
@@ -465,6 +535,8 @@ def qa_flags(witness: dict, *, n_comps: int, consumed: list[str]) -> str:
         tokens.append(f"far={witness['farfield_sb']:+.4f}")
     if witness.get('artifact_as2'):
         tokens.append(f"art={witness['artifact_as2']:.0f}")
+    if witness.get('mesh_ap_uJy') is not None:
+        tokens.append(f"mesh={witness['mesh_ap_uJy']:+.1f}")
     if witness.get('target_refit_x_cat') is not None:
         tokens.append(f"refit={witness['target_refit_x_cat']:.2f}")
     solve = witness.get('solve')

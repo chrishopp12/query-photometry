@@ -8,7 +8,8 @@ confirmed stars, optional patches and registry), then measure every
 band through the same chain --
 
     stamp -> PSF -> components -> registry -> stars -> seats ->
-    joint fit -> mask -> twin fill -> curve of growth -> witnesses
+    joint fit -> mask -> residual mesh -> twin fill ->
+    curve of growth -> witnesses
 
 Bands are measured per instrument: the first band in preference order
 is the REFERENCE -- it solves seat shapes -- and its siblings transfer
@@ -41,10 +42,10 @@ from astropy.coordinates import SkyCoord
 from ..catalogs import gaia
 from ..catalogs.legacy import LEGACY_DR_DEFAULT, query_scene
 from . import recipe
-from .aperture import (build_mask, curve, enclosed_at, flux_error,
-                       twin_fill, witness_row)
+from .aperture import (build_mask, curve, empap_error, enclosed_at,
+                       flux_error, twin_fill, witness_row)
 from .artifacts import find_artifacts
-from .background import bin_plane
+from .background import bin_plane, residual_mesh
 from .components import apply_patches, build_components, drop_target_shreds
 from .psf import resolve_psf
 from .render import ampl_from_total, conv_same, sersic_profile
@@ -485,6 +486,16 @@ def measure_band(
     mask, flood_ujy = build_mask(comps, fitted_by, star_masks, stamp,
                                  seeing, scene_img, neighbors, image,
                                  good, tag=tag)
+    # Post-fit residual mesh: the bin-median surface of the light no
+    # model claimed, subtracted only inside the curve of growth. Every
+    # fitted component (the target's own envelope included) is already
+    # out of the residual, so a well-fit source leaves the mesh
+    # nothing to take; its resolution floor (~2 bins) makes compact
+    # light invisible to it either way.
+    mesh = residual_mesh(image - scene_img - bg['img'], good & ~mask,
+                         stamp.pixscale)
+    mesh_ap_ujy = float(mesh[stamp.rr < aperture_arcsec].sum()
+                        * stamp.cf)
     model_fill = target_img + bg['img']
     # Artifact holes ride the SAME fill channel as neighbor masks, at
     # every radius: left out, the curve of growth would count masked
@@ -496,7 +507,8 @@ def measure_band(
     contributing = good | ((stamp.rr < aperture_arcsec) & ~good)
     if artifact_mask is not None:
         contributing = contributing | artifact_mask
-    enc = curve(np.where(contributing, fill['filled'] - bg['img'], 0.0),
+    enc = curve(np.where(contributing,
+                         fill['filled'] - bg['img'] - mesh, 0.0),
                 stamp.rr, stamp.cf, rgrid)
     model_cog = curve(target_img, stamp.rr, stamp.cf, rgrid)
 
@@ -521,6 +533,7 @@ def measure_band(
     witness['artifact_uJy'] = round(artifact_ujy, 1)
     if artifact_as2 > 0:
         witness['artifact_flood_as2'] = round(flood_as2, 1)
+    witness['mesh_ap_uJy'] = round(mesh_ap_ujy, 1)
     witness['gated'] = [c['name'] for c in comps
                         if c['shape'] is not None and c['gate']]
     witness['seat_owners'] = sorted(drops)
@@ -529,7 +542,7 @@ def measure_band(
     # unmasked pixels) + (fill vs model on masked pixels), exactly.
     ap_good = (stamp.rr < aperture_arcsec) & good
     witness['resid_unmasked_ap_uJy'] = round(float(
-        (image - scene_img - bg['img'])[ap_good & ~mask].sum()
+        (image - scene_img - bg['img'] - mesh)[ap_good & ~mask].sum()
         * stamp.cf), 1)
     witness['fill_vs_model_ap_uJy'] = round(fill['fill_vs_model_ap'], 1)
     if ('target' in drops or target_shape is not None) \
@@ -550,10 +563,22 @@ def measure_band(
     flux_ap = enclosed_at(rgrid, enc, aperture_arcsec)
     err_ujy, err_model = flux_error(stamp, good,
                                     aperture_arcsec=aperture_arcsec)
-    print(f"    {tag}f_ap = {flux_ap:.1f} uJy, excess "
+    # The reported error is MEASURED: source-free aperture sums of the
+    # final residual carry the correlation, structure, and confusion a
+    # white-noise propagation is blind to. The larger of the two wins;
+    # a stamp too small to place enough apertures keeps the white-
+    # noise value under its own label.
+    resid_final = np.where(good, image - scene_img - bg['img'] - mesh,
+                           0.0)
+    emp_err, n_emp = empap_error(resid_final, good & ~mask, stamp,
+                                 aperture_arcsec=aperture_arcsec)
+    if n_emp >= recipe.EMPAP_MIN_APS and emp_err > err_ujy:
+        err_ujy, err_model = emp_err, 'empap'
+    print(f"    {tag}f_ap = {flux_ap:.1f} +- {err_ujy:.1f} uJy "
+          f"({err_model}), excess "
           f"{witness['excess_growth_uJy']:+.1f} (own "
-          f"{witness['model_own_growth_uJy']:+.1f}), "
-          f"{time.time() - t0:.0f}s")
+          f"{witness['model_own_growth_uJy']:+.1f}), mesh "
+          f"{mesh_ap_ujy:+.1f}, {time.time() - t0:.0f}s")
 
     if registry_update and fit['seats_local']:
         harvest_seats(scene['registry'], fit['seats_local'],
