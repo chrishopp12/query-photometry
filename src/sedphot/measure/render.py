@@ -103,6 +103,12 @@ def sersic_profile(
     """
     ampl, reff_px, n, ellip, theta, x0, y0 = params
     reff_px = max(reff_px, 0.3)
+    # The MINOR axis needs the same sampling floor as the effective
+    # radius: pixel-center evaluation of a sub-pixel sliver underflows
+    # to a numerically empty image, and a normalized design column
+    # built from one is an explosive basis whose amplitude rails at
+    # any bound.
+    ellip = min(ellip, 1.0 - 0.3 / reff_px)
     yy, xx = np.indices(shape_2d, dtype=float)
     ct, st = np.cos(theta), np.sin(theta)
     xmaj = ((xx - x0) * ct + (yy - y0) * st) / reff_px
