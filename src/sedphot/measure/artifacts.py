@@ -35,7 +35,6 @@ def find_artifacts(
         raw: np.ndarray,
         good: np.ndarray,
         pred: np.ndarray,
-        protect: np.ndarray,
         rr: np.ndarray,
         sigma: float,
         pixscale: float,
@@ -48,8 +47,10 @@ def find_artifacts(
     the ratio test, a bleed trail is orders of magnitude past both.
     Candidates must form a connected region of at least
     ARTIFACT_AREA_MIN arcsec^2 -- smaller leftovers stay with the flood
-    channel. Pixels where the target system's own render exceeds sigma
-    are never eligible.
+    channel. The target protects its own pixels the same way every
+    source does, through its claim in pred: light beyond the ratio on
+    the core is instrument damage, and the coverage gate demotes the
+    band rather than measure it.
 
     Parameters
     ----------
@@ -58,10 +59,9 @@ def find_artifacts(
     good : np.ndarray
         Usable-pixel map.
     pred : np.ndarray
-        Catalog scene at catalog amplitudes (counts): every component
-        base whose catalog row is trusted to claim pixels.
-    protect : np.ndarray
-        The target system's own rendered light (counts).
+        The whole catalog scene at catalog amplitudes (counts), target
+        system included: every component whose catalog row is trusted
+        to claim pixels.
     rr : np.ndarray
         Radius map about the target (arcsec).
     sigma : float
@@ -83,8 +83,7 @@ def find_artifacts(
     resid = raw - level
     cand = (good
             & (resid > recipe.ARTIFACT_SIG * sigma)
-            & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0))
-            & ~(protect > sigma))
+            & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0)))
     if not cand.any():
         return np.zeros_like(good), 0.0
     cand = binary_dilation(cand, iterations=2)

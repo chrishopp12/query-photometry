@@ -32,8 +32,7 @@ def test_streak_detected_small_blob_left_to_flood():
     raw[150:152, 40:42] += 5.0           # bright but tiny: flood territory
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, area = find_artifacts(raw, good, np.zeros(shape),
-                                np.zeros(shape), rr, NOISE, PIX)
+    mask, area = find_artifacts(raw, good, np.zeros(shape), rr, NOISE, PIX)
     assert mask[22, 100] and mask[22, 35]
     assert not mask[151, 41]
     assert not mask[100, 100]
@@ -52,24 +51,25 @@ def test_claimed_bright_source_is_protected():
     pred[55:65, 55:65] = 1.5
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, _ = find_artifacts(raw, good, pred, np.zeros(shape), rr,
-                             NOISE, PIX)
+    mask, _ = find_artifacts(raw, good, pred, rr, NOISE, PIX)
     assert not mask[60, 60]
     assert mask[140, 140]
 
 
-def test_target_zone_is_never_eligible():
+def test_core_damage_beyond_the_claim_is_masked():
+    """The target guards its core through its claim, not by fiat: light
+    far past the ratio ON the target is instrument damage (and the
+    coverage gate downstream demotes the band)."""
     rng = np.random.default_rng(5)
     shape = (201, 201)
     raw = rng.normal(0.0, NOISE, shape)
     raw[95:107, 95:107] += 5.0
-    protect = np.zeros(shape)
-    protect[90:112, 90:112] = 2.0 * NOISE
+    pred = np.zeros(shape)
+    pred[90:112, 90:112] = 2.0 * NOISE       # a real-but-faint claim
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, area = find_artifacts(raw, good, np.zeros(shape), protect, rr,
-                                NOISE, PIX)
-    assert area == 0.0 and not mask.any()
+    mask, area = find_artifacts(raw, good, pred, rr, NOISE, PIX)
+    assert mask[100, 100] and area > recipe.ARTIFACT_AREA_MIN
 
 
 # ------------------------------------
@@ -156,6 +156,34 @@ def test_bleed_is_masked_its_row_voided_and_the_flux_clean(tmp_path):
     assert 'art=' in measurement_to_row(m)['flags']
     # the trail's pixels left the usable map (stamp frame: 10 px offset)
     assert not m['good'][30, 100]
+
+
+def test_artifact_nicking_the_aperture_is_twin_filled(tmp_path):
+    """An artifact clipping the aperture edge below the coverage budget
+    is reconstructed by the same twin fill as a neighbor mask, and the
+    flux survives."""
+    rng = np.random.default_rng(13)
+    nx = ny = 241
+    psf = moffat_kernel(1.3, PIX)
+    cx = cy = (nx - 1) / 2.0
+    f_target = 300.0
+    ampl = ampl_from_total(f_target / 3.631, 2.0 / PIX, 2.0, 0.0)
+    image = (render_sersic([ampl, 2.0 / PIX, 2.0, 0.0, 0.0, cx, cy],
+                           (ny, nx), psf)
+             + 0.02 + rng.normal(0.0, NOISE, (ny, nx)))
+    # a streak segment whose chord clips the aperture rim from one side
+    image[int(cy) - 24:int(cy) - 22, int(cx) - 5:nx] += 30.0
+    wcs = _make_wcs(nx, ny)
+    rows = [_catalog_row(wcs, cx, cy, flux_nmgy=f_target / 3.631)]
+    m = _measure(tmp_path, image, rows)
+    witness = m['witness']
+    assert witness['artifact_as2'] > 30.0
+    in_ap_holes = (~m['good']) & (np.hypot(
+        *np.meshgrid(np.arange(m['good'].shape[1]) - m['cx'],
+                     np.arange(m['good'].shape[0]) - m['cy'])) * PIX < 12.0)
+    assert in_ap_holes.any()                  # the aperture was nicked
+    assert witness['twinfrac'] > 0.9          # and mirror-reconstructed
+    assert m['flux_ujy'] == pytest.approx(f_target, rel=0.10)
 
 
 def test_bleed_through_the_aperture_demotes(tmp_path):

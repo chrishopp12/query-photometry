@@ -366,15 +366,11 @@ def measure_band(
         wrecks = (set(cat.index[cat['rchisq_r'] > recipe.GATE_RCHISQ_MAX])
                   if 'rchisq_r' in cat else set())
         pred = np.zeros_like(raw)
-        protect = np.zeros_like(raw)
         for c in comps:
-            if c['name'] in system:
-                protect += c['base']
             if c['irow'] not in wrecks:
                 pred += c['base']
-        art, artifact_as2 = find_artifacts(raw, good, pred, protect,
-                                           stamp.rr, stamp.sigma,
-                                           stamp.pixscale)
+        art, artifact_as2 = find_artifacts(raw, good, pred, stamp.rr,
+                                           stamp.sigma, stamp.pixscale)
         if artifact_as2 > 0:
             artifact_mask = art
             artifact_ujy = float(raw[art].sum() * stamp.cf)
@@ -472,9 +468,16 @@ def measure_band(
                                  seeing, scene_img, neighbors, image,
                                  good, tag=tag)
     model_fill = target_img + bg['img']
-    fill = twin_fill(image, neighbors, mask, good, stamp, model_fill,
+    # Artifact holes ride the SAME fill channel as neighbor masks, at
+    # every radius: left out, the curve of growth would count masked
+    # artifact pixels as zero flux and bias every witness measured
+    # beyond them.
+    fill_mask = mask if artifact_mask is None else (mask | artifact_mask)
+    fill = twin_fill(image, neighbors, fill_mask, good, stamp, model_fill,
                      aperture_arcsec=aperture_arcsec, tag=tag)
     contributing = good | ((stamp.rr < aperture_arcsec) & ~good)
+    if artifact_mask is not None:
+        contributing = contributing | artifact_mask
     enc = curve(np.where(contributing, fill['filled'] - bg['img'], 0.0),
                 stamp.rr, stamp.cf, rgrid)
     model_cog = curve(target_img, stamp.rr, stamp.cf, rgrid)

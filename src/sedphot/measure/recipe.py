@@ -340,9 +340,13 @@ PSF_GRAFT_FORCE_AS = 2.5
 # ARTIFACT_SIG x sigma above the outer level AND ARTIFACT_RATIO x the
 # catalog scene's own claim there: an under-predicted real source
 # fails the ratio test, a bleed trail is orders of magnitude past
-# both. Regions below ARTIFACT_AREA_MIN are left to the flood channel.
-# Broad structure at the noise scale is background machinery, not
-# artifact -- a per-pixel threshold cannot see it and must not try.
+# both. The target's claim guards its core like any source's; damage
+# beyond the ratio on the core is masked and the coverage gate demotes
+# the band. Regions below ARTIFACT_AREA_MIN are left to the flood
+# channel. Masked artifact holes twin-fill exactly like neighbor
+# masks, at every radius. Broad structure at the noise scale is
+# background machinery, not artifact -- a per-pixel threshold cannot
+# see it and must not try.
 ARTIFACT_SIG = 20.0
 ARTIFACT_RATIO = 5.0
 ARTIFACT_AREA_MIN = 15.0     # arcsec^2
