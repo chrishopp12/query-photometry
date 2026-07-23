@@ -32,7 +32,8 @@ def make_stamp(data, pixscale=0.5):
                  sigma=sigma, farfield_sb=None)
 
 
-def star_field(amp=10.0, offset_px=(0.0, 120.0), shape=(321, 321), seed=42):
+def star_field(amp=10.0, offset_px=(0.0, 120.0), shape=(321, 321), seed=42,
+               fwhm=FWHM_TRUE):
     """Noise stamp with one beta=3 Moffat star; return (stamp, star coord).
 
     Offsets and shape are PIXELS at PIX = 0.25"/px: the default puts
@@ -44,7 +45,7 @@ def star_field(amp=10.0, offset_px=(0.0, 120.0), shape=(321, 321), seed=42):
     sy = (shape[0] - 1) / 2.0 + offset_px[1]
     yy, xx = np.indices(shape)
     r_as = np.hypot(yy - sy, xx - sx) * PIX
-    gamma = FWHM_TRUE / (2.0 * np.sqrt(2.0 ** (1.0 / 3.0) - 1.0))
+    gamma = fwhm / (2.0 * np.sqrt(2.0 ** (1.0 / 3.0) - 1.0))
     data += amp * (1.0 + (r_as / gamma) ** 2) ** -3.0
     stamp = make_stamp(data, pixscale=PIX)
     return stamp, stamp.wcs.pixel_to_world(sx, sy)
@@ -95,6 +96,18 @@ def test_moffat_kernel_measures_at_its_nominal_width(seeing, pixscale):
     from sedphot.measure.psf import _kernel_fwhm
     kernel = moffat_kernel(seeing, pixscale)
     assert _kernel_fwhm(kernel, pixscale) == pytest.approx(seeing, rel=0.02)
+
+
+def test_marginally_sampled_kernel_keeps_the_star_width():
+    # 5 px FWHM: the regime where ring medians with a clamped center
+    # rendered flat-topped kernels broader than the star itself
+    from sedphot.measure.psf import _kernel_fwhm
+    stamp, star = star_field(fwhm=1.25)
+    result = empirical_psf(stamp, star_table(star))
+    assert result is not None
+    kernel, fwhm, _ = result
+    assert fwhm == pytest.approx(1.25, rel=0.08)
+    assert _kernel_fwhm(kernel, PIX) == pytest.approx(1.25, rel=0.08)
 
 
 def test_star_near_edge_is_skipped():

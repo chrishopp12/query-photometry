@@ -44,8 +44,11 @@ BG_ANNULUS_MIN_PX = 200       # annulus pixels required for its median
 
 # Profile-ring schedule: pixel-aware core rings (never sub-pixel or
 # narrower than the floor), then fixed-width wing rings to the end.
-RING_STEP_PX = 2.0            # core ring width (pixels)
-RING_STEP_MIN_AS = 0.5        # core ring width floor (arcsec)
+# The core step must RESOLVE a marginally-sampled PSF: at 5 px FWHM,
+# 2 px rings put the whole core in three medians and the rendered
+# kernel broadens.
+RING_STEP_PX = 1.0            # core ring width (pixels)
+RING_STEP_MIN_AS = 0.25       # core ring width floor (arcsec)
 RING_CORE_END_AS = 3.0        # core rings end here; wing rings begin
 RING_WING_STEP_AS = 0.5       # wing ring width (arcsec)
 RING_END_AS = 10.5            # schedule stop (last ring edge at 10.0)
@@ -255,15 +258,36 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
             ring_n[i] = ring.sum()
             if ring.sum() >= 3:
                 prof[i] = np.median(data[ring]) - background
+                # The median VALUE of a monotone profile over a ring is
+                # the profile at the ring's median RADIUS -- medians
+                # commute with monotone maps. At marginal sampling a
+                # ring holds a few discrete radii with unequal counts,
+                # and the geometric mid is the wrong abscissa.
+                mids[i] = float(np.median(rr_star[ring]))
         if not np.isfinite(prof[0]) or np.isfinite(prof).sum() < MIN_FINITE_RINGS:
             continue
         finite = np.isfinite(prof)
         prof = np.interp(mids, mids[finite], prof[finite])
 
-        # Saturated / blended cores are non-monotone at the center;
-        # compare against the mean of the next two rings so single
-        # noisy rings cannot veto a good star.
+        # Anchor r = 0 at the star's own background-subtracted peak.
+        # Ring medians live at ring mid-radii, and a render that clamps
+        # inside the first mid gets a flat-topped kernel broader than
+        # the star it was measured from -- the median of a peaked core
+        # is not its peak.
+        iy, ix = int(round(sy)), int(round(sx))
+        core_peak = float(np.nanmax(
+            data[max(iy - 1, 0):iy + 2, max(ix - 1, 0):ix + 2])) - background
+        if not np.isfinite(core_peak) or core_peak <= 0:
+            continue
+        mids = np.concatenate([[0.0], mids])
+        prof = np.concatenate([[core_peak], prof])
+        ring_n = np.concatenate([[1.0], ring_n])
+
+        # Saturated / blended cores are non-monotone at the center --
+        # at the anchor or between the first rings; means over two
+        # rings keep single noisy rings from vetoing a good star.
         if (np.mean(prof[1:3]) > prof[0]
+                or np.mean(prof[2:4]) > prof[1]
                 or prof[0] < PEAK_MIN_SIGMA * stamp.sigma):
             continue
         prof = np.clip(np.minimum.accumulate(prof), 0.0, None)
