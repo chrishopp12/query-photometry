@@ -72,6 +72,22 @@ def test_core_damage_beyond_the_claim_is_masked():
     assert mask[100, 100] and area > recipe.ARTIFACT_AREA_MIN
 
 
+def test_bright_core_is_model_business_not_artifact():
+    """Data far above a LOUD claim (a cD cusp over its smooth model, a
+    saturated star over its clipped catalog flux) is shape business:
+    the detector operates only where the scene is quiet."""
+    rng = np.random.default_rng(8)
+    shape = (201, 201)
+    raw = rng.normal(0.0, NOISE, shape)
+    pred = np.zeros(shape)
+    pred[95:107, 95:107] = 30.0 * NOISE      # loud claim
+    raw += 5.0 * pred                        # data 5x past it
+    good = np.ones(shape, bool)
+    rr = radii_arcsec(shape, 100.0, 100.0, PIX)
+    mask, area, _ = find_artifacts(raw, good, pred, rr, NOISE, PIX)
+    assert area == 0.0 and not mask.any()
+
+
 def test_soft_skirt_floods_from_the_hard_core():
     """A soft-edged artifact's sub-threshold skirt is taken by the
     seeded flood; equally bright unseeded structure elsewhere is not."""

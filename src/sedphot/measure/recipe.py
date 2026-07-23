@@ -341,12 +341,14 @@ PSF_GRAFT_FORCE_AS = 2.5
 # ------------------------------------
 # Catastrophic-pixel gate. A pixel is artifact when it sits
 # ARTIFACT_SIG x sigma above the outer level AND ARTIFACT_RATIO x the
-# catalog scene's own claim there: an under-predicted real source
-# fails the ratio test, a bleed trail is orders of magnitude past
-# both. The target's claim guards its core like any source's; damage
-# beyond the ratio on the core is masked and the coverage gate demotes
-# the band. Regions below ARTIFACT_AREA_MIN are left to the flood
-# channel. A soft-edged artifact's sub-threshold skirt is taken by a
+# catalog scene's own claim there AND the scene is QUIET there (claim
+# below the same ARTIFACT_SIG floor): an under-predicted real source
+# fails the ratio test, a bright real core -- a cD cusp above its
+# smooth model, a saturated star above its clipped catalog flux --
+# fails the quiet test, and a bleed trail on quiet sky is orders of
+# magnitude past all three. Damage beyond the ratio on quiet parts of
+# the core is masked and the coverage gate demotes the band. Regions
+# below ARTIFACT_AREA_MIN are left to the flood channel. A soft-edged artifact's sub-threshold skirt is taken by a
 # seeded flood (K_ISO departure from the ambient surface, unclaimed
 # pixels only, FLOOD_MAX_AS growth -- the neighbor-flood constants),
 # so the boundary follows the artifact's own light and stops at real
@@ -357,6 +359,22 @@ PSF_GRAFT_FORCE_AS = 2.5
 ARTIFACT_SIG = 20.0
 ARTIFACT_RATIO = 5.0
 ARTIFACT_AREA_MIN = 15.0     # arcsec^2
+
+
+# ------------------------------------
+# Empty-aperture error
+# ------------------------------------
+# The reported flux error is the robust scatter of EMPAP_N source-free
+# aperture sums of the final residual (scene, plane, and mesh all
+# subtracted) -- correlation, background structure, and confusion
+# included by measurement instead of excluded by assumption. A
+# sigma x sqrt(N) propagation understates the truth by an order of
+# magnitude on resampled stacks. Where an inverse-variance map exists
+# the larger of the two is reported; when the stamp cannot host
+# EMPAP_MIN_APS placements the white-noise path stands, labeled as
+# such.
+EMPAP_N = 200
+EMPAP_MIN_APS = 30
 
 
 # ------------------------------------

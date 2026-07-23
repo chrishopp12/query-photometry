@@ -83,9 +83,16 @@ def find_artifacts(
         return np.zeros_like(good), 0.0, 0.0
     level = float(np.median(raw[outer]))
     resid = raw - level
+    # The detector operates only where the scene is QUIET (claim below
+    # the same significance floor): artifacts live on quiet sky, while
+    # a bright real source's core -- a cD cusp above its smooth model,
+    # a saturated star above its clipped catalog flux -- is the least
+    # quiet place in the field, and disagreement there is model
+    # business (shape misfit, the star stage), never instrument damage.
     cand = (good
             & (resid > recipe.ARTIFACT_SIG * sigma)
-            & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0)))
+            & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0))
+            & (pred < recipe.ARTIFACT_SIG * sigma))
     if not cand.any():
         return np.zeros_like(good), 0.0, 0.0
     cand = binary_dilation(cand, iterations=2)
