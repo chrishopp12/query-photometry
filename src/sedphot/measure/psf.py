@@ -264,16 +264,13 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
                 # ring holds a few discrete radii with unequal counts,
                 # and the geometric mid is the wrong abscissa.
                 mids[i] = float(np.median(rr_star[ring]))
-        if not np.isfinite(prof[0]) or np.isfinite(prof).sum() < MIN_FINITE_RINGS:
-            continue
-        finite = np.isfinite(prof)
-        prof = np.interp(mids, mids[finite], prof[finite])
-
         # Anchor r = 0 at the star's own background-subtracted peak.
-        # Ring medians live at ring mid-radii, and a render that clamps
-        # inside the first mid gets a flat-topped kernel broader than
+        # Ring medians live at ring radii, and a render that clamps
+        # inside the first one gets a flat-topped kernel broader than
         # the star it was measured from -- the median of a peaked core
-        # is not its peak.
+        # is not its peak. The anchor IS the core measurement: sparse
+        # inner rings (1-px rings can hold fewer than 3 pixels) are
+        # interpolated against it.
         iy, ix = int(round(sy)), int(round(sx))
         core_peak = float(np.nanmax(
             data[max(iy - 1, 0):iy + 2, max(ix - 1, 0):ix + 2])) - background
@@ -282,6 +279,10 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
         mids = np.concatenate([[0.0], mids])
         prof = np.concatenate([[core_peak], prof])
         ring_n = np.concatenate([[1.0], ring_n])
+        if np.isfinite(prof).sum() < MIN_FINITE_RINGS:
+            continue
+        finite = np.isfinite(prof)
+        prof = np.interp(mids, mids[finite], prof[finite])
 
         # Saturated / blended cores are non-monotone at the center --
         # at the anchor or between the first rings; means over two
@@ -311,12 +312,28 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
         low = np.where(snr < recipe.PSF_WING_SNR)[0]
         first_low = int(low[0]) if len(low) else len(mids)
         if first_low < len(mids) and mids[min(first_low, len(mids) - 1)] < GRAFT_MAX_AS:
-            graft_radius = mids[max(first_low - 1, 1)]
+            j = max(first_low - 1, 1)
+            graft_radius = mids[j]
             gamma = fwhm / (2 * np.sqrt(2 ** (1 / MOFFAT_BETA) - 1))
-            moffat = (1 + (mids / gamma) ** 2) ** -MOFFAT_BETA
-            scale = prof[max(first_low - 1, 1)] / max(moffat[max(first_low - 1, 1)], 1e-12)
+            # The continuation's SLOPE comes from the star itself: a
+            # fixed beta=3 pastes transition-zone wings the measured
+            # shoulder contradicts -- real survey PSFs fall steeper
+            # there, and a unit-sum kernel pays for phantom wings by
+            # suppressing its core, broadening every convolution.
+            # Beta is fit on the reliable shoulder rings; the default
+            # stands only when they are too few to say.
+            beta = MOFFAT_BETA
+            shoulder = ((snr >= recipe.PSF_WING_SNR)
+                        & (mids >= 0.75 * fwhm) & (mids <= graft_radius))
+            if shoulder.sum() >= 3:
+                xw = np.log1p((mids[shoulder] / gamma) ** 2)
+                yw = np.log(np.maximum(prof[shoulder], 1e-12))
+                beta = float(np.clip(-np.polyfit(xw, yw, 1)[0], 2.0, 8.0))
+            moffat = (1 + (mids / gamma) ** 2) ** -beta
+            scale = prof[j] / max(moffat[j], 1e-12)
             prof = np.where(mids >= graft_radius, moffat * scale, prof)
-            graft_note = f'+moffat wings r>{graft_radius:.1f}as'
+            graft_note = (f'+moffat wings (b={beta:.1f}) '
+                          f'r>{graft_radius:.1f}as')
 
         # Render the circular profile onto a square kernel. The box
         # never outgrows the measured profile's support: beyond the
