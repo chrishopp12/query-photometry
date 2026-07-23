@@ -32,7 +32,7 @@ def test_streak_detected_small_blob_left_to_flood():
     raw[150:152, 40:42] += 5.0           # bright but tiny: flood territory
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, area = find_artifacts(raw, good, np.zeros(shape), rr, NOISE, PIX)
+    mask, area, _ = find_artifacts(raw, good, np.zeros(shape), rr, NOISE, PIX)
     assert mask[22, 100] and mask[22, 35]
     assert not mask[151, 41]
     assert not mask[100, 100]
@@ -51,7 +51,7 @@ def test_claimed_bright_source_is_protected():
     pred[55:65, 55:65] = 1.5
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, _ = find_artifacts(raw, good, pred, rr, NOISE, PIX)
+    mask, _, _ = find_artifacts(raw, good, pred, rr, NOISE, PIX)
     assert not mask[60, 60]
     assert mask[140, 140]
 
@@ -68,8 +68,45 @@ def test_core_damage_beyond_the_claim_is_masked():
     pred[90:112, 90:112] = 2.0 * NOISE       # a real-but-faint claim
     good = np.ones(shape, bool)
     rr = radii_arcsec(shape, 100.0, 100.0, PIX)
-    mask, area = find_artifacts(raw, good, pred, rr, NOISE, PIX)
+    mask, area, _ = find_artifacts(raw, good, pred, rr, NOISE, PIX)
     assert mask[100, 100] and area > recipe.ARTIFACT_AREA_MIN
+
+
+def test_soft_skirt_floods_from_the_hard_core():
+    """A soft-edged artifact's sub-threshold skirt is taken by the
+    seeded flood; equally bright unseeded structure elsewhere is not."""
+    rng = np.random.default_rng(6)
+    shape = (201, 201)
+    raw = rng.normal(0.0, NOISE, shape)
+    raw[20:25, 30:170] += 5.0            # hard core, 100 sigma
+    raw[17:28, 30:170] += 0.15           # 3-sigma skirt hugging the core
+    raw[150:156, 30:80] += 0.15          # 3-sigma blob, no seed: untouched
+    good = np.ones(shape, bool)
+    rr = radii_arcsec(shape, 100.0, 100.0, PIX)
+    mask, area, flood_area = find_artifacts(raw, good, np.zeros(shape),
+                                            rr, NOISE, PIX)
+    assert flood_area > 0.0
+    assert mask[17, 100] and mask[27, 100]     # skirt rows taken
+    assert not mask[152, 50]                   # unseeded blob left alone
+    assert area > 300.0
+
+
+def test_skirt_flood_stops_at_a_claim():
+    """The flood cannot grow into pixels a real source claims: the
+    boundary stays surgical exactly where the field is crowded."""
+    rng = np.random.default_rng(7)
+    shape = (201, 201)
+    raw = rng.normal(0.0, NOISE, shape)
+    raw[20:25, 30:170] += 5.0            # hard core
+    raw[25:34, 30:170] += 0.2            # skirt spreading north
+    pred = np.zeros(shape)
+    pred[29:60, 30:170] = 0.2            # a claimed source's light there
+    good = np.ones(shape, bool)
+    rr = radii_arcsec(shape, 100.0, 100.0, PIX)
+    mask, _, flood_area = find_artifacts(raw, good, pred, rr, NOISE, PIX)
+    assert flood_area > 0.0
+    assert mask[27, 100]                       # unclaimed skirt flooded
+    assert not mask[31, 100]                   # claimed rows respected
 
 
 # ------------------------------------

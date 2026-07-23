@@ -29,6 +29,7 @@ import numpy as np
 from scipy.ndimage import binary_dilation, label
 
 from . import recipe
+from .background import ambient_surface
 
 
 def find_artifacts(
@@ -71,21 +72,22 @@ def find_artifacts(
 
     Returns
     -------
-    mask, area : np.ndarray, float
-        Boolean artifact mask and its total area (arcsec^2).
+    mask, area, flood_area : np.ndarray, float, float
+        Boolean artifact mask, its total area, and the part of that
+        area added by the skirt flood (arcsec^2).
     """
     outer = good & (rr > recipe.BG_RMIN_AS)
     if outer.sum() < 100:
         outer = good
     if not outer.any():
-        return np.zeros_like(good), 0.0
+        return np.zeros_like(good), 0.0, 0.0
     level = float(np.median(raw[outer]))
     resid = raw - level
     cand = (good
             & (resid > recipe.ARTIFACT_SIG * sigma)
             & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0)))
     if not cand.any():
-        return np.zeros_like(good), 0.0
+        return np.zeros_like(good), 0.0, 0.0
     cand = binary_dilation(cand, iterations=2)
     labels, n_regions = label(cand)
     mask = np.zeros_like(cand)
@@ -94,4 +96,29 @@ def find_artifacts(
         region = labels == i
         if region.sum() >= px_min:
             mask |= region
-    return mask, float(mask.sum()) * pixscale ** 2
+
+    # Skirt flood: a soft-edged artifact leaves light below the hard
+    # threshold that a model would otherwise chase. Seeded ONLY by the
+    # hard mask, growth follows contiguous pixels departing from the
+    # local ambient surface that the scene does not claim -- claims
+    # stop it, so the boundary stays surgical exactly where the field
+    # is crowded. Same constants as the neighbor-mask flood: no new
+    # knobs.
+    flood_area = 0.0
+    if mask.any():
+        ambient = ambient_surface(raw, good, mask, rr, pixscale)
+        if ambient is not None:
+            skirt = (good & np.isfinite(ambient)
+                     & (raw - ambient > recipe.K_ISO * sigma)
+                     & (pred < 0.5 * sigma))
+            flood = mask.copy()
+            for _ in range(int(round(recipe.FLOOD_MAX_AS / pixscale))):
+                grown = binary_dilation(flood) & skirt
+                if not (grown & ~flood).any():
+                    break
+                flood = flood | grown
+            new_px = flood & ~mask
+            if new_px.any():
+                flood_area = float(new_px.sum()) * pixscale ** 2
+                mask = flood
+    return mask, float(mask.sum()) * pixscale ** 2, flood_area

@@ -343,10 +343,14 @@ PSF_GRAFT_FORCE_AS = 2.5
 # both. The target's claim guards its core like any source's; damage
 # beyond the ratio on the core is masked and the coverage gate demotes
 # the band. Regions below ARTIFACT_AREA_MIN are left to the flood
-# channel. Masked artifact holes twin-fill exactly like neighbor
-# masks, at every radius. Broad structure at the noise scale is
-# background machinery, not artifact -- a per-pixel threshold cannot
-# see it and must not try.
+# channel. A soft-edged artifact's sub-threshold skirt is taken by a
+# seeded flood (K_ISO departure from the ambient surface, unclaimed
+# pixels only, FLOOD_MAX_AS growth -- the neighbor-flood constants),
+# so the boundary follows the artifact's own light and stops at real
+# sources' claims. Masked artifact holes twin-fill exactly like
+# neighbor masks, at every radius. Broad structure at the noise scale
+# is background machinery, not artifact -- a per-pixel threshold
+# cannot see it and must not try.
 ARTIFACT_SIG = 20.0
 ARTIFACT_RATIO = 5.0
 ARTIFACT_AREA_MIN = 15.0     # arcsec^2

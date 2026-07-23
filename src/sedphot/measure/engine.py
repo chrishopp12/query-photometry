@@ -369,8 +369,8 @@ def measure_band(
         for c in comps:
             if c['irow'] not in wrecks:
                 pred += c['base']
-        art, artifact_as2 = find_artifacts(raw, good, pred, stamp.rr,
-                                           stamp.sigma, stamp.pixscale)
+        art, artifact_as2, flood_as2 = find_artifacts(
+            raw, good, pred, stamp.rr, stamp.sigma, stamp.pixscale)
         if artifact_as2 > 0:
             artifact_mask = art
             artifact_ujy = float(raw[art].sum() * stamp.cf)
@@ -401,6 +401,8 @@ def measure_band(
                 comps = [c for c in comps if c['name'] not in voided]
             print(f"    {tag}artifact: {artifact_as2:.0f} as2 "
                   f"({artifact_ujy:.0f} uJy) masked, never fit"
+                  + (f", {flood_as2:.0f} as2 of it skirt flood"
+                     if flood_as2 > 0 else "")
                   + (f"; voids {voided}" if voided else ""))
             check_coverage(stamp, aperture_arcsec=aperture_arcsec,
                            seeing_arcsec=seeing, nodata=~good)
@@ -517,6 +519,8 @@ def measure_band(
     witness['n_comps'] = len(comps)
     witness['artifact_as2'] = round(artifact_as2, 1)
     witness['artifact_uJy'] = round(artifact_ujy, 1)
+    if artifact_as2 > 0:
+        witness['artifact_flood_as2'] = round(flood_as2, 1)
     witness['gated'] = [c['name'] for c in comps
                         if c['shape'] is not None and c['gate']]
     witness['seat_owners'] = sorted(drops)
