@@ -93,6 +93,56 @@ def test_gated_row_truth_table():
                                         rchisq_r=5e4)), 20.0)
 
 
+def test_red_row_with_no_scene_band_flux_still_renders():
+    """A row admitted on its z flux alone (flux_r <= 0, a legitimate
+    non-detection) must not become a dead zero column: the render
+    floors at a tenth of the brightest band, so the column exists and
+    the ceiling (100x the render) clears the true band flux."""
+    stamp = make_stamp(np.zeros((200, 200)))
+    psf = moffat_kernel(1.3, PIX)
+    red = catalog_row(stamp.wcs, stamp.cx + 30, stamp.cy, flux_nmgy=-0.05,
+                      type_='PSF', sersic=0.0, shape_r=0.0)
+    red['flux_z'] = 30.0 / 3.631          # bright in z only
+    red['uJy'] = red['flux_r'] * 3.631
+    cat = make_catalog([
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=100.0), red])
+    comps = build_components(cat, stamp, psf, 1.3)
+    comp = next(c for c in comps if c['name'] != 'target')
+    assert comp['flux0'] > 2.0            # ~0.1 x 30 uJy, alive
+    assert float(comp['base'].sum()) > 0.0
+    # ceiling headroom: 100 x flux0 comfortably covers the z flux
+    assert 100.0 * comp['flux0'] > 30.0
+
+
+def test_phantom_component_amplitude_drives_to_zero():
+    """A cataloged component with NO light in the band solves to
+    amplitude zero cleanly (bounded nonnegative solve) and subtracts
+    nothing -- absence is the easy direction."""
+    rng = np.random.default_rng(23)
+    stamp = make_stamp(np.zeros((200, 200)))
+    psf = moffat_kernel(1.3, PIX)
+    f_target = 300.0
+    # cf = 1 on a bare make_stamp: counts ARE microjanskys here
+    image = (inject_sersic((200, 200), psf, flux=f_target,
+                           reff_px=2.0 / PIX, n=2.0, x=stamp.cx, y=stamp.cy)
+             + rng.normal(0.0, NOISE, (200, 200)))
+    cat = make_catalog([
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy,
+                    flux_nmgy=f_target / 3.631, shape_r=2.0),
+        # cataloged 40" east at 100 uJy -- absent from the pixels
+        catalog_row(stamp.wcs, stamp.cx + 40.0 / PIX, stamp.cy,
+                    flux_nmgy=100.0 / 3.631, shape_r=1.5),
+    ])
+    comps = build_components(cat, stamp, psf, 1.3)
+    from sedphot.measure.solve import joint_fit
+    fit = joint_fit(image, np.ones((200, 200), bool), stamp, psf, comps,
+                    [], set())
+    by_name = dict(zip([c['name'] for c in fit['fixed']], fit['amps']))
+    phantom = next(n for n in by_name if n != 'target')
+    assert by_name[phantom] == pytest.approx(0.0, abs=1.0)
+    assert by_name['target'] == pytest.approx(f_target, rel=0.05)
+
+
 def test_build_components_names_normalization_and_margin():
     stamp = make_stamp(np.zeros((200, 200)))
     psf = moffat_kernel(1.3, PIX)

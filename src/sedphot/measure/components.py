@@ -260,7 +260,18 @@ def build_components(
         shape = shape_from_tractor(row['type'], row['sersic'],
                                    row['shape_r'], row['shape_e1'],
                                    row['shape_e2'])
-        counts = max(float(row['uJy']), 0.0) / cf
+        # Render amplitude: the scene band, floored at a tenth of the
+        # row's brightest band. A very red source (r <= 0, z bright)
+        # would otherwise render a DEAD zero column -- admitted to the
+        # scene yet unmodelable, its light unclaimed -- and a near-zero
+        # r render pins the amplitude ceiling (AMP_MAX_X_CAT x the
+        # in-stamp flux) below the true flux of its bright bands. For
+        # every ordinary color the maximum picks the scene band and
+        # nothing changes.
+        best_ujy = max((float(row[c]) for c in
+                        ('flux_g', 'flux_r', 'flux_i', 'flux_z')
+                        if c in row), default=0.0) * NANOMAGGY_TO_UJY
+        counts = max(float(row['uJy']), 0.1 * best_ujy, 0.0) / cf
         # Off-stamp and beyond-reach rows never gate: the pixels that
         # would constrain a shape solve are not (reliably) on the
         # stamp, and the wing-level light such a source lands here is
