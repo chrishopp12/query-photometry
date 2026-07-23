@@ -361,12 +361,10 @@ def measure_band(
     image = raw - star_img
 
     # A masked-mode star (in-zone revert) has no column and nothing
-    # subtracted: its light is still in the pixels. The solve must not
-    # see it -- an unmodeled bright source in the fitting pixels pulls
-    # the target refit and the background exactly like the original
-    # deletion bug did, one stage later. Its predicted footprint
-    # leaves the solve's pixel set; the measurement-side mask and fill
-    # handle it after the fit as before.
+    # subtracted: its light is still in the pixels, and an unmodeled
+    # bright source in the fitting pixels pulls the target refit and
+    # the background. Its predicted footprint leaves the solve's pixel
+    # set; the measurement-side mask and fill cover it after the fit.
     good_fit = good
     masked_mode = {rec['comp'] for rec in star_log
                    if rec.get('mode') == 'masked'}
