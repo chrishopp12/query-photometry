@@ -461,19 +461,24 @@ def apply_registry(
                 base = render_nuker(rc['rb_as'] / pix, rc['beta'],
                                     rc['ellip'], theta, x, y, shape_2d,
                                     psf, pix)
-            unit_in_stamp = float(base.sum()) * cf
+            unit_sum = float(base.sum())          # fixed-norm shape integral
+            unit_in_stamp = unit_sum * cf
             flux_ref = float(rc['flux_ref'])
             # The component is rendered at its FITTED PHYSICAL amplitude,
             # not renormalized to this stamp. The physical amplitude is
-            # flux_ref / (home-field unit-render integral): scaling to
-            # flux_ref / (THIS stamp's unit integral) instead would cram
-            # the whole source's flux into whatever pixels are on-stamp,
-            # so an off-stamp source (a BCG whose center is past a
+            # flux_ref / (home-field shape integral): scaling to
+            # flux_ref / (THIS stamp's integral) instead would cram the
+            # whole source's flux into whatever pixels are on-stamp, so
+            # an off-stamp source (a BCG whose center is past a
             # neighbor's edge) has its thin wing multiplied many-fold.
-            # With flux_home the source keeps its true brightness and a
-            # neighbor gets exactly the wing that physically reaches it.
-            flux_home = float(rc.get('flux_home') or unit_in_stamp)
-            amp = flux_ref / flux_home if flux_home > 0 else 1.0
+            # flux_home is the home SHAPE integral (cf-free), so this
+            # stamp's own cf sets the amplitude -- per-stack zeropoints
+            # (PS1/SDSS) never leak across fields.
+            flux_home = rc.get('flux_home')
+            if flux_home:
+                amp = flux_ref / (float(flux_home) * cf)
+            else:
+                amp = flux_ref / unit_in_stamp if unit_in_stamp > 0 else 1.0
             base = base * amp
             phys_in_stamp = amp * unit_in_stamp   # the wing that reaches
             if phys_in_stamp < recipe.MARGIN_MIN_UJY \
@@ -573,12 +578,13 @@ def harvest_seats(
     health = solve_health or {}
     capped = bool(health.get('capped'))
     col_flux = seat_col_flux or [None] * len(seats)
+    cf = stamp.cf
 
     fresh: dict[str, list[dict]] = {}
     anchors: dict[str, tuple[float, float]] = {}
     dead: dict[str, str] = {}
-    for seat, sl, amp, cf in zip(seats, seat_slices(seats), seat_amps,
-                                 col_flux):
+    for seat, sl, amp, col_f in zip(seats, seat_slices(seats), seat_amps,
+                                    col_flux):
         if seat['owner'] == 'target' and not include_target:
             continue
         name = registry_name(seat['ra'], seat['dec'])
@@ -596,15 +602,16 @@ def harvest_seats(
         x, y = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(seat['ra'], seat['dec'], unit='deg'))]
         center = wcs.pixel_to_world(x + q[4], y + q[5])
-        # flux_home: the unit-render's in-stamp integral at THIS (home)
-        # field. Consumers recover the physical amplitude as
-        # flux_ref / flux_home and render the source at it, so an
-        # off-stamp neighbor gets only the wing that reaches, never the
-        # whole source crammed into its edge (the smooth-walk fix).
+        # flux_home: the home shape integral, cf-FREE (col_flux / cf =
+        # the unit-render's pixel sum). Consumers recover the physical
+        # amplitude as flux_ref / (flux_home * their own cf), so an
+        # off-stamp neighbor gets only the wing that reaches -- never
+        # the whole source crammed into its edge -- and per-stack
+        # zeropoints stay local (the smooth-walk fix).
         record = dict(kind=seat['kind'], ra=float(center.ra.deg),
                       dec=float(center.dec.deg), ellip=float(q[2]),
                       pa=float(q[3]), flux_ref=max(float(amp), 0.0),
-                      flux_home=(float(cf) if cf else None),
+                      flux_home=(float(col_f) / cf if col_f else None),
                       vantage=('target' if seat['owner'] == 'target'
                                else 'neighbor'))
         if seat['kind'] == 'sersic':
