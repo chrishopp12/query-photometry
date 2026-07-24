@@ -4,7 +4,7 @@ background.py
 Scene Background: One Owner, One Estimator
 ---------------------------------------------------------
 The scene engine's background is estimated here and nowhere else: a
-plane through sigma-clipped bin medians with bin-level MAD rejection.
+plane through sigma-clipped bin MEANS with bin-level MAD rejection.
 The plane owns light varying at cutout scale -- a level and a tilt,
 nothing sharper. Bins coherently elevated beyond the rejection
 threshold (halo skirts, tidal light) are source structure and lose
@@ -15,7 +15,17 @@ The plane never sits in a design matrix next to component amplitudes
 -- it alternates with the amplitude solve, each estimated on the
 other's residual.
 
-ambient_surface shares the same bin grid: a smoothed bin-median
+The bin statistic is a clipped mean, not a median, because photometry
+SUMS pixels: the background must estimate the mean sky under the
+aperture, and a median silently diverges from it on any skewed or
+spiked pixel distribution. Survey frames carry such spikes (heavily
+repeated values from upstream integerization), and a spiked histogram
+mode-locks bin medians: their bin-to-bin scatter collapses far below
+noise, the MAD rejection threshold collapses with it and thrashes,
+and the background inherits a (mean - median) x area flux systematic.
+The clip supplies the robustness the median was doing duty for.
+
+ambient_surface shares the same bin grid: a smoothed bin-mean
 surface that downstream consumers (the flood mask channel, the twin
 fill's asymmetry localization) read as the local ambient level.
 
@@ -46,19 +56,22 @@ def bin_grid(
         usable: np.ndarray,
         pixscale: float,
 ) -> tuple[np.ndarray, np.ndarray, int, np.ndarray]:
-    """Sigma-clipped median of the image in each bin of a regular grid.
+    """Sigma-clipped MEAN of the image in each bin of a regular grid.
 
-    The shared front end of bin_plane and ambient_surface, so both
-    consumers see the same bins. A bin votes only when at least
-    BIN_MIN_FRAC of its pixels are usable -- a bin dominated by masked
-    or missing pixels has no honest median to offer.
+    The shared front end of bin_plane, ambient_surface, and
+    residual_mesh, so every consumer sees the same bins. A bin votes
+    only when at least BIN_MIN_FRAC of its pixels are usable -- a bin
+    dominated by masked or missing pixels has no honest level to
+    offer. The statistic is a clipped mean, never a median: photometry
+    sums pixels, and on the spiked pixel histograms real survey frames
+    carry, bin medians mode-lock (see the module docstring).
 
     Parameters
     ----------
     work : np.ndarray
         Stamp-shaped image (counts).
     usable : np.ndarray
-        Boolean map of pixels allowed to vote in the bin medians.
+        Boolean map of pixels allowed to vote in the bin levels.
     pixscale : float
         Pixel scale (arcsec/px); sets the bin size from recipe.BIN_AS.
 
@@ -70,15 +83,15 @@ def bin_grid(
         First stamp column of each bin column.
     bin_px : int
         Bin size (px).
-    medians : np.ndarray
-        Clipped median per bin, shape (len(row_starts),
+    levels : np.ndarray
+        Clipped mean per bin, shape (len(row_starts),
         len(col_starts)), NaN where a bin does not vote.
     """
     bin_px = max(int(round(recipe.BIN_AS / pixscale)), 4)
     ny, nx = work.shape
     row_starts = np.arange(0, ny - bin_px + 1, bin_px)
     col_starts = np.arange(0, nx - bin_px + 1, bin_px)
-    medians = np.full((len(row_starts), len(col_starts)), np.nan)
+    levels = np.full((len(row_starts), len(col_starts)), np.nan)
     # A vectorized variant of this loop measures slower at identical
     # output -- the per-bin blocks are small and cheap. Measure before
     # optimizing.
@@ -88,10 +101,10 @@ def bin_grid(
             voters = usable[block]
             if voters.sum() < recipe.BIN_MIN_FRAC * bin_px * bin_px:
                 continue
-            _, median, _ = sigma_clipped_stats(work[block][voters],
-                                               sigma=3.0, maxiters=5)
-            medians[i, j] = median
-    return row_starts, col_starts, bin_px, medians
+            mean, _, _ = sigma_clipped_stats(work[block][voters],
+                                             sigma=3.0, maxiters=5)
+            levels[i, j] = mean
+    return row_starts, col_starts, bin_px, levels
 
 
 # ------------------------------------
@@ -103,7 +116,7 @@ def bin_plane(
         rr: np.ndarray,
         pixscale: float,
 ) -> dict:
-    """THE background: a plane through the voting bin medians.
+    """THE background: a plane through the voting bin levels.
 
     Within-bin clipping cannot catch a bin that is uniformly bright,
     so rejection also happens at the bin level: bins elevated beyond
@@ -139,11 +152,11 @@ def bin_plane(
             residual mesh) zero themselves over this region.
     """
     usable = good & (rr > recipe.BG_RMIN_AS)
-    row_starts, col_starts, bin_px, medians = bin_grid(work, usable,
-                                                       pixscale)
+    row_starts, col_starts, bin_px, levels = bin_grid(work, usable,
+                                                      pixscale)
     ny, nx = work.shape
-    ii, jj = np.where(np.isfinite(medians))
-    pts = medians[ii, jj]
+    ii, jj = np.where(np.isfinite(levels))
+    pts = levels[ii, jj]
 
     # Centered / normalized design at the bin centers: the constant
     # column reads directly as the level at the stamp center, and the
@@ -196,7 +209,7 @@ def ambient_surface(
         rr: np.ndarray,
         pixscale: float,
 ) -> np.ndarray | None:
-    """Smoothed bin-median surface: the local ambient reference.
+    """Smoothed bin-level surface: the local ambient reference.
 
     Same bins as bin_plane, with masked pixels also barred from
     voting and no plane fit at all: the consumers compare each pixel
@@ -252,12 +265,12 @@ def residual_mesh(
         *,
         level_px: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Post-fit background surface: the bin-median mesh of the residual.
+    """Post-fit background surface: the bin-level mesh of the residual.
 
     Built on light no model claimed -- image minus fitted scene minus
     the plane -- and subtracted only inside the curve of growth, never
     fed back into any fit. The construction bounds its resolution to
-    background scales: 5-arcsec bin medians, one-bin Gaussian smoothing
+    background scales: 5-arcsec bin levels, one-bin Gaussian smoothing
     (NaN-interpolating, so non-voting bins fill from neighbors), and a
     bilinear return to pixels with queries CLAMPED to the bin-center
     hull (no extrapolation growth at the stamp edge). Structure sharper

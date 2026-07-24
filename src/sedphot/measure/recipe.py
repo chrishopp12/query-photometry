@@ -6,7 +6,7 @@ Scene-Engine Recipe Constants
 Every science knob of the scene measurement engine in one place. The
 measurement recipe is: build a scene from the survey catalog, subtract
 measured stars, jointly solve component amplitudes (and shapes, where the
-catalog declares misfit) against a bin-median-plane background, then mask,
+catalog declares misfit) against a bin-level-plane background, then mask,
 fill, and integrate a curve of growth to the aperture flux.
 
 Notes:
@@ -161,10 +161,12 @@ STAR_REVERT_AMP_BAND = (0.5, 2.0)
 # ------------------------------------
 # Background: one owner, one estimator
 # ------------------------------------
-# The background is a plane through sigma-clipped bin medians,
+# The background is a plane through sigma-clipped bin MEANS
+# (photometry sums pixels; a median mode-locks on the spiked
+# histograms real survey frames carry),
 # alternating with the amplitude solve until its constant converges. It
 # never sits in a design matrix next to component amplitudes.
-BIN_AS = 5.0            # median-grid bin size
+BIN_AS = 5.0            # bin-grid bin size
 BG_RMIN_AS = 15.0       # bins inside this target radius are excluded
 BIN_MIN_FRAC = 0.5      # a bin votes only if half its pixels are usable
 
