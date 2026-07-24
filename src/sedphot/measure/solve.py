@@ -109,37 +109,57 @@ def _scale_params(seats: list[dict], p, s_px: float) -> np.ndarray:
 # ------------------------------------
 # Seat rendering
 # ------------------------------------
+def seat_anchors(seats: list[dict], stamp: Stamp) -> list[tuple]:
+    """Per-seat (x, y, t0, slope): the WCS-derived constants of a seat.
+
+    A seat's anchor pixel and its local sky-PA -> pixel-theta map are
+    fixed for the whole solve, but a naive render recomputes them per
+    seat per evaluation -- thousands of WCS round trips per solve.
+    Compute once, thread through every render.
+    """
+    out = []
+    for seat in seats:
+        x, y = [float(v) for v in stamp.wcs.world_to_pixel(
+            SkyCoord(seat['ra'], seat['dec'], unit='deg'))]
+        t0, slope = pa_map(stamp.wcs, x, y)
+        out.append((x, y, t0, slope))
+    return out
+
+
+def _render_one(seat: dict, q, anchor: tuple, stamp: Stamp,
+                psf: np.ndarray, s_px: float) -> np.ndarray:
+    x, y, t0, slope = anchor
+    if seat['kind'] == 'sersic':
+        reff, n, ellip, pa, dx, dy = q
+        return render_sersic_boxed(
+            reff * s_px, n, ellip, t0 + slope * pa,
+            x + dx * s_px, y + dy * s_px, stamp.shape, psf)
+    rb, beta, ellip, pa, dx, dy = q
+    return render_nuker(
+        rb * s_px, beta, ellip, t0 + slope * pa,
+        x + dx * s_px, y + dy * s_px, stamp.shape, psf,
+        stamp.pixscale)
+
+
 def render_seats(
         seats: list[dict],
         p,
         stamp: Stamp,
         psf: np.ndarray,
         s_px: float = 1.0,
+        anchors: list[tuple] | None = None,
 ) -> tuple[list[np.ndarray], list[str]]:
     """All seat columns on this band's grid.
 
     Radial parameters are in reference-band pixels, rescaled
     arcsec-invariantly by s_px; centers resolve from sky coordinates
-    through this band's WCS.
+    through this band's WCS (precomputed anchors when given).
     """
+    if anchors is None:
+        anchors = seat_anchors(seats, stamp)
     cols, owners = [], []
-    shape_2d = stamp.shape
-    for seat, sl in zip(seats, seat_slices(seats)):
-        q = p[sl]
-        x, y = [float(v) for v in stamp.wcs.world_to_pixel(
-            SkyCoord(seat['ra'], seat['dec'], unit='deg'))]
-        t0, slope = pa_map(stamp.wcs, x, y)
-        if seat['kind'] == 'sersic':
-            reff, n, ellip, pa, dx, dy = q
-            cols.append(render_sersic_boxed(
-                reff * s_px, n, ellip, t0 + slope * pa,
-                x + dx * s_px, y + dy * s_px, shape_2d, psf))
-        else:
-            rb, beta, ellip, pa, dx, dy = q
-            cols.append(render_nuker(
-                rb * s_px, beta, ellip, t0 + slope * pa,
-                x + dx * s_px, y + dy * s_px, shape_2d, psf,
-                stamp.pixscale))
+    for seat, sl, anchor in zip(seats, seat_slices(seats), anchors):
+        cols.append(_render_one(seat, p[sl], anchor, stamp, psf, s_px))
         owners.append(seat['owner'])
     return cols, owners
 
@@ -207,9 +227,10 @@ def solve_shapes(
     Fty = Fn.T @ y
     kF = FtF.shape[0]
     sigma = stamp.sigma
+    slices = seat_slices(seats)
+    anchors = seat_anchors(seats, stamp)
 
-    def inner(p):
-        cols, _ = render_seats(seats, p, stamp, psf)
+    def inner_cols(cols):
         E = np.column_stack([c[good] for c in cols])
         nE = np.sqrt((E * E).sum(0))
         nE[nE == 0] = 1.0
@@ -225,20 +246,53 @@ def solve_shapes(
         sol = np.linalg.solve(Mn, np.concatenate([Fty, En.T @ y]))
         return y - (Fn @ sol[:kF] + En @ sol[kF:])
 
+    def render_all(p):
+        return [_render_one(seat, p[sl], anchor, stamp, psf, 1.0)
+                for seat, sl, anchor in zip(seats, slices, anchors)]
+
     # Ownership penalty: a halo displaced beyond its own break radius
     # is not that galaxy's halo.
-    nuker_starts = [sl.start for seat, sl in zip(seats, seat_slices(seats))
+    nuker_starts = [sl.start for seat, sl in zip(seats, slices)
                     if seat['kind'] == 'nuker']
 
     # Per-pixel loss scale: sky rms plus a fractional model-error
     # floor on the source counts (recipe.SOLVE_MODEL_ERR_FRAC).
     scale = sigma + recipe.SOLVE_MODEL_ERR_FRAC * np.abs(y)
 
-    def fun(p):
-        resid = inner(p) / scale
-        pens = [100.0 * max(0.0, np.hypot(p[i0 + 4], p[i0 + 5]) - p[i0])
+    def pens(p):
+        return [100.0 * max(0.0, np.hypot(p[i0 + 4], p[i0 + 5]) - p[i0])
                 for i0 in nuker_starts]
-        return np.append(resid, pens)
+
+    def fun(p):
+        return np.append(inner_cols(render_all(p)) / scale, pens(p))
+
+    def make_jac(lo, hi):
+        # Per-seat finite differences: perturbing one parameter
+        # re-renders ONE seat's column against the cached others,
+        # where a generic FD Jacobian re-renders every seat for every
+        # parameter -- the render count drops from (6k+1) x k to 7k.
+        def jac(p):
+            cols = render_all(p)
+            base = np.append(inner_cols(cols) / scale, pens(p))
+            J = np.empty((base.size, p.size))
+            sqrt_eps = np.sqrt(np.finfo(float).eps)
+            for j, (seat, sl, anchor) in enumerate(
+                    zip(seats, slices, anchors)):
+                for k_par in range(sl.stop - sl.start):
+                    idx = sl.start + k_par
+                    h = sqrt_eps * max(1.0, abs(p[idx]))
+                    if p[idx] + h > hi[idx]:
+                        h = -h
+                    p2 = p.copy()
+                    p2[idx] += h
+                    col2 = _render_one(seat, p2[sl], anchor, stamp,
+                                       psf, 1.0)
+                    trial = cols[:j] + [col2] + cols[j + 1:]
+                    resid2 = np.append(inner_cols(trial) / scale,
+                                       pens(p2))
+                    J[:, idx] = (resid2 - base) / h
+            return J
+        return jac
 
     lo = np.concatenate([s['lo'] for s in seats])
     hi = np.concatenate([s['hi'] for s in seats])
@@ -253,19 +307,23 @@ def solve_shapes(
         # problem; stage 2 releases the Sersic centers warm from that
         # basin. Warm re-solves skip the staging.
         lo1, hi1 = lo.copy(), hi.copy()
-        for seat, sl in zip(seats, seat_slices(seats)):
+        for seat, sl in zip(seats, slices):
             if seat['kind'] == 'sersic':
                 lo1[sl.start + 4:sl.start + 6] = -1e-6
                 hi1[sl.start + 4:sl.start + 6] = 1e-6
         stage1 = least_squares(fun, np.clip(p0, lo1, hi1),
+                               jac=make_jac(lo1, hi1),
                                bounds=(lo1, hi1), loss='soft_l1',
                                f_scale=recipe.SOLVE_FSCALE,
                                x_scale='jac', max_nfev=recipe.SOLVE_NFEV)
         p0 = stage1.x
         nfev_stage1 = int(stage1.nfev)
-    result = least_squares(fun, np.clip(p0, lo, hi), bounds=(lo, hi),
-                           loss='soft_l1', f_scale=recipe.SOLVE_FSCALE,
-                           x_scale='jac', max_nfev=recipe.SOLVE_NFEV)
+    max_nfev = (recipe.SOLVE_NFEV if p_seed is None
+                else recipe.SOLVE_NFEV_WARM)
+    result = least_squares(fun, np.clip(p0, lo, hi), jac=make_jac(lo, hi),
+                           bounds=(lo, hi), loss='soft_l1',
+                           f_scale=recipe.SOLVE_FSCALE,
+                           x_scale='jac', max_nfev=max_nfev)
     seconds = time.time() - t0
 
     param_names = []
@@ -307,10 +365,13 @@ def _transfer_setup(seats, ref, stamp, psf):
         stamp, psf)[0] if frozen_idx else [])
     p_free = (np.concatenate([p_local[slices[i]] for i in free_idx])
               if free_idx else None)
+    free_anchors = seat_anchors([seats_local[i] for i in free_idx],
+                                stamp) if free_idx else []
     colors = ref.get('col_color') or [1.0] * len(seats)
     return dict(seats_local=seats_local, p_local=p_local, slices=slices,
                 free_idx=free_idx, frozen_idx=frozen_idx,
-                frozen_cols=frozen_cols, p_free=p_free, colors=colors)
+                frozen_cols=frozen_cols, p_free=p_free,
+                free_anchors=free_anchors, colors=colors)
 
 
 def _transfer_columns(setup, seats, ref, free_cols):
@@ -418,6 +479,7 @@ def joint_fit(
     bases = fixed_bases
     design = None   # rebuilt only when the seat columns change
     gram = None     # fixed-Gram block, shared by all warm re-solves
+    anchors = seat_anchors(seats, stamp) if (solving and seats) else None
     done = False
 
     for _ in range(recipe.ALT_MAX_ITER):
@@ -429,7 +491,8 @@ def joint_fit(
                                       p_seed=p, gram=gram)
             p = solve_info['p']
             nfev_hist.append(solve_info['nfev'])
-            cols, owners = render_seats(seats, p, stamp, psf)
+            cols, owners = render_seats(seats, p, stamp, psf,
+                                        anchors=anchors)
             bounds = None
             design = None
         elif transfer is not None:
@@ -449,7 +512,8 @@ def joint_fit(
                 free_cols, _ = render_seats(
                     [transfer['seats_local'][i]
                      for i in transfer['free_idx']],
-                    transfer['p_free'], stamp, psf)
+                    transfer['p_free'], stamp, psf,
+                    anchors=transfer['free_anchors'])
             else:
                 free_cols = []
             cols, owners, bounds = _transfer_columns(transfer, seats,

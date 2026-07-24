@@ -245,8 +245,14 @@ REFIT_REFF_MAX_AS = 10.0      # the standard target-refit seat
 PA_BOX_DEG = 95.0       # position-angle freedom about the catalog value
 SNAP_BOX_AS = 2.0       # snap-to-peak search box (nearest local maximum)
 
-SOLVE_NFEV = 450        # optimizer budget per shape solve
+SOLVE_NFEV = 450        # optimizer budget per COLD shape solve stage
 SOLVE_FSCALE = 3.0      # soft-L1 scale, in units of the pixel scale
+
+# Warm re-solves (alternation iterates, transfer-band neighbor seats)
+# start at a converged neighborhood and finish in tens of evaluations;
+# a warm solve still burning hundreds is fighting a pathology the
+# extra budget cannot fix. The reduced cap contains that cost.
+SOLVE_NFEV_WARM = 150
 
 # Fractional model-error floor in the shape solve's per-pixel scale:
 # scale = sky rms + this x |source counts|. Against a bare scalar sky

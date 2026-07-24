@@ -199,6 +199,20 @@ def drop_target_shreds(
 # ------------------------------------
 # Components
 # ------------------------------------
+def _paste_kernel(canvas: np.ndarray, psf: np.ndarray, ix: int, iy: int,
+                  weight: float) -> None:
+    """Add weight x psf centered on pixel (ix, iy), clipped to canvas."""
+    kh, kw = psf.shape
+    y0 = iy - (kh - 1) // 2
+    x0 = ix - (kw - 1) // 2
+    ys, xs = max(-y0, 0), max(-x0, 0)
+    ye = min(canvas.shape[0] - y0, kh)
+    xe = min(canvas.shape[1] - x0, kw)
+    if ye > ys and xe > xs:
+        canvas[y0 + ys:y0 + ye, x0 + xs:x0 + xe] += weight * psf[ys:ye,
+                                                                 xs:xe]
+
+
 def build_components(
         cat: pd.DataFrame,
         stamp: Stamp,
@@ -315,8 +329,12 @@ def build_components(
                 # Bilinear sub-pixel placement: dumping the whole flux
                 # into the nearest pixel offsets the rendered star by
                 # up to half a pixel, and subtracting an offset model
-                # leaves a dipole residual at every point source.
-                img = np.zeros(shape_2d)
+                # leaves a dipole residual at every point source. The
+                # convolution of a delta is a TRANSLATION, so the
+                # kernel is pasted directly -- a full-frame FFT for a
+                # point source pays the whole-field price for a local
+                # operation.
+                base = np.zeros(shape_2d)
                 ix, iy = int(np.floor(x)), int(np.floor(y))
                 wx, wy = x - ix, y - iy
                 for px, py, w in ((ix, iy, (1 - wx) * (1 - wy)),
@@ -324,8 +342,7 @@ def build_components(
                                   (ix, iy + 1, (1 - wx) * wy),
                                   (ix + 1, iy + 1, wx * wy)):
                     if 0 <= px < shape_2d[1] and 0 <= py < shape_2d[0]:
-                        img[py, px] = counts * w
-                base = conv_same(img, psf)
+                        _paste_kernel(base, psf, px, py, counts * w)
             comps.append(dict(base=base,
                               flux0=max(float(base.sum()) * cf, 1e-9),
                               shape=None, **meta))

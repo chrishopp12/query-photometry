@@ -151,6 +151,31 @@ def test_phantom_component_amplitude_drives_to_zero():
     assert by_name['target'] == pytest.approx(f_target, rel=0.05)
 
 
+def test_point_source_paste_matches_convolution():
+    """A point source's base is the kernel pasted at its bilinear
+    corners -- identical to convolving the delta image, at a fraction
+    of the cost."""
+    from sedphot.measure.components import _paste_kernel
+    from sedphot.measure.render import conv_same
+    psf = moffat_kernel(1.3, PIX)
+    shape = (120, 130)
+    rng = np.random.default_rng(2)
+    for x, y in ((30.3, 40.7), (5.1, 3.2), (127.6, 116.9)):
+        img = np.zeros(shape)
+        canvas = np.zeros(shape)
+        ix, iy = int(np.floor(x)), int(np.floor(y))
+        wx, wy = x - ix, y - iy
+        for px, py, w in ((ix, iy, (1 - wx) * (1 - wy)),
+                          (ix + 1, iy, wx * (1 - wy)),
+                          (ix, iy + 1, (1 - wx) * wy),
+                          (ix + 1, iy + 1, wx * wy)):
+            if 0 <= px < shape[1] and 0 <= py < shape[0]:
+                img[py, px] = w
+                _paste_kernel(canvas, psf, px, py, w)
+        ref = conv_same(img, psf)
+        assert float(np.abs(canvas - ref).max()) < 1e-10
+
+
 def test_build_components_names_normalization_and_margin():
     stamp = make_stamp(np.zeros((200, 200)))
     psf = moffat_kernel(1.3, PIX)
