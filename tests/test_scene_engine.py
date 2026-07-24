@@ -492,8 +492,47 @@ def test_registry_harvest_then_consume_round_trip():
     frozen = [c for c in out if c.get('reg')]
     assert len(frozen) == 2
     lo, hi = recipe.REGISTRY_AMP_BAND
+    # on-stamp (this field == the home field geometry): the physical
+    # wing flux equals the home flux, so the leash lands on flux_ref
     for c in frozen:
-        assert c['amp_lohi'] == (lo * 300.0, hi * 300.0)
+        assert c['amp_lohi'][0] == pytest.approx(lo * 300.0)
+        assert c['amp_lohi'][1] == pytest.approx(hi * 300.0)
+
+
+def test_registry_offstamp_source_renders_only_its_wing():
+    """A source whose center sits off a neighbor's stamp is rendered at
+    its physical amplitude -- only the wing that reaches, NOT the whole
+    source crammed into the edge (the smooth-walk fix)."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    # a bright extended source centered 90" west, well off the +-60"
+    # stamp; its home unit-render integral (flux_home) is large, its
+    # on-THIS-stamp wing is a sliver
+    cx, cy = stamp.cx, stamp.cy
+    # 75" west: off the +-60" stamp but within the 25" consume margin
+    off_sky = stamp.wcs.pixel_to_world(cx - 150.0, cy)
+    from sedphot.measure.render import render_nuker
+    # home integral: the same nuker fully on a centered stamp
+    home = render_nuker(30.0 / PIX, 3.0, 0.2, 0.0, cx, cy,
+                        stamp.shape, psf, PIX)
+    flux_home = float(home.sum())            # cf = 1 here
+    entry = {'J0': dict(ra=float(off_sky.ra.deg), dec=float(off_sky.dec.deg),
+                        components={'Legacy_r': [dict(
+                            kind='nuker', ra=float(off_sky.ra.deg),
+                            dec=float(off_sky.dec.deg), ellip=0.2, pa=0.0,
+                            rb_as=30.0, beta=3.0, flux_ref=5000.0,
+                            flux_home=flux_home, vantage='target')]})}
+    out, consumed = apply_registry([], entry, stamp, psf, 'Legacy_r',
+                                   'Legacy')
+    assert consumed == ['J0']
+    wing = out[0]
+    # the rendered wing carries far LESS than the 5000 home flux -- only
+    # the fraction that physically reaches this stamp
+    assert float(wing['base'].sum()) < 0.3 * 5000.0
+    # and the leash tracks that wing, not the home flux
+    assert wing['amp_lohi'][1] < 0.3 * 5000.0
+    # the OLD bug would have forced the wing's integral up to ~5000
+    assert wing['flux0'] < 0.3 * 5000.0
 
 
 def test_registry_v2_vantage_tombstones_and_zero_amp():

@@ -619,7 +619,7 @@ def measure_band(
             health = dict(capped=solve_info['status'] == 0)
         harvest_seats(scene['registry'], fit['seats_local'],
                       fit['seat_params'], fit['seat_amps'], stamp,
-                      band_key=band_key,
+                      band_key=band_key, seat_col_flux=fit['col_flux'],
                       include_target=bool(patches.get('harvest_target')),
                       solve_health=health, tag=tag)
 

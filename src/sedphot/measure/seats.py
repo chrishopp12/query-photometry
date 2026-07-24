@@ -461,20 +461,31 @@ def apply_registry(
                 base = render_nuker(rc['rb_as'] / pix, rc['beta'],
                                     rc['ellip'], theta, x, y, shape_2d,
                                     psf, pix)
-            in_stamp = float(base.sum()) * cf
+            unit_in_stamp = float(base.sum()) * cf
             flux_ref = float(rc['flux_ref'])
-            if in_stamp <= 0 or flux_ref < recipe.MARGIN_MIN_UJY:
+            # The component is rendered at its FITTED PHYSICAL amplitude,
+            # not renormalized to this stamp. The physical amplitude is
+            # flux_ref / (home-field unit-render integral): scaling to
+            # flux_ref / (THIS stamp's unit integral) instead would cram
+            # the whole source's flux into whatever pixels are on-stamp,
+            # so an off-stamp source (a BCG whose center is past a
+            # neighbor's edge) has its thin wing multiplied many-fold.
+            # With flux_home the source keeps its true brightness and a
+            # neighbor gets exactly the wing that physically reaches it.
+            flux_home = float(rc.get('flux_home') or unit_in_stamp)
+            amp = flux_ref / flux_home if flux_home > 0 else 1.0
+            base = base * amp
+            phys_in_stamp = amp * unit_in_stamp   # the wing that reaches
+            if phys_in_stamp < recipe.MARGIN_MIN_UJY \
+                    or flux_ref < recipe.MARGIN_MIN_UJY:
                 continue
-            # Every component's base is at PHYSICAL amplitude -- the
-            # claim tests, star-stage exclusions, and ownership zones
-            # all read it that way. A unit shape column here would
-            # claim nothing and read as artifact over its own light.
-            base = base * (flux_ref / in_stamp)
+            # Leash around the RENDERED wing flux, not the home flux: an
+            # off-stamp wing must not be re-solved up to the full source.
             out.append(dict(
-                base=base, flux0=max(flux_ref, 1e-9), shape=None,
-                name=f'{name}.{j}', irow=-1, cat=flux_ref,
-                amp_lohi=(recipe.REGISTRY_AMP_BAND[0] * flux_ref,
-                          recipe.REGISTRY_AMP_BAND[1] * flux_ref),
+                base=base, flux0=max(phys_in_stamp, 1e-9), shape=None,
+                name=f'{name}.{j}', irow=-1, cat=phys_in_stamp,
+                amp_lohi=(recipe.REGISTRY_AMP_BAND[0] * phys_in_stamp,
+                          recipe.REGISTRY_AMP_BAND[1] * phys_in_stamp),
                 x=x, y=y, gate=False, reg=True))
         consumed.append(name)
         print(f"    {tag}registry: {name} consumed "
@@ -508,6 +519,7 @@ def harvest_seats(
         stamp: Stamp,
         *,
         band_key: str,
+        seat_col_flux: list[float] | None = None,
         include_target: bool = False,
         solve_health: dict | None = None,
         tag: str = '',
@@ -560,11 +572,13 @@ def harvest_seats(
     pix = stamp.pixscale
     health = solve_health or {}
     capped = bool(health.get('capped'))
+    col_flux = seat_col_flux or [None] * len(seats)
 
     fresh: dict[str, list[dict]] = {}
     anchors: dict[str, tuple[float, float]] = {}
     dead: dict[str, str] = {}
-    for seat, sl, amp in zip(seats, seat_slices(seats), seat_amps):
+    for seat, sl, amp, cf in zip(seats, seat_slices(seats), seat_amps,
+                                 col_flux):
         if seat['owner'] == 'target' and not include_target:
             continue
         name = registry_name(seat['ra'], seat['dec'])
@@ -582,9 +596,15 @@ def harvest_seats(
         x, y = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(seat['ra'], seat['dec'], unit='deg'))]
         center = wcs.pixel_to_world(x + q[4], y + q[5])
+        # flux_home: the unit-render's in-stamp integral at THIS (home)
+        # field. Consumers recover the physical amplitude as
+        # flux_ref / flux_home and render the source at it, so an
+        # off-stamp neighbor gets only the wing that reaches, never the
+        # whole source crammed into its edge (the smooth-walk fix).
         record = dict(kind=seat['kind'], ra=float(center.ra.deg),
                       dec=float(center.dec.deg), ellip=float(q[2]),
                       pa=float(q[3]), flux_ref=max(float(amp), 0.0),
+                      flux_home=(float(cf) if cf else None),
                       vantage=('target' if seat['owner'] == 'target'
                                else 'neighbor'))
         if seat['kind'] == 'sersic':
