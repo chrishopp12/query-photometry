@@ -72,6 +72,29 @@ def test_core_damage_beyond_the_claim_is_masked():
     assert mask[100, 100] and area > recipe.ARTIFACT_AREA_MIN
 
 
+def test_absolute_floor_spares_a_deep_frame_envelope_rim():
+    """On a deep stack a real envelope rim clears 20 sigma but sits far
+    below the sky: the absolute uJy/as^2 floor spares it, while a true
+    bleed at the same pixel count is masked."""
+    rng = np.random.default_rng(9)
+    shape = (201, 201)
+    sigma = 0.05
+    raw = rng.normal(0.0, sigma, shape)
+    raw[40:60, 30:170] += 2.0            # 40 sigma feature, both regions
+    good = np.ones(shape, bool)
+    rr = radii_arcsec(shape, 100.0, 100.0, PIX)
+    # deep stack: sb small, so 2 counts = a faint SB below the floor
+    sb_deep = recipe.ARTIFACT_SB_MIN / 4.0       # 2 counts -> 8 uJy/as2
+    mask, area, _ = find_artifacts(raw, good, np.zeros(shape), rr, sigma,
+                                   PIX, sb=sb_deep)
+    assert area == 0.0                            # spared by the floor
+    # a shallow frame (large sb) puts the same counts over the floor
+    sb_bleed = recipe.ARTIFACT_SB_MIN / 1.0       # 2 counts -> 60 uJy/as2
+    mask2, area2, _ = find_artifacts(raw, good, np.zeros(shape), rr,
+                                     sigma, PIX, sb=sb_bleed)
+    assert area2 > 200.0                          # masked
+
+
 def test_bright_core_is_model_business_not_artifact():
     """Data far above a LOUD claim (a cD cusp over its smooth model, a
     saturated star over its clipped catalog flux) is shape business:

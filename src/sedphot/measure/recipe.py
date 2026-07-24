@@ -375,6 +375,17 @@ ARTIFACT_SIG = 20.0
 ARTIFACT_RATIO = 5.0
 ARTIFACT_AREA_MIN = 15.0     # arcsec^2
 
+# Absolute brightness floor (uJy/arcsec^2). Condition 1 (20 sigma) is
+# depth-RELATIVE: on a deep stack 20 sigma is mu ~ 23, inside ordinary
+# astrophysics (galaxy outskirts, cD envelope skirts, star halos), so
+# on deep frames the noise floor alone would mask real light. An
+# instrument artifact of the bleed/streak class is brighter than the
+# SKY itself, not merely brighter than the noise -- depth changes what
+# you can see, not what a CCD bleed is. Candidacy takes the LARGER of
+# the two floors: real trails run 300+ uJy/as^2 (10x over); a cD rim
+# at a few uJy/as^2 never qualifies on any instrument.
+ARTIFACT_SB_MIN = 30.0      # uJy/arcsec^2 (mu ~ 20.2)
+
 
 # ------------------------------------
 # Empty-aperture error

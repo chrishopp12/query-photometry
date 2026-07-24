@@ -39,14 +39,18 @@ def find_artifacts(
         rr: np.ndarray,
         sigma: float,
         pixscale: float,
+        sb: float = 0.0,
 ) -> tuple[np.ndarray, float]:
     """Mask of catastrophic unclaimed-bright pixels.
 
-    A pixel is an artifact candidate when it sits ARTIFACT_SIG sigma
-    above the outer-stamp level AND ARTIFACT_RATIO times above the
-    catalog scene's claim there: an under-predicted real source fails
-    the ratio test, a bleed trail is orders of magnitude past both.
-    Candidates must form a connected region of at least
+    A pixel is an artifact candidate when it sits above the brightness
+    floor -- the LARGER of ARTIFACT_SIG sigma and the absolute
+    ARTIFACT_SB_MIN (uJy/arcsec^2) -- AND ARTIFACT_RATIO times above
+    the catalog scene's claim there. An under-predicted real source
+    fails the ratio test; a galaxy outskirt or cD envelope rim fails
+    the absolute floor (bright against the noise on a deep stack, but
+    far below the sky); a bleed trail is orders of magnitude past all
+    of them. Candidates must form a connected region of at least
     ARTIFACT_AREA_MIN arcsec^2 -- smaller leftovers stay with the flood
     channel. The target protects its own pixels the same way every
     source does, through its claim in pred: light beyond the ratio on
@@ -69,6 +73,9 @@ def find_artifacts(
         Global pixel scatter (counts).
     pixscale : float
         Pixel scale (arcsec/px).
+    sb : float
+        Counts -> uJy/arcsec^2 factor (stamp.sb); sets the absolute
+        brightness floor. Zero disables it (the noise floor alone).
 
     Returns
     -------
@@ -83,16 +90,24 @@ def find_artifacts(
         return np.zeros_like(good), 0.0, 0.0
     level = float(np.median(raw[outer]))
     resid = raw - level
+    # Brightness floor: the LARGER of the depth-relative noise floor
+    # and the absolute surface-brightness floor. On a deep stack the
+    # absolute floor dominates -- a real bleed is brighter than the
+    # sky, not merely brighter than the noise -- so envelope skirts and
+    # galaxy outskirts (bright in sigma, faint in uJy/as^2) are spared.
+    bright_floor = recipe.ARTIFACT_SIG * sigma
+    if sb > 0:
+        bright_floor = max(bright_floor, recipe.ARTIFACT_SB_MIN / sb)
     # The detector operates only where the scene is QUIET (claim below
-    # the same significance floor): artifacts live on quiet sky, while
-    # a bright real source's core -- a cD cusp above its smooth model,
-    # a saturated star above its clipped catalog flux -- is the least
+    # the same brightness floor): artifacts live on quiet sky, while a
+    # bright real source's core -- a cD cusp above its smooth model, a
+    # saturated star above its clipped catalog flux -- is the least
     # quiet place in the field, and disagreement there is model
     # business (shape misfit, the star stage), never instrument damage.
     cand = (good
-            & (resid > recipe.ARTIFACT_SIG * sigma)
+            & (resid > bright_floor)
             & (resid > recipe.ARTIFACT_RATIO * np.maximum(pred, 0.0))
-            & (pred < recipe.ARTIFACT_SIG * sigma))
+            & (pred < bright_floor))
     if not cand.any():
         return np.zeros_like(good), 0.0, 0.0
     cand = binary_dilation(cand, iterations=2)

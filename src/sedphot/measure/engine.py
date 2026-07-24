@@ -375,7 +375,8 @@ def measure_band(
             if c['irow'] not in wrecks:
                 pred += c['base']
         art, artifact_as2, flood_as2 = find_artifacts(
-            raw, good, pred, stamp.rr, stamp.sigma, stamp.pixscale)
+            raw, good, pred, stamp.rr, stamp.sigma, stamp.pixscale,
+            sb=stamp.sb)
         if artifact_as2 > 0:
             artifact_mask = art
             artifact_ujy = float(raw[art].sum() * stamp.cf)
