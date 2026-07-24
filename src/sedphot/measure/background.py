@@ -133,6 +133,10 @@ def bin_plane(
             centered / normalized parametrization below.
         n_rej : int, bins that lost their vote to rejection.
         n_bins : int, bins that voted before rejection.
+        keep_px : np.ndarray, boolean map of the ACCEPTED bins'
+            territory -- the pixels whose level the plane claims.
+            Consumers that must not re-adjudicate the level (the
+            residual mesh) zero themselves over this region.
     """
     usable = good & (rr > recipe.BG_RMIN_AS)
     row_starts, col_starts, bin_px, medians = bin_grid(work, usable,
@@ -171,9 +175,15 @@ def bin_plane(
     yy, xx = np.indices(work.shape)
     img = (coef[0] + coef[1] * (xx - nx / 2) / nx
            + coef[2] * (yy - ny / 2) / ny)
+    keep_px = np.zeros(work.shape, bool)
+    for i, j, kept in zip(ii, jj, keep):
+        if kept:
+            keep_px[row_starts[i]:row_starts[i] + bin_px,
+                    col_starts[j]:col_starts[j] + bin_px] = True
     return dict(img=img, const=float(coef[0]),
                 coefs=[float(v) for v in coef],
-                n_rej=int((~keep).sum()), n_bins=int(len(pts)))
+                n_rej=int((~keep).sum()), n_bins=int(len(pts)),
+                keep_px=keep_px)
 
 
 # ------------------------------------
@@ -239,6 +249,8 @@ def residual_mesh(
         resid: np.ndarray,
         vote: np.ndarray,
         pixscale: float,
+        *,
+        level_px: np.ndarray | None = None,
 ) -> np.ndarray:
     """Post-fit background surface: the bin-median mesh of the residual.
 
@@ -254,6 +266,13 @@ def residual_mesh(
     background-scale light, and a well-fit source leaves it nothing
     to take.
 
+    The mesh carries STRUCTURE, never level: it is zeroed over the
+    plane's own accepted-bin territory (level_px), so the level keeps
+    exactly one owner. Without the zero point, coherent structure the
+    plane's rejection excluded (a stack seam, an envelope-misfit patch)
+    drags the mesh's field mean off zero, and subtracting it re-levies
+    the whole field by that mean -- a DC the plane already set.
+
     Parameters
     ----------
     resid : np.ndarray
@@ -262,6 +281,9 @@ def residual_mesh(
         Pixels allowed to vote (usable and not neighbor-masked).
     pixscale : float
         Pixel scale (arcsec/px).
+    level_px : np.ndarray, optional
+        The plane's accepted-bin pixel map (bin_plane's keep_px); the
+        mesh is zeroed over vote & level_px. None zeroes over vote.
 
     Returns
     -------
@@ -284,4 +306,10 @@ def residual_mesh(
                  row_starts[-1] + bin_px / 2.0)
     xs = np.clip(xx.ravel(), col_starts[0] + bin_px / 2.0,
                  col_starts[-1] + bin_px / 2.0)
-    return interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
+    mesh = interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
+    zero_over = vote if level_px is None else (vote & level_px)
+    if not zero_over.any():
+        zero_over = vote
+    if zero_over.any():
+        mesh = mesh - float(mesh[zero_over].mean())
+    return mesh

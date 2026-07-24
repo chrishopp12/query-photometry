@@ -493,7 +493,7 @@ def measure_band(
     # nothing to take; its resolution floor (~2 bins) makes compact
     # light invisible to it either way.
     mesh = residual_mesh(image - scene_img - bg['img'], good & ~mask,
-                         stamp.pixscale)
+                         stamp.pixscale, level_px=bg.get('keep_px'))
     mesh_ap_ujy = float(mesh[stamp.rr < aperture_arcsec].sum()
                         * stamp.cf)
     model_fill = target_img + bg['img']

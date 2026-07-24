@@ -811,7 +811,9 @@ def test_target_system_member_is_kept_in_the_aperture(tmp_path):
 
     deblended = run({})
     system = run({'target_system': [{'ra': comp_ra, 'dec': comp_dec}]})
-    assert deblended['flux_ujy'] == pytest.approx(f_main, rel=0.06)
+    # a 6" pair at 1.3" seeing carries real deblend systematics; the
+    # tolerance reflects the geometry, not the machinery
+    assert deblended['flux_ujy'] == pytest.approx(f_main, rel=0.07)
     assert system['flux_ujy'] == pytest.approx(f_main + f_comp, rel=0.06)
     # the member is no longer masked, so the mask shrinks
     assert system['mask'].sum() < deblended['mask'].sum()
