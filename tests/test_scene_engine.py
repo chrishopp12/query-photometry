@@ -79,18 +79,26 @@ def inject_sersic(shape_2d, psf, *, flux, reff_px, n, x, y):
 # Components
 # ------------------------------------
 def test_gated_row_truth_table():
-    row = pd.Series(dict(type='SER', uJy=500.0, rchisq_r=8.0))
-    assert gated_row(row, 20.0)
-    assert not gated_row(row, 0.5)          # the target never gates
-    assert not gated_row(pd.Series(dict(type='PSF', uJy=500.0,
-                                        rchisq_r=8.0)), 20.0)
-    assert not gated_row(pd.Series(dict(type='SER', uJy=50.0,
-                                        rchisq_r=8.0)), 20.0)
-    assert not gated_row(pd.Series(dict(type='SER', uJy=500.0,
-                                        rchisq_r=1.0)), 20.0)
-    # past the ceiling the misfit statement means "not a galaxy model"
-    assert not gated_row(pd.Series(dict(type='SER', uJy=500.0,
-                                        rchisq_r=5e4)), 20.0)
+    def row(**kw):
+        base = dict(type='SER', flux_g=0.1, flux_r=0.1, flux_z=0.1,
+                    rchisq_g=1.0, rchisq_r=1.0, rchisq_z=1.0)
+        base.update(kw)
+        return pd.Series(base)
+
+    bright = 500.0 / 3.631
+    assert gated_row(row(flux_r=bright, rchisq_r=8.0), 20.0)
+    assert not gated_row(row(flux_r=bright, rchisq_r=8.0), 0.5)  # target
+    assert not gated_row(row(type='PSF', flux_r=bright, rchisq_r=8.0),
+                         20.0)
+    assert not gated_row(row(flux_r=50 / 3.631, rchisq_r=8.0), 20.0)
+    assert not gated_row(row(flux_r=bright, rchisq_r=1.0), 20.0)
+    # the pair test is PER BAND: a red member faint in r gates on z
+    assert gated_row(row(flux_z=bright, rchisq_z=8.0), 20.0)
+    # ... and a bright-in-r, misfit-only-in-z row does NOT gate
+    assert not gated_row(row(flux_r=bright, rchisq_z=8.0), 20.0)
+    # past the ceiling in ANY band vetoes the row outright
+    assert not gated_row(row(flux_r=bright, rchisq_r=8.0, rchisq_z=5e4),
+                         20.0)
 
 
 def test_red_row_with_no_scene_band_flux_still_renders():

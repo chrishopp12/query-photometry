@@ -166,7 +166,11 @@ def load_stamp(
     farfield_sb = None
     far = ~nodata & (rr > recipe.FARFIELD_RMIN_AS)
     if far.sum() >= recipe.FARFIELD_MIN_PX:
-        _, far_level, _ = sigma_clipped_stats(data[far], sigma=3.0, maxiters=6)
+        # Clipped MEAN, matching the background bins: photometry sums
+        # pixels, and a median mode-locks on spiked pixel histograms
+        # (the witness would then disagree with a correct plane).
+        far_level, _, _ = sigma_clipped_stats(data[far], sigma=3.0,
+                                              maxiters=6)
         farfield_sb = float(far_level) * cf / pixscale ** 2
 
     invvar = None

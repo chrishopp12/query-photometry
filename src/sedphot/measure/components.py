@@ -52,15 +52,30 @@ def gated_row(row: pd.Series, dist_arcsec: float) -> bool:
     chi-square is its own misfit statement -- the necessary condition,
     within the window where the model family is plausible: past the
     ceiling the same statistic means "not a galaxy model at all" and
-    a shape solve can only rail. Point-source rows and the target
+    a shape solve can only rail. The flux-and-misfit pair is judged
+    PER BAND, any optical band qualifying: an r-only gate under-gates
+    massive red members once the 4000 A break crosses r, exactly the
+    galaxies whose envelopes need seats most. A catastrophic reduced
+    chi-square in ANY band vetoes the row outright (artifact echoes
+    fire across several bands). Point-source rows and the target
     itself never gate.
     """
     if dist_arcsec < recipe.TARGET_MATCH_AS:
         return False
     if str(row['type']).strip() in ('PSF', 'DUP'):
         return False
-    return (row['uJy'] > recipe.GATE_FLUX_UJY
-            and recipe.GATE_RCHISQ < row['rchisq_r'] < recipe.GATE_RCHISQ_MAX)
+    qualifies = False
+    for band in ('g', 'r', 'i', 'z'):
+        flux_col, chi_col = f'flux_{band}', f'rchisq_{band}'
+        if flux_col not in row or chi_col not in row:
+            continue
+        chi = float(row[chi_col])
+        if chi >= recipe.GATE_RCHISQ_MAX:
+            return False
+        if (float(row[flux_col]) * NANOMAGGY_TO_UJY > recipe.GATE_FLUX_UJY
+                and chi > recipe.GATE_RCHISQ):
+            qualifies = True
+    return qualifies
 
 
 # ------------------------------------
@@ -287,9 +302,12 @@ def build_components(
         if shape is None:
             # Point source. On-stamp: a delta at the catalog position
             # convolved with the band PSF. Off-stamp: analytic Moffat
-            # wings when bright enough to reach, dropped otherwise.
+            # wings when bright enough to reach, dropped otherwise --
+            # judged on the row's BRIGHTEST band, so a red star bright
+            # only in z keeps its wings in the bands that see them.
             if not inside:
-                if not near or meta['cat'] < recipe.BRIGHT_PSF_UJY:
+                if not near or max(meta['cat'],
+                                   best_ujy) < recipe.BRIGHT_PSF_UJY:
                     continue
                 base = moffat_wings(counts, seeing_arcsec / pix, x, y,
                                     shape_2d)

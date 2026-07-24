@@ -87,6 +87,13 @@ GATE_FLUX_UJY = 100.0
 GATE_RCHISQ = 4.0
 GATE_RCHISQ_MAX = 1000.0
 
+# Gate reach stops short of the stamp edge: a source with part of its
+# flux off-frame cannot support an honest shape solve, and an edge
+# vantage is never the one to define a shared source's decomposition.
+# Edge sources keep their fixed catalog render (or a registry entry
+# solved from a better vantage).
+GATE_EDGE_MARGIN_AS = 15.0
+
 # Ownership of blended catalog rows. A row inside the science aperture
 # whose fracflux says the light at its position is dominated by OTHER
 # sources is the catalog's rendering of the target's own substructure
@@ -267,7 +274,7 @@ AMP_MAX_X_CAT = 100.0
 # neutral 1.0 when the catalog cannot say.
 TRANSFER_AMP_BAND = (0.1, 10.0)
 BAND_COLOR_COL = {'u': 'flux_g', 'g': 'flux_g', 'r': 'flux_r',
-                  'i': 'flux_z', 'z': 'flux_z'}
+                  'i': 'flux_z', 'z': 'flux_z', 'y': 'flux_z'}
 
 # Per-instrument reference-band preference: the first available filter
 # in this order solves seat shapes for its instrument's other bands.

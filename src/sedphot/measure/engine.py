@@ -337,7 +337,8 @@ def measure_band(
         cache['profiles'] = {}
     comps = build_components(cat, stamp, psf, seeing,
                              profile_cache=cache['profiles'],
-                             gate_radius_arcsec=cutout_half_arcsec) \
+                             gate_radius_arcsec=cutout_half_arcsec
+                             - recipe.GATE_EDGE_MARGIN_AS) \
         if len(cat) else []
     system = _system_names(comps, patches, stamp)
     comps, consumed = apply_registry(comps, scene['registry'], stamp,
@@ -364,8 +365,11 @@ def measure_band(
     artifact_as2, artifact_ujy = 0.0, 0.0
     artifact_mask = None
     if comps:
-        wrecks = (set(cat.index[cat['rchisq_r'] > recipe.GATE_RCHISQ_MAX])
-                  if 'rchisq_r' in cat else set())
+        chi_cols = [c for c in ('rchisq_g', 'rchisq_r', 'rchisq_i',
+                                'rchisq_z') if c in cat]
+        wrecks = (set(cat.index[(cat[chi_cols]
+                                 > recipe.GATE_RCHISQ_MAX).any(axis=1)])
+                  if chi_cols else set())
         pred = np.zeros_like(raw)
         for c in comps:
             if c['irow'] not in wrecks:
