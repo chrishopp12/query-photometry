@@ -271,7 +271,14 @@ def subtract_stars(
         flux = float(prof.sum() * cf)
         gmag = float(srow['phot_g_mean_mag'])
         color = (colors or {}).get(best.get('irow', -1), 1.0)
-        expected = color * best['cat']
+        # The expectation is the star's IN-STAMP flux (flux0: the
+        # catalog-amplitude render's own integral), never its total:
+        # amplitudes ARE in-stamp flux in this design, and for an
+        # off-stamp star the two differ by orders of magnitude -- a
+        # total-flux leash would FORCE that much wing light onto the
+        # stamp. On-stamp stars render fully, so flux0 = cat there
+        # and nothing changes.
+        expected = color * best['flux0']
         head = (f"    {tag}STAR {best['name']} ({best['cat']:.0f} uJy "
                 f"cat x{color:.2f} color, G={gmag:.1f})")
 

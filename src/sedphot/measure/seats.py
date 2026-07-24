@@ -23,22 +23,29 @@ Seat dict:
                is sky-frame degrees.
 
 The registry lets a source solved once be reused by every later field
-that contains it, at a strength set by the solve's VANTAGE ("the
-target fit is the best fit"):
+that contains it: every stored record is consumed FROZEN -- fixed,
+tightly amplitude-leashed components; gates die with the consumed
+rows. The one unfreeze is the HOME field: an entry anchored on the
+consuming field's own target is never consumed (the protect rule), so
+the home solve runs fresh and its harvest UPGRADES the entry. The
+VANTAGE grade ("the target fit is the best fit") governs write
+priority, not consumption strength:
 
-    target vantage     solved as the target of its own field -- the
-                       one centered view. Consumed FROZEN: fixed,
-                       tightly amplitude-leashed components; gates die.
-    neighbor vantage   solved as somebody's neighbor. Stored, but only
-                       as WARM SEEDS: a later field's own solve starts
-                       from the stored shapes (gates stay alive), and
-                       a target-vantage solve upgrades the entry when
-                       the source's own field runs.
-    tombstone          the solve FAILED (evaluation cap, or a size or
-                       profile parameter on a bound). Consumers kill
-                       the gate -- the catalog render stands -- so a
-                       doomed solve is never repeated field after
-                       field; only the home (target) vantage retries.
+    target vantage     written by the source's own field
+                       (include_target) -- the one centered view.
+                       Never overwritten by a neighbor solve.
+    neighbor vantage   written by a field that saw the source as a
+                       neighbor; replaced when the home field runs.
+    tombstone          the solve burned its evaluation cap. Consumers
+                       kill the gate -- the catalog render stands --
+                       so a doomed solve is never repeated field after
+                       field; only the home vantage retries.
+
+A record whose solved flux is below the margin floor is NEVER stored:
+zero amplitude is a two-part verdict -- no such component here, and
+the attached shape was never constrained -- so it can neither be
+frozen into another scene nor offered new flux. Dropped or re-solved
+from scratch, nothing in between.
 
 Entries transport the full per-band decomposition: per-band shapes
 (arcsec, sky PA), solved centers as sky coordinates, and per-band
@@ -121,7 +128,6 @@ def build_seats(
         stamp: Stamp,
         image: np.ndarray,
         *,
-        seeds: dict | None = None,
         tag: str = '',
 ) -> tuple[list[dict], set[str]]:
     """Build the seat list and the set of component names it replaces.
@@ -139,11 +145,6 @@ def build_seats(
         The reference band's stamp.
     image : np.ndarray
         Star-subtracted image (counts); only used by snap-to-peak.
-    seeds : dict, optional
-        Warm-seed shapes from neighbor-vantage registry entries
-        (apply_registry): {comp name: {kind: [size_px, profile, ellip,
-        pa]}}. A seeded seat starts its solve from the stored shape
-        instead of the catalog's.
     tag : str
         Run-log prefix.
 
@@ -156,7 +157,6 @@ def build_seats(
     """
     pix = stamp.pixscale
     wcs = stamp.wcs
-    seeds = seeds or {}
     dxy_out = recipe.DXY_OUT_AS / pix
     dxy = recipe.SEAT_DXY_AS / pix
     n_lo, n_hi = recipe.SERSIC_N_RANGE
@@ -175,17 +175,9 @@ def build_seats(
                 print(f"    {tag}snap {comp['name']}: {moved:.2f}\" to peak")
         shape = comp['shape']
         core_hi = recipe.GATED_CORE_REFF_MAX_AS / pix
-        seed = seeds.get(comp['name'], {})
-        s_core = seed.get('sersic')
-        if s_core is not None:
-            p0_core = [min(max(s_core[0], SEAT_REFF_MIN_PX),
-                           0.95 * core_hi),
-                       min(max(s_core[1], n_lo), 5.9),
-                       min(s_core[2], 0.91), s_core[3], 0.0, 0.0]
-        else:
-            p0_core = [min(shape['reff_px'], 0.95 * core_hi),
-                       min(shape['n'], 5.9), min(shape['ellip'], 0.91),
-                       shape['pa'], 0.0, 0.0]
+        p0_core = [min(shape['reff_px'], 0.95 * core_hi),
+                   min(shape['n'], 5.9), min(shape['ellip'], 0.91),
+                   shape['pa'], 0.0, 0.0]
         # A seat whose profile cannot land real light on the stamp must
         # not get a design column: normalized to unit in-stamp flux, an
         # empty render is a numerically explosive basis. Same rule as
@@ -206,17 +198,8 @@ def build_seats(
                  p0_core[3] - recipe.PA_BOX_DEG, -dxy, -dxy],
                 [core_hi, n_hi, recipe.SERSIC_E_MAX,
                  p0_core[3] + recipe.PA_BOX_DEG, dxy, dxy]))
-        s_halo = seed.get('nuker')
-        if s_halo is not None:
-            p0_halo = [float(np.clip(s_halo[0], recipe.NUKER_RB_AS[0] / pix,
-                                     0.98 * recipe.NUKER_RB_AS[1] / pix)),
-                       float(np.clip(s_halo[1], recipe.NUKER_BETA[0],
-                                     0.98 * recipe.NUKER_BETA[1])),
-                       min(s_halo[2], 0.98 * recipe.NUKER_E_MAX),
-                       s_halo[3], 0.0, 0.0]
-        else:
-            p0_halo = [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
-                       shape['pa'], 0.0, 0.0]
+        p0_halo = [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
+                   shape['pa'], 0.0, 0.0]
         seats.append(_seat(
             'nuker', comp['name'], wcs, x, y, p0_halo,
             [recipe.NUKER_RB_AS[0] / pix, recipe.NUKER_BETA[0], 0.0,
@@ -376,13 +359,9 @@ def apply_registry(
         Component list with replacements applied.
     consumed : list of str
         Names of the registry entries consumed (frozen).
-    seeds : dict
-        Warm-seed shapes from neighbor-vantage entries, keyed by the
-        matched component's name: {name: {kind: [size_px, profile,
-        ellip, pa]}}. build_seats starts matching seats from these.
     """
     if not registry:
-        return comps, [], {}
+        return comps, []
     wcs = stamp.wcs
     pix = stamp.pixscale
     cf = stamp.cf
@@ -410,7 +389,7 @@ def apply_registry(
                 best, bestd = comp, d
         return best
 
-    live, seed_entries, tomb_entries = [], [], []
+    live, tomb_entries = [], []
     for name, entry in registry.items():
         by_band = entry.get('components') or {}
         clist = by_band.get(band_key) or by_band.get(instrument)
@@ -426,7 +405,8 @@ def apply_registry(
         # (or a declared member of it) seen from another field. The
         # target is never frozen: it is measured fresh here, and
         # consuming its entry would add a leashed copy on top of the
-        # free one and split the light between them.
+        # free one and split the light between them. This is the one
+        # UNFREEZE: the home field re-solves and upgrades the entry.
         if _protected(x0, y0):
             print(f"    {tag}registry: {name} is this field's target "
                   f"system; not consumed")
@@ -436,15 +416,12 @@ def apply_registry(
             continue
         if not clist:
             tomb_entries.append((name, x0, y0, tomb))
-        elif clist[0].get('vantage', 'neighbor') == 'target':
-            live.append((name, clist, x0, y0))
         else:
-            seed_entries.append((name, clist, x0, y0))
+            live.append((name, clist, x0, y0))
 
-    # Tombstones: the solve failed everywhere it was tried; kill the
-    # gate so the doomed solve is not repeated -- the catalog render
-    # stands until the home vantage rewrites the entry.
-    seeds: dict[str, dict] = {}
+    # Tombstones: the solve failed where it was tried; kill the gate
+    # so the doomed solve is not repeated -- the catalog render stands
+    # until the home vantage rewrites the entry.
     out = list(comps)
     for name, x0, y0, reason in tomb_entries:
         comp = _nearest_comp(out, x0, y0)
@@ -452,26 +429,6 @@ def apply_registry(
             comp['gate'] = False
             print(f"    {tag}registry: {name} tombstone ({reason}); "
                   f"{comp['name']} keeps its catalog render, no seat")
-
-    # Neighbor-vantage entries: warm seeds only. Gates stay alive; the
-    # solve starts from the stored shapes instead of the catalog's.
-    for name, clist, x0, y0 in seed_entries:
-        comp = _nearest_comp(out, x0, y0)
-        if comp is None:
-            continue
-        kinds = {}
-        for rc in clist:
-            kind = rc['kind']
-            if kind in kinds:
-                continue
-            size_as = rc.get('reff_as', rc.get('rb_as'))
-            profile = rc.get('n', rc.get('beta'))
-            kinds[kind] = [float(size_as) / pix, float(profile),
-                           float(rc['ellip']), float(rc['pa'])]
-        if kinds:
-            seeds[comp['name']] = kinds
-            print(f"    {tag}registry: {name} seeds {comp['name']} "
-                  f"({'+'.join(sorted(kinds))})")
 
     # Pass 1: drop every catalog row matched by a FROZEN entry (never
     # the target, never another entry's frozen components).
@@ -522,7 +479,7 @@ def apply_registry(
         consumed.append(name)
         print(f"    {tag}registry: {name} consumed "
               f"({len(clist)} frozen comps)")
-    return out, consumed, seeds
+    return out, consumed
 
 
 # ------------------------------------
@@ -614,6 +571,12 @@ def harvest_seats(
         anchors[name] = (seat['ra'], seat['dec'])
         if capped:
             dead[name] = 'solve hit its evaluation cap'
+            continue
+        # Zero amplitude is a verdict, not a measurement: no such
+        # component, and a shape that contributed nothing was never
+        # constrained. Such records are not stored -- they can neither
+        # be frozen into another scene nor offered new flux.
+        if max(float(amp), 0.0) < recipe.MARGIN_MIN_UJY:
             continue
         q = np.asarray(params[sl], float)
         x, y = [float(v) for v in wcs.world_to_pixel(

@@ -435,9 +435,9 @@ def test_apply_registry_never_consumes_the_target(capsys):
     registry = {'self': dict(ra=ra, dec=dec, components={
         'Legacy_r': [dict(kind='sersic', ra=ra, dec=dec, ellip=0.1,
                           pa=0.0, reff_as=1.5, n=2.0, flux_ref=300.0)]})}
-    out, consumed, seeds = apply_registry(comps, registry, stamp, psf,
-                                          'Legacy_r', 'Legacy')
-    assert consumed == [] and seeds == {}
+    out, consumed = apply_registry(comps, registry, stamp, psf,
+                                   'Legacy_r', 'Legacy')
+    assert consumed == []
     assert [c['name'] for c in out] == [c['name'] for c in comps]
     assert "this field's target" in capsys.readouterr().out
 
@@ -483,8 +483,8 @@ def test_registry_harvest_then_consume_round_trip():
     for rc in entry['components']['Legacy_r']:
         rc['vantage'] = 'target'
     fresh = build_components(cat, stamp, psf, 1.3)
-    out, consumed, _ = apply_registry(fresh, registry, stamp, psf,
-                                      'Legacy_r', 'Legacy')
+    out, consumed = apply_registry(fresh, registry, stamp, psf,
+                                   'Legacy_r', 'Legacy')
     assert consumed == touched
     names = [c['name'] for c in out]
     gated = next(c['name'] for c in fresh if c['gate'])
@@ -496,10 +496,11 @@ def test_registry_harvest_then_consume_round_trip():
         assert c['amp_lohi'] == (lo * 300.0, hi * 300.0)
 
 
-def test_registry_v2_vantage_seeds_and_tombstones():
-    """Neighbor-vantage entries seed warm starts (gates alive), failed
-    solves tombstone (gates die, no repeats), healthy writes clear
-    tombstones, and a target-vantage record is never downgraded."""
+def test_registry_v2_vantage_tombstones_and_zero_amp():
+    """Every record consumes FROZEN; a capped solve tombstones the band
+    (gate dies, no repeat); a rail alone is a witness (harvest
+    proceeds); a zero-amplitude seat is never stored; and a
+    target-vantage record is never downgraded by a neighbor rewrite."""
     stamp = make_stamp(np.zeros((240, 240)))
     psf = moffat_kernel(1.3, PIX)
     cat, comps = _components_with_gated(stamp, psf)
@@ -511,30 +512,25 @@ def test_registry_v2_vantage_seeds_and_tombstones():
     name = next(iter(reg))
     assert reg[name]['components']['Legacy_r'][0]['vantage'] == 'neighbor'
 
-    # neighbor vantage: seeds only -- nothing frozen, gate alive, and
-    # the seeded seat starts from the stored shape
+    # neighbor-vantage entries still consume FROZEN: matched row drops,
+    # frozen comps take its place, gate dies
     fresh = build_components(cat, stamp, psf, 1.3)
-    out, consumed, seeds = apply_registry(fresh, reg, stamp, psf,
-                                          'Legacy_r', 'Legacy')
-    assert consumed == []
     gated = next(c['name'] for c in fresh if c['gate'])
-    assert set(seeds[gated]) == {'nuker', 'sersic'}
-    assert any(c['name'] == gated and c['gate'] for c in out)
-    seats2, _ = build_seats(out, {}, stamp, stamp.data, seeds=seeds)
-    core = next(s for s in seats2
-                if s['owner'] == gated and s['kind'] == 'sersic')
-    assert core['p0'][0] == pytest.approx(seeds[gated]['sersic'][0],
-                                          rel=1e-6)
+    out, consumed = apply_registry(fresh, reg, stamp, psf,
+                                   'Legacy_r', 'Legacy')
+    assert consumed == [name]
+    assert gated not in [c['name'] for c in out]
+    assert sum(1 for c in out if c.get('reg')) == 2
 
     # a capped solve tombstones the band; consumption kills the gate
     harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r',
-                  solve_health=dict(capped=True, at_bound=[]))
+                  solve_health=dict(capped=True))
     assert 'Legacy_r' in reg[name]['tombstones']
     assert 'Legacy_r' not in reg[name]['components']
     fresh2 = build_components(cat, stamp, psf, 1.3)
-    out2, consumed2, seeds2 = apply_registry(fresh2, reg, stamp, psf,
-                                             'Legacy_r', 'Legacy')
-    assert consumed2 == [] and seeds2 == {}
+    out2, consumed2 = apply_registry(fresh2, reg, stamp, psf,
+                                     'Legacy_r', 'Legacy')
+    assert consumed2 == []
     assert not any(c['gate'] for c in out2 if c['name'] == gated)
 
     # a rail alone is a WITNESS, not a failure: validated envelope
@@ -545,6 +541,17 @@ def test_registry_v2_vantage_seeds_and_tombstones():
                                     at_bound=[f'{gated}.sersic.reff']))
     assert 'Legacy_r' in reg2[name]['components']
     assert 'Legacy_r' not in (reg2[name].get('tombstones') or {})
+
+    # a zero-amplitude seat is a verdict, not a record: never stored.
+    # src0's entry holds its two seats -- zero the sersic, the nuker
+    # survives, and the dropped shape is nowhere in the record.
+    reg3: dict = {}
+    zero_amps = [0.0] + [300.0] * (len(seats) - 1)
+    harvest_seats(reg3, seats, params, zero_amps, stamp,
+                  band_key='Legacy_r')
+    stored = reg3[name]['components'].get('Legacy_r', [])
+    assert [rc['kind'] for rc in stored] == ['nuker']
+    assert all(rc['flux_ref'] >= recipe.MARGIN_MIN_UJY for rc in stored)
 
     # a healthy re-harvest clears the tombstone...
     harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r')

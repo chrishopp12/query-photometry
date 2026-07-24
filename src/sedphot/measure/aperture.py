@@ -537,6 +537,8 @@ def qa_flags(witness: dict, *, n_comps: int, consumed: list[str]) -> str:
         tokens.append(f"art={witness['artifact_as2']:.0f}")
     if witness.get('mesh_ap_uJy') is not None:
         tokens.append(f"mesh={witness['mesh_ap_uJy']:+.1f}")
+    if witness.get('leash_bound'):
+        tokens.append(f"leash={len(witness['leash_bound'])}")
     if witness.get('target_refit_x_cat') is not None:
         tokens.append(f"refit={witness['target_refit_x_cat']:.2f}")
     solve = witness.get('solve')

@@ -339,8 +339,8 @@ def test_registry_component_claims_its_own_light():
                   nodata=np.zeros((ny, nx), bool), sigma=NOISE,
                   farfield_sb=None)
     psf = moffat_kernel(1.3, PIX)
-    comps, consumed, _ = apply_registry([], entry, stamp, psf,
-                                        'Legacy_r', 'Legacy')
+    comps, consumed = apply_registry([], entry, stamp, psf,
+                                     'Legacy_r', 'Legacy')
     assert consumed == ['J0']
     frozen = comps[0]
     # the base carries the solved flux, not a unit shape

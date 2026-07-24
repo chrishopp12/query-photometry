@@ -341,7 +341,7 @@ def measure_band(
                              - recipe.GATE_EDGE_MARGIN_AS) \
         if len(cat) else []
     system = _system_names(comps, patches, stamp)
-    comps, consumed, reg_seeds = apply_registry(
+    comps, consumed = apply_registry(
         comps, scene['registry'], stamp, psf, band_key,
         product.instrument,
         protect_px=[(c['x'], c['y']) for c in comps
@@ -444,7 +444,7 @@ def measure_band(
     if ref is None:
         if comps:
             seats, drops = build_seats(comps, patches, stamp, image,
-                                       seeds=reg_seeds, tag=tag)
+                                       tag=tag)
     elif ref.get('seats'):
         seats, drops = ref['seats'], set(ref['drops'])
 
@@ -471,6 +471,20 @@ def measure_band(
 
     bases = [c['base'] for c in fit['fixed']] + fit['cols']
     base_owner = [c['name'] for c in fit['fixed']] + fit['owners']
+    # A fixed component pinned at a leash bound is a WITNESS: the solve
+    # wanted an amplitude the leash forbade (a mis-scaled star leash, a
+    # registry anchor the data contradict). Silent before -- the fake
+    # east-edge star halo sat exactly at 0.5x its bound with nothing
+    # complaining.
+    leashed_at_bound = []
+    for comp, amp in zip(fit['fixed'], fit['amps'][:len(fit['fixed'])]):
+        lo, hi = comp.get('amp_lohi', (None, None))
+        span = (hi - lo) if (lo is not None and hi is not None) else None
+        if span and span > 0 and (amp - lo < 1e-3 * span
+                                  or hi - amp < 1e-3 * span):
+            leashed_at_bound.append(comp['name'])
+    if leashed_at_bound:
+        print(f"    {tag}leash-bound fixed amps: {sorted(leashed_at_bound)}")
     scene_img = np.zeros_like(image)
     neighbors = np.zeros_like(image)
     target_img = np.zeros_like(image)
@@ -540,6 +554,7 @@ def measure_band(
     if artifact_as2 > 0:
         witness['artifact_flood_as2'] = round(flood_as2, 1)
     witness['mesh_ap_uJy'] = round(mesh_ap_ujy, 1)
+    witness['leash_bound'] = sorted(leashed_at_bound)
     # The fit state: everything a re-derivation needs without a solver
     # -- a new aperture reads the enclosed curve, a scene rebuild takes
     # the amplitudes + solve params + plane coefficients + mesh grid.
@@ -600,8 +615,7 @@ def measure_band(
     if registry_update and fit['seats_local']:
         health = None
         if solve_info is not None:
-            health = dict(capped=solve_info['status'] == 0,
-                          at_bound=solve_info['at_bound'])
+            health = dict(capped=solve_info['status'] == 0)
         harvest_seats(scene['registry'], fit['seats_local'],
                       fit['seat_params'], fit['seat_amps'], stamp,
                       band_key=band_key,

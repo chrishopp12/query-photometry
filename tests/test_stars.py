@@ -47,8 +47,13 @@ def moffat_blob(shape, x, y, total, fwhm_as, pixscale):
 
 
 def make_comp(name, cat, x, y, base):
-    """One scene-component dict with the keys the star stage reads."""
-    return dict(name=name, cat=float(cat), x=float(x), y=float(y), base=base)
+    """One scene-component dict with the keys the star stage reads.
+
+    flux0 is the base's in-stamp integral (cf = 1 here), exactly as
+    build_components sets it -- the star leash is judged against the
+    IN-STAMP expectation, so an on-stamp base has flux0 = cat."""
+    return dict(name=name, cat=float(cat), x=float(x), y=float(y),
+                base=base, flux0=max(float(base.sum()), 1e-9))
 
 
 def star_rows(stamp, positions):
@@ -182,7 +187,11 @@ def test_failed_profile_reverts_to_the_catalog_component():
     kept = next(c for c in pruned if c['name'] == 'src1')
     assert kept['star_reverted'] and not kept['gate']
     lo, hi = kept['amp_lohi']
-    assert lo == pytest.approx(0.5 * 800.0) and hi == pytest.approx(2.0 * 800.0)
+    # the leash is (0.5, 2.0) x the IN-STAMP expectation (flux0), which
+    # for this on-stamp star is its catalog flux to a fraction of a
+    # percent (finite-frame clipping of the render)
+    assert lo == pytest.approx(0.5 * kept['flux0'])
+    assert hi == pytest.approx(2.0 * kept['flux0'])
 
 
 def test_contaminated_profile_reverts_and_zone_masks_without_column():
@@ -224,12 +233,16 @@ def test_color_scaled_threshold_passes_a_red_stars_blue_band():
     shape = (480, 480)
     cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
     xs, ys = cx + 120.0, cy
-    star_blob = moffat_blob(shape, xs, ys, 400.0, 6.0, PIX)  # true flux
+    # The component base renders at the r-band CATALOG amplitude (1000,
+    # so flux0 = cat), while the DATA holds the star's actual measured
+    # appearance in this band -- 400, its true 40%-of-r blue emission.
+    base_blob = moffat_blob(shape, xs, ys, 1000.0, 6.0, PIX)  # cat render
+    star_blob = moffat_blob(shape, xs, ys, 400.0, 6.0, PIX)   # true flux
     data = rng.normal(0.0, 0.05, size=shape) + star_blob
     stamp = make_stamp(data, pixscale=PIX)
     comps = [make_comp('target', 100.0, cx, cy,
                        moffat_blob(shape, cx, cy, 100.0, 4.0, PIX)),
-             make_comp('src1', 1000.0, xs, ys, star_blob)]  # cat = r flux
+             make_comp('src1', 1000.0, xs, ys, base_blob)]  # cat = r flux
     comps[1]['irow'] = 5
     stars = star_rows(stamp, [(xs, ys, 16.0)])
 
@@ -243,6 +256,38 @@ def test_color_scaled_threshold_passes_a_red_stars_blue_band():
 
     assert log_neutral[0].get('reverted') == 'starved'   # 400 vs 1000
     assert log_color[0]['mode'] == 'measured'            # 400 vs 400
+
+
+def test_offstamp_star_leash_is_in_stamp_not_total():
+    """An off-stamp bright star's wing component lands only a few uJy on
+    the stamp: the reverted leash must bound its IN-STAMP flux (flux0),
+    never its catalog total, or the solve is forced to render a giant
+    fake halo at the leash floor."""
+    rng = np.random.default_rng(4)
+    shape = (300, 300)
+    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
+    # a 4000-uJy star 40" west of the field, off the stamp: only its
+    # wings reach, integrating to a few uJy on-frame
+    xs, ys = -80.0, cy
+    wings = moffat_blob(shape, xs, ys, 4000.0, 6.0, PIX)
+    in_stamp = float(wings.sum())
+    assert in_stamp < 0.05 * 4000.0            # wings only: a sliver
+    data = rng.normal(0.0, 0.05, size=shape) + wings
+    stamp = make_stamp(data, pixscale=PIX)
+    comps = [make_comp('target', 300.0, cx, cy,
+                       moffat_blob(shape, cx, cy, 300.0, 4.0, PIX)),
+             make_comp('src1', 4000.0, xs, ys, wings)]  # cat = total flux
+    stars = star_rows(stamp, [(xs, ys, 15.0)])
+
+    _, _, pruned, log = subtract_stars(
+        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+
+    kept = next(c for c in pruned if c['name'] == 'src1')
+    assert kept['star_reverted']
+    lo, hi = kept['amp_lohi']
+    # the leash tracks the IN-STAMP wing flux, not the 4000-uJy total
+    assert hi < 0.1 * 4000.0
+    assert lo == pytest.approx(0.5 * in_stamp, rel=1e-3)
 
 
 def test_two_gaia_rows_same_component_treated_once():
