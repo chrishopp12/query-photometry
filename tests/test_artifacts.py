@@ -330,7 +330,8 @@ def test_registry_component_claims_its_own_light():
                         components={'Legacy_r': [dict(
                             kind='sersic', ra=float(sky.ra.deg),
                             dec=float(sky.dec.deg), ellip=0.1, pa=0.0,
-                            flux_ref=500.0, reff_as=2.0, n=2.0)]})}
+                            flux_ref=500.0, reff_as=2.0, n=2.0,
+                            vantage='target')]})}
     data = rng.normal(0.0, NOISE, (ny, nx))
     stamp = Stamp(data=data, wcs=wcs, header=afits.Header(), cx=cx, cy=cy,
                   pixscale=PIX, cf=1.0,
@@ -338,8 +339,8 @@ def test_registry_component_claims_its_own_light():
                   nodata=np.zeros((ny, nx), bool), sigma=NOISE,
                   farfield_sb=None)
     psf = moffat_kernel(1.3, PIX)
-    comps, consumed = apply_registry([], entry, stamp, psf, 'Legacy_r',
-                                     'Legacy')
+    comps, consumed, _ = apply_registry([], entry, stamp, psf,
+                                        'Legacy_r', 'Legacy')
     assert consumed == ['J0']
     frozen = comps[0]
     # the base carries the solved flux, not a unit shape

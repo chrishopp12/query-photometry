@@ -22,13 +22,27 @@ Seat dict:
                radial and offset entries are reference-band pixels; pa
                is sky-frame degrees.
 
-The registry lets a source solved once (a bright galaxy's core + halo,
-companion nuclei) be consumed by every later field that contains it as
-FROZEN fixed components -- amplitude-only, tightly leashed -- instead
-of being re-solved per field into as many different decompositions as
-there are fields. Entries transport the full per-band decomposition:
-per-band shapes (arcsec, sky PA), solved centers as sky coordinates,
-and per-band solved fluxes as the amplitude anchor.
+The registry lets a source solved once be reused by every later field
+that contains it, at a strength set by the solve's VANTAGE ("the
+target fit is the best fit"):
+
+    target vantage     solved as the target of its own field -- the
+                       one centered view. Consumed FROZEN: fixed,
+                       tightly amplitude-leashed components; gates die.
+    neighbor vantage   solved as somebody's neighbor. Stored, but only
+                       as WARM SEEDS: a later field's own solve starts
+                       from the stored shapes (gates stay alive), and
+                       a target-vantage solve upgrades the entry when
+                       the source's own field runs.
+    tombstone          the solve FAILED (evaluation cap, or a size or
+                       profile parameter on a bound). Consumers kill
+                       the gate -- the catalog render stands -- so a
+                       doomed solve is never repeated field after
+                       field; only the home (target) vantage retries.
+
+Entries transport the full per-band decomposition: per-band shapes
+(arcsec, sky PA), solved centers as sky coordinates, and per-band
+solved fluxes as the amplitude anchor.
 
 Requirements:
     numpy, scipy, astropy
@@ -107,6 +121,7 @@ def build_seats(
         stamp: Stamp,
         image: np.ndarray,
         *,
+        seeds: dict | None = None,
         tag: str = '',
 ) -> tuple[list[dict], set[str]]:
     """Build the seat list and the set of component names it replaces.
@@ -124,6 +139,11 @@ def build_seats(
         The reference band's stamp.
     image : np.ndarray
         Star-subtracted image (counts); only used by snap-to-peak.
+    seeds : dict, optional
+        Warm-seed shapes from neighbor-vantage registry entries
+        (apply_registry): {comp name: {kind: [size_px, profile, ellip,
+        pa]}}. A seeded seat starts its solve from the stored shape
+        instead of the catalog's.
     tag : str
         Run-log prefix.
 
@@ -136,6 +156,7 @@ def build_seats(
     """
     pix = stamp.pixscale
     wcs = stamp.wcs
+    seeds = seeds or {}
     dxy_out = recipe.DXY_OUT_AS / pix
     dxy = recipe.SEAT_DXY_AS / pix
     n_lo, n_hi = recipe.SERSIC_N_RANGE
@@ -154,9 +175,17 @@ def build_seats(
                 print(f"    {tag}snap {comp['name']}: {moved:.2f}\" to peak")
         shape = comp['shape']
         core_hi = recipe.GATED_CORE_REFF_MAX_AS / pix
-        p0_core = [min(shape['reff_px'], 0.95 * core_hi),
-                   min(shape['n'], 5.9), min(shape['ellip'], 0.91),
-                   shape['pa'], 0.0, 0.0]
+        seed = seeds.get(comp['name'], {})
+        s_core = seed.get('sersic')
+        if s_core is not None:
+            p0_core = [min(max(s_core[0], SEAT_REFF_MIN_PX),
+                           0.95 * core_hi),
+                       min(max(s_core[1], n_lo), 5.9),
+                       min(s_core[2], 0.91), s_core[3], 0.0, 0.0]
+        else:
+            p0_core = [min(shape['reff_px'], 0.95 * core_hi),
+                       min(shape['n'], 5.9), min(shape['ellip'], 0.91),
+                       shape['pa'], 0.0, 0.0]
         # A seat whose profile cannot land real light on the stamp must
         # not get a design column: normalized to unit in-stamp flux, an
         # empty render is a numerically explosive basis. Same rule as
@@ -174,18 +203,27 @@ def build_seats(
             seats.append(_seat(
                 'sersic', comp['name'], wcs, x, y, p0_core,
                 [SEAT_REFF_MIN_PX, n_lo, 0.0,
-                 shape['pa'] - recipe.PA_BOX_DEG, -dxy, -dxy],
+                 p0_core[3] - recipe.PA_BOX_DEG, -dxy, -dxy],
                 [core_hi, n_hi, recipe.SERSIC_E_MAX,
-                 shape['pa'] + recipe.PA_BOX_DEG, dxy, dxy]))
+                 p0_core[3] + recipe.PA_BOX_DEG, dxy, dxy]))
+        s_halo = seed.get('nuker')
+        if s_halo is not None:
+            p0_halo = [float(np.clip(s_halo[0], recipe.NUKER_RB_AS[0] / pix,
+                                     0.98 * recipe.NUKER_RB_AS[1] / pix)),
+                       float(np.clip(s_halo[1], recipe.NUKER_BETA[0],
+                                     0.98 * recipe.NUKER_BETA[1])),
+                       min(s_halo[2], 0.98 * recipe.NUKER_E_MAX),
+                       s_halo[3], 0.0, 0.0]
+        else:
+            p0_halo = [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
+                       shape['pa'], 0.0, 0.0]
         seats.append(_seat(
-            'nuker', comp['name'], wcs, x, y,
-            [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
-             shape['pa'], 0.0, 0.0],
+            'nuker', comp['name'], wcs, x, y, p0_halo,
             [recipe.NUKER_RB_AS[0] / pix, recipe.NUKER_BETA[0], 0.0,
-             shape['pa'] - recipe.PA_BOX_DEG, -dxy_out, -dxy_out],
+             p0_halo[3] - recipe.PA_BOX_DEG, -dxy_out, -dxy_out],
             [recipe.NUKER_RB_AS[1] / pix, recipe.NUKER_BETA[1],
              recipe.NUKER_E_MAX,
-             shape['pa'] + recipe.PA_BOX_DEG, dxy_out, dxy_out]))
+             p0_halo[3] + recipe.PA_BOX_DEG, dxy_out, dxy_out]))
         drops.add(comp['name'])
 
     # Custom free seats: single-Sersic seats granted by the patches
@@ -337,10 +375,14 @@ def apply_registry(
     comps : list of dict
         Component list with replacements applied.
     consumed : list of str
-        Names of the registry entries consumed.
+        Names of the registry entries consumed (frozen).
+    seeds : dict
+        Warm-seed shapes from neighbor-vantage entries, keyed by the
+        matched component's name: {name: {kind: [size_px, profile,
+        ellip, pa]}}. build_seats starts matching seats from these.
     """
     if not registry:
-        return comps, []
+        return comps, [], {}
     wcs = stamp.wcs
     pix = stamp.pixscale
     cf = stamp.cf
@@ -349,34 +391,90 @@ def apply_registry(
     margin_px = recipe.MARGIN_AS / pix
     protect = [(c['x'], c['y']) for c in comps if c['name'] == 'target']
     protect.extend(protect_px or [])
-    live = []
+
+    def _anchor_px(entry):
+        return [float(v) for v in wcs.world_to_pixel(
+            SkyCoord(entry['ra'], entry['dec'], unit='deg'))]
+
+    def _protected(x0, y0):
+        return any(np.hypot(x0 - px, y0 - py) * pix
+                   < recipe.TARGET_MATCH_AS for px, py in protect)
+
+    def _nearest_comp(pool, x0, y0):
+        best, bestd = None, recipe.REGISTRY_MATCH_AS
+        for comp in pool:
+            if comp['name'] == 'target' or comp.get('reg'):
+                continue
+            d = np.hypot(comp['x'] - x0, comp['y'] - y0) * pix
+            if d < bestd:
+                best, bestd = comp, d
+        return best
+
+    live, seed_entries, tomb_entries = [], [], []
     for name, entry in registry.items():
         by_band = entry.get('components') or {}
         clist = by_band.get(band_key) or by_band.get(instrument)
-        if not clist:
+        tomb = ((entry.get('tombstones') or {}).get(band_key)
+                or (entry.get('tombstones') or {}).get(instrument))
+        if not clist and not tomb:
             if by_band:
                 print(f"    {tag}registry: {name} has no components "
                       f"for {band_key} or {instrument}; not consumed")
             continue
-        x0, y0 = [float(v) for v in wcs.world_to_pixel(
-            SkyCoord(entry['ra'], entry['dec'], unit='deg'))]
+        x0, y0 = _anchor_px(entry)
         # An entry at a protected position is this field's own target
         # (or a declared member of it) seen from another field. The
         # target is never frozen: it is measured fresh here, and
         # consuming its entry would add a leashed copy on top of the
         # free one and split the light between them.
-        if any(np.hypot(x0 - px, y0 - py) * pix < recipe.TARGET_MATCH_AS
-               for px, py in protect):
+        if _protected(x0, y0):
             print(f"    {tag}registry: {name} is this field's target "
                   f"system; not consumed")
             continue
-        if -margin_px <= x0 < nx + margin_px \
-                and -margin_px <= y0 < ny + margin_px:
+        if not (-margin_px <= x0 < nx + margin_px
+                and -margin_px <= y0 < ny + margin_px):
+            continue
+        if not clist:
+            tomb_entries.append((name, x0, y0, tomb))
+        elif clist[0].get('vantage', 'neighbor') == 'target':
             live.append((name, clist, x0, y0))
+        else:
+            seed_entries.append((name, clist, x0, y0))
 
-    # Pass 1: drop every catalog row matched by any live entry (never
-    # the target, never another entry's frozen components).
+    # Tombstones: the solve failed everywhere it was tried; kill the
+    # gate so the doomed solve is not repeated -- the catalog render
+    # stands until the home vantage rewrites the entry.
+    seeds: dict[str, dict] = {}
     out = list(comps)
+    for name, x0, y0, reason in tomb_entries:
+        comp = _nearest_comp(out, x0, y0)
+        if comp is not None and comp['gate']:
+            comp['gate'] = False
+            print(f"    {tag}registry: {name} tombstone ({reason}); "
+                  f"{comp['name']} keeps its catalog render, no seat")
+
+    # Neighbor-vantage entries: warm seeds only. Gates stay alive; the
+    # solve starts from the stored shapes instead of the catalog's.
+    for name, clist, x0, y0 in seed_entries:
+        comp = _nearest_comp(out, x0, y0)
+        if comp is None:
+            continue
+        kinds = {}
+        for rc in clist:
+            kind = rc['kind']
+            if kind in kinds:
+                continue
+            size_as = rc.get('reff_as', rc.get('rb_as'))
+            profile = rc.get('n', rc.get('beta'))
+            kinds[kind] = [float(size_as) / pix, float(profile),
+                           float(rc['ellip']), float(rc['pa'])]
+        if kinds:
+            seeds[comp['name']] = kinds
+            print(f"    {tag}registry: {name} seeds {comp['name']} "
+                  f"({'+'.join(sorted(kinds))})")
+
+    # Pass 1: drop every catalog row matched by a FROZEN entry (never
+    # the target, never another entry's frozen components).
     for name, clist, x0, y0 in live:
         keep, dropped = [], []
         for comp in out:
@@ -424,7 +522,7 @@ def apply_registry(
         consumed.append(name)
         print(f"    {tag}registry: {name} consumed "
               f"({len(clist)} frozen comps)")
-    return out, consumed
+    return out, consumed, seeds
 
 
 # ------------------------------------
@@ -454,16 +552,20 @@ def harvest_seats(
         *,
         band_key: str,
         include_target: bool = False,
+        solve_health: dict | None = None,
         tag: str = '',
 ) -> list[str]:
     """Merge one band's solved seats into the registry.
 
-    The target seat is written only with include_target: normally a
-    target refit is field-specific, but a shared source measured AS THE
-    TARGET is the one field that views it centered -- the right vantage
-    to write, instead of whichever neighbor's clipped view solved it
-    first. Re-harvesting a band replaces that band's component list,
-    so a re-run cannot double an entry.
+    Every record carries its VANTAGE: 'target' for the target seat of
+    its own field (include_target -- the one centered view, consumed
+    frozen downstream), 'neighbor' for everything else (warm seeds
+    only). A target-vantage record is never overwritten by a neighbor
+    one -- the best fit stands; the home solve upgrades in the other
+    direction. An UNHEALTHY solve (evaluation cap hit, or a size or
+    profile parameter on a bound) harvests a TOMBSTONE for its
+    entries' band instead of records: garbage must not propagate, and
+    the doomed solve must not be re-attempted field after field.
 
     Parameters
     ----------
@@ -480,6 +582,12 @@ def harvest_seats(
         This band's stamp (WCS and pixel scale).
     band_key : str
         Band label the components are stored under.
+    include_target : bool
+        Write the target seat too, at target vantage.
+    solve_health : dict, optional
+        {'capped': bool, 'at_bound': [param names]} from the solve; a
+        cap taints every harvested owner of the band, a size/profile
+        rail taints its owner. None means healthy.
     tag : str
         Run-log prefix.
 
@@ -490,32 +598,74 @@ def harvest_seats(
     """
     wcs = stamp.wcs
     pix = stamp.pixscale
+    health = solve_health or {}
+    capped = bool(health.get('capped'))
+    railed: set[tuple[str, str]] = set()
+    for pname in health.get('at_bound') or []:
+        owner, kind, par = str(pname).rsplit('.', 2)
+        if par in ('reff', 'rb', 'n', 'beta'):
+            railed.add((owner, kind))
+
     fresh: dict[str, list[dict]] = {}
     anchors: dict[str, tuple[float, float]] = {}
+    dead: dict[str, str] = {}
     for seat, sl, amp in zip(seats, seat_slices(seats), seat_amps):
         if seat['owner'] == 'target' and not include_target:
             continue
-        q = np.asarray(params[sl], float)
         name = registry_name(seat['ra'], seat['dec'])
+        anchors[name] = (seat['ra'], seat['dec'])
+        if capped:
+            dead[name] = 'solve hit its evaluation cap'
+            continue
+        if (seat['owner'], seat['kind']) in railed:
+            dead[name] = (f"{seat['owner']}.{seat['kind']} size/profile "
+                          f"on a bound")
+            continue
+        q = np.asarray(params[sl], float)
         x, y = [float(v) for v in wcs.world_to_pixel(
             SkyCoord(seat['ra'], seat['dec'], unit='deg'))]
         center = wcs.pixel_to_world(x + q[4], y + q[5])
         record = dict(kind=seat['kind'], ra=float(center.ra.deg),
                       dec=float(center.dec.deg), ellip=float(q[2]),
-                      pa=float(q[3]), flux_ref=max(float(amp), 0.0))
+                      pa=float(q[3]), flux_ref=max(float(amp), 0.0),
+                      vantage=('target' if seat['owner'] == 'target'
+                               else 'neighbor'))
         if seat['kind'] == 'sersic':
             record.update(reff_as=float(q[0] * pix), n=float(q[1]))
         else:
             record.update(rb_as=float(q[0] * pix), beta=float(q[1]))
         fresh.setdefault(name, []).append(record)
-        anchors[name] = (seat['ra'], seat['dec'])
+
+    # An entry is a JOINT decomposition: one tainted seat poisons its
+    # entry's whole band.
+    for name in dead:
+        fresh.pop(name, None)
+
+    written = []
     for name, records in fresh.items():
         entry = registry.setdefault(name, dict(
             ra=anchors[name][0], dec=anchors[name][1], components={}))
+        existing = entry['components'].get(band_key)
+        if (existing and existing[0].get('vantage') == 'target'
+                and records[0]['vantage'] == 'neighbor'):
+            continue      # the home fit stands; no downgrade
         entry['components'][band_key] = records
-    if fresh:
-        print(f"    {tag}registry: harvested {sorted(fresh)} [{band_key}]")
-    return sorted(fresh)
+        (entry.get('tombstones') or {}).pop(band_key, None)
+        written.append(name)
+    for name, reason in dead.items():
+        entry = registry.setdefault(name, dict(
+            ra=anchors[name][0], dec=anchors[name][1], components={}))
+        existing = entry['components'].get(band_key)
+        if existing and existing[0].get('vantage') == 'target':
+            continue      # a healthy home fit outranks a failed retry
+        entry['components'].pop(band_key, None)
+        entry.setdefault('tombstones', {})[band_key] = reason
+        print(f"    {tag}registry: {name} tombstoned [{band_key}]: "
+              f"{reason}")
+    if written:
+        print(f"    {tag}registry: harvested {sorted(written)} "
+              f"[{band_key}]")
+    return sorted(written)
 
 
 def load_registry(path: str | Path | None) -> dict:

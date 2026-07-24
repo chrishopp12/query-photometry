@@ -410,9 +410,9 @@ def test_apply_registry_never_consumes_the_target(capsys):
     registry = {'self': dict(ra=ra, dec=dec, components={
         'Legacy_r': [dict(kind='sersic', ra=ra, dec=dec, ellip=0.1,
                           pa=0.0, reff_as=1.5, n=2.0, flux_ref=300.0)]})}
-    out, consumed = apply_registry(comps, registry, stamp, psf,
-                                   'Legacy_r', 'Legacy')
-    assert consumed == []
+    out, consumed, seeds = apply_registry(comps, registry, stamp, psf,
+                                          'Legacy_r', 'Legacy')
+    assert consumed == [] and seeds == {}
     assert [c['name'] for c in out] == [c['name'] for c in comps]
     assert "this field's target" in capsys.readouterr().out
 
@@ -453,10 +453,13 @@ def test_registry_harvest_then_consume_round_trip():
                   band_key='Legacy_r')
     assert len(entry['components']['Legacy_r']) == 2
 
-    # consumption drops the matched catalog row and adds frozen comps
+    # a TARGET-vantage entry consumes frozen: the matched catalog row
+    # drops and the frozen comps take its place
+    for rc in entry['components']['Legacy_r']:
+        rc['vantage'] = 'target'
     fresh = build_components(cat, stamp, psf, 1.3)
-    out, consumed = apply_registry(fresh, registry, stamp, psf,
-                                   'Legacy_r', 'Legacy')
+    out, consumed, _ = apply_registry(fresh, registry, stamp, psf,
+                                      'Legacy_r', 'Legacy')
     assert consumed == touched
     names = [c['name'] for c in out]
     gated = next(c['name'] for c in fresh if c['gate'])
@@ -466,6 +469,66 @@ def test_registry_harvest_then_consume_round_trip():
     lo, hi = recipe.REGISTRY_AMP_BAND
     for c in frozen:
         assert c['amp_lohi'] == (lo * 300.0, hi * 300.0)
+
+
+def test_registry_v2_vantage_seeds_and_tombstones():
+    """Neighbor-vantage entries seed warm starts (gates alive), failed
+    solves tombstone (gates die, no repeats), healthy writes clear
+    tombstones, and a target-vantage record is never downgraded."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    cat, comps = _components_with_gated(stamp, psf)
+    seats, _ = build_seats(comps, {}, stamp, stamp.data)
+    params = np.concatenate([s['p0'] for s in seats])
+    amps = [300.0] * len(seats)
+    reg: dict = {}
+    harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r')
+    name = next(iter(reg))
+    assert reg[name]['components']['Legacy_r'][0]['vantage'] == 'neighbor'
+
+    # neighbor vantage: seeds only -- nothing frozen, gate alive, and
+    # the seeded seat starts from the stored shape
+    fresh = build_components(cat, stamp, psf, 1.3)
+    out, consumed, seeds = apply_registry(fresh, reg, stamp, psf,
+                                          'Legacy_r', 'Legacy')
+    assert consumed == []
+    gated = next(c['name'] for c in fresh if c['gate'])
+    assert set(seeds[gated]) == {'nuker', 'sersic'}
+    assert any(c['name'] == gated and c['gate'] for c in out)
+    seats2, _ = build_seats(out, {}, stamp, stamp.data, seeds=seeds)
+    core = next(s for s in seats2
+                if s['owner'] == gated and s['kind'] == 'sersic')
+    assert core['p0'][0] == pytest.approx(seeds[gated]['sersic'][0],
+                                          rel=1e-6)
+
+    # a capped solve tombstones the band; consumption kills the gate
+    harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r',
+                  solve_health=dict(capped=True, at_bound=[]))
+    assert 'Legacy_r' in reg[name]['tombstones']
+    assert 'Legacy_r' not in reg[name]['components']
+    fresh2 = build_components(cat, stamp, psf, 1.3)
+    out2, consumed2, seeds2 = apply_registry(fresh2, reg, stamp, psf,
+                                             'Legacy_r', 'Legacy')
+    assert consumed2 == [] and seeds2 == {}
+    assert not any(c['gate'] for c in out2 if c['name'] == gated)
+
+    # a size rail on the owner tombstones too
+    reg2: dict = {}
+    harvest_seats(reg2, seats, params, amps, stamp, band_key='Legacy_r',
+                  solve_health=dict(capped=False,
+                                    at_bound=[f'{gated}.sersic.reff']))
+    assert 'Legacy_r' in reg2[name]['tombstones']
+
+    # a healthy re-harvest clears the tombstone...
+    harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r')
+    assert 'Legacy_r' not in (reg[name].get('tombstones') or {})
+    # ... and a target-vantage record outranks any neighbor rewrite
+    for rc in reg[name]['components']['Legacy_r']:
+        rc['vantage'] = 'target'
+    marker = reg[name]['components']['Legacy_r'][0]['flux_ref']
+    harvest_seats(reg, seats, params, [111.0] * len(seats), stamp,
+                  band_key='Legacy_r')
+    assert reg[name]['components']['Legacy_r'][0]['flux_ref'] == marker
 
 
 def test_registry_save_is_atomic_and_round_trips(tmp_path):

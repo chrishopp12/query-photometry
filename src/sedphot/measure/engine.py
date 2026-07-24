@@ -341,12 +341,12 @@ def measure_band(
                              - recipe.GATE_EDGE_MARGIN_AS) \
         if len(cat) else []
     system = _system_names(comps, patches, stamp)
-    comps, consumed = apply_registry(comps, scene['registry'], stamp,
-                                     psf, band_key, product.instrument,
-                                     protect_px=[(c['x'], c['y'])
-                                                 for c in comps
-                                                 if c['name'] in system],
-                                     tag=tag)
+    comps, consumed, reg_seeds = apply_registry(
+        comps, scene['registry'], stamp, psf, band_key,
+        product.instrument,
+        protect_px=[(c['x'], c['y']) for c in comps
+                    if c['name'] in system],
+        tag=tag)
 
     # Forced mode: pin the target to the given shape and disable the
     # standard refit -- the amplitude stays free (the joint solve owns
@@ -444,7 +444,7 @@ def measure_band(
     if ref is None:
         if comps:
             seats, drops = build_seats(comps, patches, stamp, image,
-                                       tag=tag)
+                                       seeds=reg_seeds, tag=tag)
     elif ref.get('seats'):
         seats, drops = ref['seats'], set(ref['drops'])
 
@@ -598,11 +598,15 @@ def measure_band(
           f"{mesh_ap_ujy:+.1f}, {time.time() - t0:.0f}s")
 
     if registry_update and fit['seats_local']:
+        health = None
+        if solve_info is not None:
+            health = dict(capped=solve_info['status'] == 0,
+                          at_bound=solve_info['at_bound'])
         harvest_seats(scene['registry'], fit['seats_local'],
                       fit['seat_params'], fit['seat_amps'], stamp,
                       band_key=band_key,
                       include_target=bool(patches.get('harvest_target')),
-                      tag=tag)
+                      solve_health=health, tag=tag)
 
     if dump_dir is not None:
         Path(dump_dir).mkdir(parents=True, exist_ok=True)
