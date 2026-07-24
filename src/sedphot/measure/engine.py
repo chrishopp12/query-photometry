@@ -496,8 +496,10 @@ def measure_band(
     # out of the residual, so a well-fit source leaves the mesh
     # nothing to take; its resolution floor (~2 bins) makes compact
     # light invisible to it either way.
+    mesh_state: dict = {}
     mesh = residual_mesh(image - scene_img - bg['img'], good & ~mask,
-                         stamp.pixscale, level_px=bg.get('keep_px'))
+                         stamp.pixscale, level_px=bg.get('keep_px'),
+                         state=mesh_state)
     mesh_ap_ujy = float(mesh[stamp.rr < aperture_arcsec].sum()
                         * stamp.cf)
     model_fill = target_img + bg['img']
@@ -538,6 +540,17 @@ def measure_band(
     if artifact_as2 > 0:
         witness['artifact_flood_as2'] = round(flood_as2, 1)
     witness['mesh_ap_uJy'] = round(mesh_ap_ujy, 1)
+    # The fit state: everything a re-derivation needs without a solver
+    # -- a new aperture reads the enclosed curve, a scene rebuild takes
+    # the amplitudes + solve params + plane coefficients + mesh grid.
+    witness['fit_state'] = dict(
+        amps=[[owner, round(float(amp), 3)]
+              for owner, amp in zip(base_owner, fit['amps'])],
+        bg_coefs=[round(float(v), 8) for v in bg['coefs']],
+        mesh=mesh_state or None,
+        rgrid=[float(r) for r in rgrid],
+        enclosed_uJy=[round(float(v), 2) for v in enc],
+        model_cog_uJy=[round(float(v), 2) for v in model_cog])
     witness['gated'] = [c['name'] for c in comps
                         if c['shape'] is not None and c['gate']]
     witness['seat_owners'] = sorted(drops)

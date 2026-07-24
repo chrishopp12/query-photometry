@@ -169,3 +169,14 @@ def test_unclaimed_blob_is_meshed_out_of_the_flux(tmp_path):
     assert m['flux_ujy'] == pytest.approx(f_target, rel=0.10)
     assert 'mesh=' in measurement_to_row(m)['flags']
     assert m['flux_err_ujy'] > 0.0
+    # the fit state reconstructs the measurement without a solver: the
+    # stored curve reads the flux at ANY aperture, and the mesh grid +
+    # amplitudes + plane coefficients rebuild the scene
+    fs = witness['fit_state']
+    assert np.interp(12.0, fs['rgrid'],
+                     fs['enclosed_uJy']) == pytest.approx(m['flux_ujy'],
+                                                          abs=0.05)
+    assert any(owner == 'target' for owner, _ in fs['amps'])
+    assert fs['mesh'] and fs['mesh']['bin_px'] > 0
+    import json
+    json.dumps(fs)                                # sidecar-serializable

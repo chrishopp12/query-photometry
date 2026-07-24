@@ -264,6 +264,7 @@ def residual_mesh(
         pixscale: float,
         *,
         level_px: np.ndarray | None = None,
+        state: dict | None = None,
 ) -> np.ndarray:
     """Post-fit background surface: the bin-level mesh of the residual.
 
@@ -297,6 +298,11 @@ def residual_mesh(
     level_px : np.ndarray, optional
         The plane's accepted-bin pixel map (bin_plane's keep_px); the
         mesh is zeroed over vote & level_px. None zeroes over vote.
+    state : dict, optional
+        Filled with everything needed to re-evaluate this exact mesh
+        without the pixels (row_starts, col_starts, bin_px, the
+        smoothed grid, and the zero offset) -- the sidecar's
+        reconstruction record.
 
     Returns
     -------
@@ -323,6 +329,11 @@ def residual_mesh(
     zero_over = vote if level_px is None else (vote & level_px)
     if not zero_over.any():
         zero_over = vote
-    if zero_over.any():
-        mesh = mesh - float(mesh[zero_over].mean())
+    zero = float(mesh[zero_over].mean()) if zero_over.any() else 0.0
+    mesh = mesh - zero
+    if state is not None:
+        state.update(row_starts=row_starts.tolist(),
+                     col_starts=col_starts.tolist(), bin_px=int(bin_px),
+                     smoothed=np.round(smoothed, 7).tolist(),
+                     zero=round(zero, 7))
     return mesh
