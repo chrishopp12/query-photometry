@@ -537,12 +537,14 @@ def test_registry_v2_vantage_seeds_and_tombstones():
     assert consumed2 == [] and seeds2 == {}
     assert not any(c['gate'] for c in out2 if c['name'] == gated)
 
-    # a size rail on the owner tombstones too
+    # a rail alone is a WITNESS, not a failure: validated envelope
+    # fits carry beta rails throughout the sample -- harvest proceeds
     reg2: dict = {}
     harvest_seats(reg2, seats, params, amps, stamp, band_key='Legacy_r',
                   solve_health=dict(capped=False,
                                     at_bound=[f'{gated}.sersic.reff']))
-    assert 'Legacy_r' in reg2[name]['tombstones']
+    assert 'Legacy_r' in reg2[name]['components']
+    assert 'Legacy_r' not in (reg2[name].get('tombstones') or {})
 
     # a healthy re-harvest clears the tombstone...
     harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r')

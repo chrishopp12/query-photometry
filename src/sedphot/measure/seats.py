@@ -562,10 +562,14 @@ def harvest_seats(
     frozen downstream), 'neighbor' for everything else (warm seeds
     only). A target-vantage record is never overwritten by a neighbor
     one -- the best fit stands; the home solve upgrades in the other
-    direction. An UNHEALTHY solve (evaluation cap hit, or a size or
-    profile parameter on a bound) harvests a TOMBSTONE for its
-    entries' band instead of records: garbage must not propagate, and
-    the doomed solve must not be re-attempted field after field.
+    direction. An UNHEALTHY solve -- one that burned its evaluation
+    cap without converging -- harvests a TOMBSTONE for its entries'
+    band instead of records: garbage must not propagate, and the
+    doomed solve must not be re-attempted field after field. A
+    parameter on a bound alone is NOT unhealthy: rails are routine
+    witnesses on real envelopes (a Nuker beta pinned at its ceiling
+    appears on validated fits throughout the sample) and ride the
+    at_bound witness, not the registry's health verdict.
 
     Parameters
     ----------
@@ -585,9 +589,8 @@ def harvest_seats(
     include_target : bool
         Write the target seat too, at target vantage.
     solve_health : dict, optional
-        {'capped': bool, 'at_bound': [param names]} from the solve; a
-        cap taints every harvested owner of the band, a size/profile
-        rail taints its owner. None means healthy.
+        {'capped': bool} from the solve; a cap taints every harvested
+        owner of the band. None means healthy.
     tag : str
         Run-log prefix.
 
@@ -600,11 +603,6 @@ def harvest_seats(
     pix = stamp.pixscale
     health = solve_health or {}
     capped = bool(health.get('capped'))
-    railed: set[tuple[str, str]] = set()
-    for pname in health.get('at_bound') or []:
-        owner, kind, par = str(pname).rsplit('.', 2)
-        if par in ('reff', 'rb', 'n', 'beta'):
-            railed.add((owner, kind))
 
     fresh: dict[str, list[dict]] = {}
     anchors: dict[str, tuple[float, float]] = {}
@@ -616,10 +614,6 @@ def harvest_seats(
         anchors[name] = (seat['ra'], seat['dec'])
         if capped:
             dead[name] = 'solve hit its evaluation cap'
-            continue
-        if (seat['owner'], seat['kind']) in railed:
-            dead[name] = (f"{seat['owner']}.{seat['kind']} size/profile "
-                          f"on a bound")
             continue
         q = np.asarray(params[sl], float)
         x, y = [float(v) for v in wcs.world_to_pixel(
