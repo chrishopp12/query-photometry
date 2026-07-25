@@ -138,6 +138,20 @@ def _cmd_sed(args: argparse.Namespace) -> None:
     run_sed(args.label, args.out_dir)
 
 
+def _cmd_remeasure(args: argparse.Namespace) -> None:
+    from .remeasure import remeasure_sersic
+    aperture = None if args.integrated else args.aperture
+    table = remeasure_sersic(args.provenance, aperture)
+    if table.empty:
+        sys.exit(f"sedphot remeasure: no band has a stored model in "
+                 f"{args.provenance}")
+    if args.out:
+        table.to_csv(args.out, index=False)
+        print(f"wrote {len(table)} bands -> {args.out}")
+    else:
+        print(table.to_string(index=False))
+
+
 def _cmd_run(args: argparse.Namespace) -> None:
     if args.registry_update and not args.registry:
         sys.exit("sedphot run: --registry-update needs --registry PATH")
@@ -317,6 +331,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
+
+    p_remeasure = subparsers.add_parser(
+        "remeasure",
+        help="Re-report band fluxes from a stored fit (no re-fetch, no refit)")
+    p_remeasure.add_argument('provenance', type=str,
+                             help="Path to a <label>_measured.provenance.json")
+    p_remeasure.add_argument('--mode', choices=['sersic'], default='sersic',
+                             help="sersic: the fitted model's flux [default]")
+    p_remeasure.add_argument('--aperture', type=float, default=12.0,
+                             help="Circular aperture radius, arcsec [default: 12]")
+    p_remeasure.add_argument('--integrated', action='store_true',
+                             help="Integrated model total (ignores --aperture)")
+    p_remeasure.add_argument('--out', type=str, default=None,
+                             help="Output CSV path [default: print to stdout]")
+    p_remeasure.set_defaults(func=_cmd_remeasure)
 
     all_providers = sorted(set(CATALOG_PROVIDERS) | set(IMAGE_PROVIDERS))
     p_run = subparsers.add_parser(
