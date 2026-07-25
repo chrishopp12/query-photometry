@@ -86,31 +86,51 @@ def _footprint_center_offset(row, coord: SkyCoord) -> float:
         return 1e9
 
 
-def _covers_target(content: bytes, coord: SkyCoord, pad_arcsec: float = 15.0) -> bool:
-    """Does a SODA cutout hold real data across a pad_arcsec box on the TARGET?
+def _soda_nodata(data: np.ndarray) -> np.ndarray:
+    """SODA off-footprint fill as a nodata mask, matching the measurement gate.
 
-    SODA truncates cutouts at a stack's footprint edge, so the target can land
-    near the returned array's edge even when the array center is populated --
-    check the target's OWN WCS position and require it to sit at least
-    pad_arcsec (> the photometry aperture) inside the array, so the aperture
-    fits. A target near every stack's edge (true survey boundary) fails here
-    and CFHT is skipped rather than measured on a clipped aperture.
+    SODA fills a clipped region with exact zeros AND deeply-negative values --
+    the latter finite and non-zero, so an isfinite/non-zero test counts them as
+    real data (and the mosaic's first-valid combine would keep them over an
+    adjacent tile's good pixels). Flag them as the gate does: non-finite, exact
+    zero, or more than 10 robust sigma below the median level.
+    """
+    nodata = ~np.isfinite(data) | (data == 0.0)
+    good = data[~nodata]
+    if good.size >= 100:
+        level = float(np.median(good))
+        sigma = 1.4826 * float(np.median(np.abs(good - level))) or 1e-30
+        nodata |= (data - level) < -10.0 * sigma
+    return nodata
+
+
+def _covers_target(content: bytes, coord: SkyCoord,
+                   aperture_arcsec: float = 12.0) -> bool:
+    """Does the cutout cover the science aperture with real data?
+
+    Aligned with the measurement coverage gate (COVERAGE_MIN): at least 95% of
+    the aperture-radius disk around the target must be finite and non-zero. A
+    stack that clips the aperture -- one the gate would demote -- fails here
+    too, so the mosaic fallback fires rather than the clip being accepted as a
+    single stack only to fail downstream. A target whose aperture runs off the
+    cutout edge (true survey boundary) also fails, and CFHT is skipped.
     """
     try:
         with fits.open(io.BytesIO(content)) as hdul:
-            hdu = next(h for h in hdul if h.data is not None and h.data.ndim == 2)
+            hdu = next(h for h in hdul
+                       if h.data is not None and h.data.ndim == 2)
             data = hdu.data
             wcs = WCS(hdu.header)
-        x, y = wcs.world_to_pixel(coord)
-        x, y = int(round(float(x))), int(round(float(y)))
-        scale = float(np.mean(proj_plane_pixel_scales(wcs))) * 3600.0  # arcsec/pix
-        pad = max(3, int(round(pad_arcsec / scale)))
+        x, y = (float(v) for v in wcs.world_to_pixel(coord))
+        scale = float(np.mean(proj_plane_pixel_scales(wcs))) * 3600.0
+        r = aperture_arcsec / scale
         ny, nx = data.shape
-        if not (pad <= x < nx - pad and pad <= y < ny - pad):
-            return False
-        box = data[y - pad:y + pad + 1, x - pad:x + pad + 1]
-        good = np.isfinite(box) & (box != 0)
-        return bool(good.mean() > 0.8)
+        if not (r <= x < nx - r and r <= y < ny - r):
+            return False       # aperture runs off the cutout edge
+        yy, xx = np.ogrid[:ny, :nx]
+        aper = (xx - x) ** 2 + (yy - y) ** 2 < r ** 2
+        good = ~_soda_nodata(data) & aper
+        return bool(good.sum() / max(int(aper.sum()), 1) > 0.95)
     except Exception:
         return False
 
@@ -130,7 +150,9 @@ def _mosaic_clipping_stacks(cutouts: list[bytes], coord: SkyCoord,
             with fits.open(io.BytesIO(content)) as hdul:
                 hdu = next(h for h in hdul
                            if h.data is not None and h.data.ndim == 2)
-                planes.append((hdu.data.astype('f4'), WCS(hdu.header)))
+                plane = np.where(_soda_nodata(hdu.data), np.nan,
+                                 hdu.data).astype('f4')
+                planes.append((plane, WCS(hdu.header)))
                 if photzp is None and 'PHOTZP' in hdu.header:
                     photzp = hdu.header['PHOTZP']
         except Exception:
