@@ -201,6 +201,7 @@ def solve_shapes(
         p_seed=None,
         extra_fixed_cols=None,
         gram=None,
+        stage_warm=False,
 ) -> dict:
     """Joint nonlinear solve of the given seats' shape parameters.
 
@@ -299,27 +300,33 @@ def solve_shapes(
     p0 = (np.asarray(p_seed, float) if p_seed is not None
           else np.concatenate([s['p0'] for s in seats]))
     t0 = time.time()
+    max_nfev = (recipe.SOLVE_NFEV if p_seed is None
+                else recipe.SOLVE_NFEV_WARM)
+    # Two-stage start: with the center offsets free from the start, the
+    # center<->shape degeneracy can send a solve wandering before the
+    # geometry organizes. Stage 1 freezes the Sersic centers; stage 2
+    # releases them from that basin. Applied to COLD solves and to
+    # CROSS-BAND warm re-solves (stage_warm): a seed scaled from another
+    # band lands off-center on a bright envelope and crawls without it (a
+    # companion that converges in ~10 evals in the reference band burned
+    # the full cap in z before staging). A same-band warm re-solve inside
+    # the alternation already sits in its basin and skips the staging.
+    lo1, hi1 = lo.copy(), hi.copy()
+    staged = False
+    for seat, sl in zip(seats, slices):
+        if seat['kind'] == 'sersic':
+            lo1[sl.start + 4:sl.start + 6] = -1e-6
+            hi1[sl.start + 4:sl.start + 6] = 1e-6
+            staged = True
     nfev_stage1 = 0
-    if p_seed is None:
-        # Two-stage cold start: with center offsets in the vector, a
-        # cold solve can converge into a nearby local minimum before
-        # the geometry organizes. Stage 1 solves the centers-frozen
-        # problem; stage 2 releases the Sersic centers warm from that
-        # basin. Warm re-solves skip the staging.
-        lo1, hi1 = lo.copy(), hi.copy()
-        for seat, sl in zip(seats, slices):
-            if seat['kind'] == 'sersic':
-                lo1[sl.start + 4:sl.start + 6] = -1e-6
-                hi1[sl.start + 4:sl.start + 6] = 1e-6
+    if staged and (p_seed is None or stage_warm):
         stage1 = least_squares(fun, np.clip(p0, lo1, hi1),
                                jac=make_jac(lo1, hi1),
                                bounds=(lo1, hi1), loss='soft_l1',
                                f_scale=recipe.SOLVE_FSCALE,
-                               x_scale='jac', max_nfev=recipe.SOLVE_NFEV)
+                               x_scale='jac', max_nfev=max_nfev)
         p0 = stage1.x
         nfev_stage1 = int(stage1.nfev)
-    max_nfev = (recipe.SOLVE_NFEV if p_seed is None
-                else recipe.SOLVE_NFEV_WARM)
     result = least_squares(fun, np.clip(p0, lo, hi), jac=make_jac(lo, hi),
                            bounds=(lo, hi), loss='soft_l1',
                            f_scale=recipe.SOLVE_FSCALE,
@@ -346,19 +353,26 @@ def solve_shapes(
 # ------------------------------------
 # Transfer-band plumbing
 # ------------------------------------
-def _transfer_setup(seats, ref, stamp, psf):
+def _transfer_setup(seats, ref, stamp, psf, free_target=False):
     """Band-local seat machinery for a transfer band.
 
     Scales the reference seats and solved parameters onto this band's
     grid, renders the frozen target columns once, and splits the seat
-    indices into frozen (target) and free (neighbor) sets.
+    indices into frozen (target) and free (neighbor) sets. When
+    free_target, the target seats join the free set too: the per-band
+    free shape a gating target harvests for the registry (Solve 1),
+    versus the forced-shape science pass that freezes it (Solve 2).
     """
     s_px = ref['pix'] / stamp.pixscale
     seats_local = [_scale_seat(s, s_px) for s in seats]
     p_local = _scale_params(seats, ref['p'], s_px)
     slices = seat_slices(seats)
-    free_idx = [i for i, s in enumerate(seats) if s['owner'] != 'target']
-    frozen_idx = [i for i, s in enumerate(seats) if s['owner'] == 'target']
+    if free_target:
+        free_idx = list(range(len(seats)))
+        frozen_idx = []
+    else:
+        free_idx = [i for i, s in enumerate(seats) if s['owner'] != 'target']
+        frozen_idx = [i for i, s in enumerate(seats) if s['owner'] == 'target']
     frozen_cols = (render_seats(
         [seats_local[i] for i in frozen_idx],
         np.concatenate([p_local[slices[i]] for i in frozen_idx]),
@@ -416,6 +430,7 @@ def joint_fit(
         drops: set[str],
         *,
         ref: dict | None = None,
+        free_target: bool = False,
 ) -> dict:
     """The whole fit: {shapes + amplitudes} <-> background, block
     coordinate descent to a fixed point.
@@ -470,7 +485,7 @@ def joint_fit(
     cols, owners, col_flux, bounds = [], [], [], None
 
     solving = bool(seats) and ref is None
-    transfer = (_transfer_setup(seats, ref, stamp, psf)
+    transfer = (_transfer_setup(seats, ref, stamp, psf, free_target=free_target)
                 if seats and ref is not None else None)
 
     p = None
@@ -506,7 +521,7 @@ def joint_fit(
                      for i in transfer['free_idx']],
                     drops, p_seed=transfer['p_free'],
                     extra_fixed_cols=transfer['frozen_cols'],
-                    gram=gram)
+                    gram=gram, stage_warm=True)
                 transfer['p_free'] = solve_info['p']
                 nfev_hist.append(solve_info['nfev'])
                 free_cols, _ = render_seats(

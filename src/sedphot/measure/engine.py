@@ -46,7 +46,8 @@ from .aperture import (build_mask, curve, empap_error, enclosed_at,
                        flux_error, twin_fill, witness_row)
 from .artifacts import find_artifacts
 from .background import bin_plane, residual_mesh
-from .components import apply_patches, build_components, drop_target_shreds
+from .components import (apply_patches, build_components, drop_target_shreds,
+                         gated_row)
 from .psf import resolve_psf
 from .render import ampl_from_total, conv_same, sersic_profile
 from .seats import apply_registry, build_seats, harvest_seats, load_registry
@@ -242,6 +243,26 @@ def _seat_colors(seats: list[dict], cat: pd.DataFrame,
         colors.append(float(np.clip(flux_band / flux_ref, 0.05, 20.0))
                       if usable else 1.0)
     return colors
+
+
+def _target_gates(comps: list[dict], cat: pd.DataFrame) -> bool:
+    """Whether the target's own catalog row qualifies for a shape gate.
+
+    A gating target is one that would be seated (a free shape solve)
+    when it appears as a neighbor in another field. Its per-band shape,
+    solved here from its own centered best view, is worth harvesting at
+    target vantage so every consumer freezes it instead of re-fitting a
+    clipped copy. Judged on the raw catalog row (gated_row wants a
+    non-self distance); patch-forced targets ride their own
+    'harvest_target' flag, not this.
+    """
+    target = next((c for c in comps if c['name'] == 'target'), None)
+    if target is None:
+        return False
+    irow = target.get('irow', -1)
+    if irow is None or irow < 0 or irow >= len(cat):
+        return False
+    return gated_row(cat.iloc[irow], recipe.TARGET_MATCH_AS + 1.0)
 
 
 # ------------------------------------
@@ -456,6 +477,29 @@ def measure_band(
                                             product.band)
     fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
                     ref=fit_ref)
+    # Registry harvest source. The science flux always comes from `fit`
+    # (forced-target on transfer bands, so colors stay shape-consistent).
+    # The reference band already solved the target free -- it harvests
+    # itself. On a transfer band a GATING target gets a SECOND, free-
+    # target solve (Solve 1): the per-band shape every neighbor's forced
+    # photometry consumes must come from its own centered best view, not
+    # the frozen reference shape.
+    target_gates = _target_gates(comps, cat)
+    fit_free = None
+    if ref is None or not (target_gates and seats):
+        harvest_fit = fit
+    else:
+        # A gating target harvests its per-band free shape (Solve 1): the
+        # data-driven envelope every neighbor's forced photometry consumes.
+        # For a real color gradient this differs from the transferred
+        # reference shape and fits the halo better (a genuinely compact
+        # z-envelope under an extended r, say). The plane background cannot absorb a
+        # radial halo, so the free solve cannot cheaply collapse when the
+        # envelope is truly extended -- it lands on the shape the data
+        # supports, no aperture-residual veto required.
+        fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
+                             drops, ref=fit_ref, free_target=True)
+        harvest_fit = fit_free
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
     if solve_info is not None:
@@ -613,22 +657,38 @@ def measure_band(
           f"{witness['model_own_growth_uJy']:+.1f}), mesh "
           f"{mesh_ap_ujy:+.1f}, {time.time() - t0:.0f}s")
 
-    if registry_update and fit['seats_local']:
-        health = None
-        if solve_info is not None:
-            health = dict(capped=solve_info['status'] == 0)
-        harvest_seats(scene['registry'], fit['seats_local'],
-                      fit['seat_params'], fit['seat_amps'], stamp,
-                      band_key=band_key, seat_col_flux=fit['col_flux'],
-                      include_target=bool(patches.get('harvest_target')),
+    if registry_update and harvest_fit['seats_local']:
+        h_si = harvest_fit['solve_info']
+        health = dict(capped=h_si['status'] == 0) if h_si is not None else None
+        harvest_seats(scene['registry'], harvest_fit['seats_local'],
+                      harvest_fit['seat_params'], harvest_fit['seat_amps'],
+                      stamp, band_key=band_key,
+                      seat_col_flux=harvest_fit['col_flux'],
+                      include_target=(bool(patches.get('harvest_target'))
+                                      or target_gates),
                       solve_health=health, tag=tag)
 
     if dump_dir is not None:
         Path(dump_dir).mkdir(parents=True, exist_ok=True)
+        # The RAW free-target solve (fit_free), engine-rendered, so QA
+        # sees the free shape even when the guard rejected it; falls back
+        # to the harvested fit where there was no free pass.
+        src = fit_free if fit_free is not None else harvest_fit
+        h_bases = [c['base'] for c in src['fixed']] + src['cols']
+        h_owner = [c['name'] for c in src['fixed']] + src['owners']
+        free_scene = np.zeros_like(image)
+        free_target = np.zeros_like(image)
+        for mult, base, owner in zip(src['mults'], h_bases, h_owner):
+            contrib = max(mult, 0.0) * base
+            free_scene += contrib
+            if owner in system:
+                free_target += contrib
         np.savez_compressed(
             Path(dump_dir) / f'{band_key}_arrays.npz',
             image=image, scene=scene_img, neighbors=neighbors,
             target=target_img, bg=bg['img'], mask=mask,
+            free_target=free_target, free_scene=free_scene,
+            free_bg=src['bg']['img'],
             filled=fill['filled'], good=good, star_img=star_img,
             amps=np.asarray(fit['amps']),
             owners=np.array(base_owner), cx=stamp.cx, cy=stamp.cy,
