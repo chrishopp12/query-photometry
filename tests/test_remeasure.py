@@ -1,7 +1,9 @@
-"""Offline tests for the Sersic-model remeasure (no images, no scene, no fit)."""
+"""Offline tests for --remeasure (no images, no scene, no fit)."""
 import json
 
-from sedphot.remeasure import model_flux_within, remeasure_sersic
+import pytest
+
+from sedphot.remeasure import model_flux_within, remeasure
 
 
 def test_model_flux_within_interpolates_and_caps():
@@ -21,28 +23,33 @@ def test_model_flux_within_interpolates_and_caps():
     assert model_flux_within(0.0, rgrid, cog, total) == total
 
 
-def test_remeasure_sersic_table(tmp_path):
+def test_remeasure_both_modes_and_skips(tmp_path):
     prov = {
         'git_rev': 'abc123',
-        'target': {'label': 'g1'},
         'per_band': {
             'Legacy_r': {
                 'target_model_uJy': 570.0,
                 'fit_state': {'rgrid': [2.0, 6.0, 12.0, 20.0],
-                              'model_cog_uJy': [100.0, 300.0, 500.0, 560.0]}},
-            'SDSS_u': {'target_model_uJy': 40.0, 'fit_state': {}},  # no COG
+                              'model_cog_uJy': [100.0, 300.0, 500.0, 560.0],
+                              'enclosed_uJy': [90.0, 290.0, 480.0, 545.0]}},
+            'SDSS_u': {'target_model_uJy': 40.0, 'fit_state': {}},   # no COG
         },
     }
     p = tmp_path / 'g1.provenance.json'
     p.write_text(json.dumps(prov))
 
-    at12 = remeasure_sersic(p, 12.0)
-    # the band with a stored COG is reported; the demoted band is skipped
-    assert list(at12['band']) == ['Legacy_r']
-    assert at12.iloc[0]['flux_uJy'] == 500.0
-    assert at12.iloc[0]['aperture_as'] == 12.0
-    assert 'abc123' in at12.iloc[0]['source']       # git_rev-pinned provenance
+    # sersic: model COG; the demoted band is skipped; integrated -> model total
+    s12 = remeasure(p, 12.0, mode='sersic')
+    assert list(s12['band']) == ['Legacy_r']
+    assert s12.iloc[0]['flux_uJy'] == 500.0
+    assert 'abc123' in s12.iloc[0]['source']       # git_rev-pinned provenance
+    assert remeasure(p, None, mode='sersic').iloc[0]['flux_uJy'] == 570.0
 
-    integ = remeasure_sersic(p, None)               # integrated total
-    assert integ.iloc[0]['flux_uJy'] == 570.0
-    assert integ.iloc[0]['aperture_as'] == float('inf')
+    # aperture: empirical COG; integrated -> its outermost measured value
+    a12 = remeasure(p, 12.0, mode='aperture')
+    assert a12.iloc[0]['flux_uJy'] == 480.0
+    assert a12.iloc[0]['mode'] == 'aperture'
+    assert remeasure(p, None, mode='aperture').iloc[0]['flux_uJy'] == 545.0
+
+    with pytest.raises(ValueError):
+        remeasure(p, 12.0, mode='bogus')

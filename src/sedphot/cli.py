@@ -139,9 +139,9 @@ def _cmd_sed(args: argparse.Namespace) -> None:
 
 
 def _cmd_remeasure(args: argparse.Namespace) -> None:
-    from .remeasure import remeasure_sersic
+    from .remeasure import remeasure
     aperture = None if args.integrated else args.aperture
-    table = remeasure_sersic(args.provenance, aperture)
+    table = remeasure(args.provenance, aperture, mode=args.mode)
     if table.empty:
         sys.exit(f"sedphot remeasure: no band has a stored model in "
                  f"{args.provenance}")
@@ -337,8 +337,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-report band fluxes from a stored fit (no re-fetch, no refit)")
     p_remeasure.add_argument('provenance', type=str,
                              help="Path to a <label>_measured.provenance.json")
-    p_remeasure.add_argument('--mode', choices=['sersic'], default='sersic',
-                             help="sersic: the fitted model's flux [default]")
+    p_remeasure.add_argument('--mode', choices=['sersic', 'aperture'],
+                             default='sersic',
+                             help="sersic: fitted-model flux; aperture: "
+                                  "empirical neighbor-subtracted flux "
+                                  "[default: sersic]")
     p_remeasure.add_argument('--aperture', type=float, default=12.0,
                              help="Circular aperture radius, arcsec [default: 12]")
     p_remeasure.add_argument('--integrated', action='store_true',
