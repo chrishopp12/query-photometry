@@ -199,8 +199,9 @@ def check_coverage(
     Missing data inside the aperture is fill-corrected downstream, but
     only up to a point: past COVERAGE_MIN there is no honest profile to
     fill from, and the band demotes rather than ship a silently biased
-    flux. The seeing-scale core is gated absolutely -- its peak carries
-    an outsized flux share that no fill can reconstruct.
+    flux. The seeing-scale core is held tighter (CORE_MASKFRAC_MAX), and
+    the peak (PEAK_PROTECT_AS) is inviolable -- its twin reflection is the
+    peak itself, so no fill reconstructs a dead central pixel.
 
     Parameters
     ----------
@@ -233,10 +234,20 @@ def check_coverage(
         raise ApertureCoverageError(
             f"aperture coverage {coverage:.2f} < {recipe.COVERAGE_MIN:g} "
             f"(off footprint / blank / artifact pixels)", coverage)
-    core_radius = max(3.0, 2.0 * seeing_arcsec)
-    if (bad & (stamp.rr < core_radius)).any():
+    # The peak carries the amplitude and its twin reflection is itself, so
+    # a dead pixel here cannot be filled -- refuse the band outright.
+    if (bad & (stamp.rr < recipe.PEAK_PROTECT_AS)).any():
         raise ApertureCoverageError(
-            f"blank pixels inside the {core_radius:g}\" core (aperture "
-            f"coverage {coverage:.2f}) -- no fill can reconstruct a "
+            f"blank pixels inside the {recipe.PEAK_PROTECT_AS:g}\" peak "
+            f"(aperture coverage {coverage:.2f}) -- no fill reconstructs a "
             f"clipped peak", coverage)
+    # Past the peak the twin/model fill can carry a modest gap; hold the
+    # seeing-scale core to a mask-fraction ceiling, not zero tolerance.
+    core = stamp.rr < max(3.0, 2.0 * seeing_arcsec)
+    core_maskfrac = float((bad & core).sum()) / max(int(core.sum()), 1)
+    if core_maskfrac > recipe.CORE_MASKFRAC_MAX:
+        raise ApertureCoverageError(
+            f"core mask fraction {core_maskfrac:.2f} > "
+            f"{recipe.CORE_MASKFRAC_MAX:g} -- too much of the seeing core "
+            f"to fill honestly", coverage)
     return coverage

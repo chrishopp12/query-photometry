@@ -47,9 +47,15 @@ HOLD_MAX = 0.02
 
 # Aperture pixels with real data below this fraction demote the band to
 # no_coverage: past it there is no honest fill, and a silently biased
-# flux is worse than a refused one. The seeing-scale core is gated
-# absolutely -- no fill can reconstruct a clipped peak.
+# flux is worse than a refused one.
 COVERAGE_MIN = 0.95
+# The seeing-scale core is held tighter than the aperture: the twin/model
+# fill can carry a modest core gap but not a large one. The peak itself is
+# inviolable -- its twin reflection IS the peak, so no fill reconstructs a
+# dead central pixel; an absolute (arcsec) radius protects only those few
+# pixels regardless of the band's pixel scale.
+CORE_MASKFRAC_MAX = 0.10   # of the seeing core may be masked-and-filled
+PEAK_PROTECT_AS = 0.5      # a dead pixel within this radius refuses the band
 
 
 # ------------------------------------

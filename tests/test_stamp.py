@@ -124,9 +124,33 @@ def test_coverage_demotes_blank_wedge(tmp_path):
     assert err.value.coverage < recipe.COVERAGE_MIN
 
 
-def test_core_gate_demotes_at_any_fraction(tmp_path):
+def test_peak_gate_demotes_a_dead_peak(tmp_path):
     data = noise_image()
-    data[CENTER_PX, CENTER_PX + 1] = np.nan   # one blank pixel on the peak
+    data[CENTER_PX, CENTER_PX] = np.nan   # dead pixel on the peak itself
+    path = tmp_path / 'band.fits'
+    coord = write_image(path, data)
+    stamp = load_stamp(str(path), 'nmgy', coord, cutout_half_arcsec=50.0)
+    with pytest.raises(ApertureCoverageError, match='peak'):
+        check_coverage(stamp, aperture_arcsec=12.0, seeing_arcsec=1.3)
+
+
+def test_core_tolerates_a_small_masked_fraction(tmp_path):
+    # A few dead pixels off the peak, well under CORE_MASKFRAC_MAX, are
+    # fillable -- the band measures rather than demotes.
+    data = noise_image()
+    data[CENTER_PX + 2:CENTER_PX + 4, CENTER_PX + 2:CENTER_PX + 4] = np.nan
+    path = tmp_path / 'band.fits'
+    coord = write_image(path, data)
+    stamp = load_stamp(str(path), 'nmgy', coord, cutout_half_arcsec=50.0)
+    coverage = check_coverage(stamp, aperture_arcsec=12.0, seeing_arcsec=1.3)
+    assert recipe.COVERAGE_MIN <= coverage < 1.0
+
+
+def test_core_demotes_a_large_masked_fraction(tmp_path):
+    # Too much of the seeing core masked to fill honestly -- demote, even
+    # though the wider aperture stays above COVERAGE_MIN.
+    data = noise_image()
+    data[CENTER_PX + 1:CENTER_PX + 5, CENTER_PX + 1:CENTER_PX + 5] = np.nan
     path = tmp_path / 'band.fits'
     coord = write_image(path, data)
     stamp = load_stamp(str(path), 'nmgy', coord, cutout_half_arcsec=50.0)
