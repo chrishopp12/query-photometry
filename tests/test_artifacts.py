@@ -364,7 +364,7 @@ def test_registry_component_claims_its_own_light():
     psf = moffat_kernel(1.3, PIX)
     comps, consumed = apply_registry([], entry, stamp, psf,
                                      'Legacy_r', 'Legacy')
-    assert consumed == ['J0']
+    assert [c['name'] for c in consumed] == ['J0']
     frozen = comps[0]
     # the base carries the solved flux, not a unit shape
     assert float(frozen['base'].sum()) * stamp.cf == pytest.approx(500.0,

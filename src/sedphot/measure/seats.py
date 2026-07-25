@@ -499,7 +499,10 @@ def apply_registry(
                 amp_lohi=(recipe.REGISTRY_AMP_BAND[0] * phys_in_stamp,
                           recipe.REGISTRY_AMP_BAND[1] * phys_in_stamp),
                 x=x, y=y, gate=False, reg=True))
-        consumed.append(name)
+        # Snapshot the frozen shapes, not just the name: the provenance then
+        # records what each fit actually consumed, so the fit reconstructs from
+        # its own sidecar even after the mutable registry is rewritten.
+        consumed.append({'name': name, 'shapes': [dict(rc) for rc in clist]})
         print(f"    {tag}registry: {name} consumed "
               f"({len(clist)} frozen comps)")
     return out, consumed

@@ -487,7 +487,10 @@ def test_registry_harvest_then_consume_round_trip():
     fresh = build_components(cat, stamp, psf, 1.3)
     out, consumed = apply_registry(fresh, registry, stamp, psf,
                                    'Legacy_r', 'Legacy')
-    assert consumed == touched
+    assert [c['name'] for c in consumed] == touched
+    # the consumed snapshot carries the frozen shape, not just the name
+    snap = consumed[0]['shapes'][0]
+    assert snap['kind'] == 'sersic' and 'reff_as' in snap and 'flux_ref' in snap
     names = [c['name'] for c in out]
     gated = next(c['name'] for c in fresh if c['gate'])
     assert gated not in names
@@ -526,7 +529,7 @@ def test_registry_offstamp_source_renders_only_its_wing():
                             flux_home=flux_home, vantage='target')]})}
     out, consumed = apply_registry([], entry, stamp, psf, 'Legacy_r',
                                    'Legacy')
-    assert consumed == ['J0']
+    assert [c['name'] for c in consumed] == ['J0']
     wing = out[0]
     # the rendered wing carries far LESS than the 5000 home flux -- only
     # the fraction that physically reaches this stamp
@@ -559,7 +562,7 @@ def test_registry_v2_vantage_tombstones_and_zero_amp():
     gated = next(c['name'] for c in fresh if c['gate'])
     out, consumed = apply_registry(fresh, reg, stamp, psf,
                                    'Legacy_r', 'Legacy')
-    assert consumed == [name]
+    assert [c['name'] for c in consumed] == [name]
     assert gated not in [c['name'] for c in out]
     assert sum(1 for c in out if c.get('reg')) == 1
 
