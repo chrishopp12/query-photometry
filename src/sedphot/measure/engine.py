@@ -45,14 +45,14 @@ from . import recipe
 from .aperture import (build_mask, curve, empap_error, enclosed_at,
                        flux_error, twin_fill, witness_row)
 from .artifacts import find_artifacts
-from .background import bin_plane, residual_mesh
+from .background import bin_plane, residual_mesh, eval_mesh
 from .components import (apply_patches, build_components, drop_target_shreds,
                          gated_row)
 from .psf import resolve_psf
 from .render import ampl_from_total, conv_same, sersic_profile
 from .seats import apply_registry, build_seats, harvest_seats, load_registry
 from .sersic import theta_from_pa
-from .solve import joint_fit
+from .solve import joint_fit, pinned_fit
 from .stamp import check_coverage, load_stamp
 from .stars import confirm_stars, subtract_stars
 
@@ -280,6 +280,7 @@ def measure_band(
         rgrid: np.ndarray,
         target_shape: dict | None = None,
         registry_update: bool = False,
+        pin: dict | None = None,
         dump_dir: str | Path | None = None,
 ) -> tuple[dict, dict | None]:
     """Measure one band; returns (measurement, reference-or-None).
@@ -367,6 +368,7 @@ def measure_band(
         product.instrument,
         protect_px=[(c['x'], c['y']) for c in comps
                     if c['name'] in system],
+        snapshot=(pin.get('consumed') if pin else None),
         tag=tag)
 
     # Forced mode: pin the target to the given shape and disable the
@@ -475,31 +477,39 @@ def measure_band(
         fit_ref = dict(ref)
         fit_ref['col_color'] = _seat_colors(seats, cat, comps,
                                             product.band)
-    fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
-                    ref=fit_ref)
-    # Registry harvest source. The science flux always comes from `fit`
-    # (forced-target on transfer bands, so colors stay shape-consistent).
-    # The reference band already solved the target free -- it harvests
-    # itself. On a transfer band a GATING target gets a SECOND, free-
-    # target solve (Solve 1): the per-band shape every neighbor's forced
-    # photometry consumes must come from its own centered best view, not
-    # the frozen reference shape.
-    target_gates = _target_gates(comps, cat)
-    fit_free = None
-    if ref is None or not (target_gates and seats):
-        harvest_fit = fit
+    if pin is not None:
+        # Pinned reconstruction: rebuild the stored fit with no solve and
+        # no harvest. Every shape, amplitude, and plane coefficient comes
+        # from the sidecar; only the render is redone.
+        fit = pinned_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                         pin=pin)
+        harvest_fit, fit_free, target_gates = fit, None, False
     else:
-        # A gating target harvests its per-band free shape (Solve 1): the
-        # data-driven envelope every neighbor's forced photometry consumes.
-        # For a real color gradient this differs from the transferred
-        # reference shape and fits the halo better (a genuinely compact
-        # z-envelope under an extended r, say). The plane background cannot absorb a
-        # radial halo, so the free solve cannot cheaply collapse when the
-        # envelope is truly extended -- it lands on the shape the data
-        # supports, no aperture-residual veto required.
-        fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
-                             drops, ref=fit_ref, free_target=True)
-        harvest_fit = fit_free
+        fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                        ref=fit_ref)
+        # Registry harvest source. The science flux always comes from `fit`
+        # (forced-target on transfer bands, so colors stay shape-consistent).
+        # The reference band already solved the target free -- it harvests
+        # itself. On a transfer band a GATING target gets a SECOND, free-
+        # target solve (Solve 1): the per-band shape every neighbor's forced
+        # photometry consumes must come from its own centered best view, not
+        # the frozen reference shape.
+        target_gates = _target_gates(comps, cat)
+        fit_free = None
+        if ref is None or not (target_gates and seats):
+            harvest_fit = fit
+        else:
+            # A gating target harvests its per-band free shape (Solve 1): the
+            # data-driven envelope every neighbor's forced photometry consumes.
+            # For a real color gradient this differs from the transferred
+            # reference shape and fits the halo better (a genuinely compact
+            # z-envelope under an extended r, say). The plane background cannot absorb a
+            # radial halo, so the free solve cannot cheaply collapse when the
+            # envelope is truly extended -- it lands on the shape the data
+            # supports, no aperture-residual veto required.
+            fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
+                                 drops, ref=fit_ref, free_target=True)
+            harvest_fit = fit_free
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
     if solve_info is not None:
@@ -556,9 +566,13 @@ def measure_band(
     # nothing to take; its resolution floor (~2 bins) makes compact
     # light invisible to it either way.
     mesh_state: dict = {}
-    mesh = residual_mesh(image - scene_img - bg['img'], good & ~mask,
-                         stamp.pixscale, level_px=bg.get('keep_px'),
-                         state=mesh_state)
+    if pin is not None:
+        # Reconstruction reuses the stored mesh surface verbatim.
+        mesh = eval_mesh(pin.get('mesh'), image.shape)
+    else:
+        mesh = residual_mesh(image - scene_img - bg['img'], good & ~mask,
+                             stamp.pixscale, level_px=bg.get('keep_px'),
+                             state=mesh_state)
     mesh_ap_ujy = float(mesh[stamp.rr < aperture_arcsec].sum()
                         * stamp.cf)
     model_fill = target_img + bg['img']
@@ -657,7 +671,7 @@ def measure_band(
           f"{witness['model_own_growth_uJy']:+.1f}), mesh "
           f"{mesh_ap_ujy:+.1f}, {time.time() - t0:.0f}s")
 
-    if registry_update and harvest_fit['seats_local']:
+    if registry_update and pin is None and harvest_fit['seats_local']:
         h_si = harvest_fit['solve_info']
         health = dict(capped=h_si['status'] == 0) if h_si is not None else None
         harvest_seats(scene['registry'], harvest_fit['seats_local'],

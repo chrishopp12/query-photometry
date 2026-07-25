@@ -258,6 +258,9 @@ def run_measure(
         sersic_seeing: float | None = None,
         registry_path: str | None = None,
         registry_update: bool = False,
+        pin_by_band: dict | None = None,
+        write_outputs: bool = True,
+        qa_dir: str | Path | None = None,
         dump_arrays: bool = False,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
@@ -421,20 +424,27 @@ def run_measure(
         measured_bands: list[str] = []
         demoted_bands: list[str] = []
         for product in order_bands(products):
+            band_key = f"{product.instrument}_{product.band}"
+            pin = pin_by_band.get(band_key) if pin_by_band else None
             try:
                 measurement, new_ref = measure_band(
                     product, coord, scene,
-                    references.get(product.instrument), caches,
+                    None if pin else references.get(product.instrument),
+                    caches,
                     aperture_arcsec=aperture_arcsec,
                     cutout_half_arcsec=cutout_arcsec / 2.0,
                     rgrid=rgrid_arr,
                     target_shape=shape_sky if mode == 'sersic' else None,
                     registry_update=registry_update,
+                    pin=pin,
                     dump_dir=cache_dir / "QA" if dump_arrays else None)
                 if new_ref is not None:
                     references[product.instrument] = new_ref
                 row = measurement_to_row(measurement, mode=mode)
-                figure = qa_scene_figure(measurement, cache_dir / "QA")
+                qa_target = (Path(qa_dir) if qa_dir is not None
+                             else (cache_dir / "QA" if write_outputs else None))
+                figure = (qa_scene_figure(measurement, qa_target)
+                          if qa_target is not None else None)
             except ApertureCoverageError as e:
                 # The image exists but the aperture is off its footprint:
                 # honest no_coverage, not a measurement of zero.
@@ -450,10 +460,11 @@ def run_measure(
             measurements.append(measurement)
             provider_rows.append(row)
             measured_bands.append(product.band)
+            qa_note = f"; QA {figure.name}" if figure else ""
             print(f"  {product.instrument} {product.band}: "
                   f"{row['flux_uJy']:.1f} +/- "
                   f"{measurement['flux_err_ujy']:.1f} uJy "
-                  f"({measurement['err_model']}; QA {figure.name})")
+                  f"({measurement['err_model']}{qa_note})")
         rows.extend(provider_rows)
         pieces = []
         if measured_bands:
@@ -480,10 +491,16 @@ def run_measure(
 
     print("Provider summary:")
     print_coverage_summary(results)
-    write_coverage_report(results, phot_dir / "coverage_measure.json")
+    if write_outputs:
+        write_coverage_report(results, phot_dir / "coverage_measure.json")
 
     if measured_df.empty:
         print("\nNo bands measured.")
+        return measured_df
+
+    # Reconstruction (pinned) re-reports fluxes without touching the
+    # science-aperture products: no growth curves, no table, no sidecar.
+    if not write_outputs:
         return measured_df
 
     plot_growth_curves(measurements, phot_dir / "QA")

@@ -337,3 +337,45 @@ def residual_mesh(
                      smoothed=np.round(smoothed, 7).tolist(),
                      zero=round(zero, 7))
     return mesh
+
+
+# ------------------------------------
+# Sidecar reconstruction: re-evaluate a stored background
+# ------------------------------------
+def eval_plane(coefs, shape: tuple[int, int]) -> np.ndarray:
+    """Re-evaluate a stored background plane over a stamp of `shape`.
+
+    The inverse of bin_plane's `coefs` -- [level, x-tilt, y-tilt] in the
+    centered/normalized parametrization -- so a pinned reconstruction
+    reproduces bin_plane's `img` from the sidecar alone, with no bins and
+    no fit. Kept beside bin_plane so the parametrization cannot drift.
+    """
+    ny, nx = shape
+    yy, xx = np.indices((ny, nx))
+    c0, c1, c2 = (float(v) for v in coefs)
+    return c0 + c1 * (xx - nx / 2) / nx + c2 * (yy - ny / 2) / ny
+
+
+def eval_mesh(state: dict | None, shape: tuple[int, int]) -> np.ndarray:
+    """Re-evaluate a stored residual mesh over a stamp of `shape`.
+
+    The inverse of residual_mesh's `state` record: the same clamped
+    bilinear surface over the same bin-center grid, minus the same DC
+    zero. Returns zeros when the fit stored no mesh (too few voting bins,
+    or a band that never built one).
+    """
+    if not state or not state.get('smoothed'):
+        return np.zeros(shape)
+    rs = np.asarray(state['row_starts'], float)
+    cs = np.asarray(state['col_starts'], float)
+    bp = float(state['bin_px'])
+    smoothed = np.asarray(state['smoothed'], float)
+    interp = RegularGridInterpolator((rs + bp / 2.0, cs + bp / 2.0),
+                                     smoothed, bounds_error=False,
+                                     fill_value=None)
+    ny, nx = shape
+    yy, xx = np.indices((ny, nx))
+    ys = np.clip(yy.ravel(), rs[0] + bp / 2.0, rs[-1] + bp / 2.0)
+    xs = np.clip(xx.ravel(), cs[0] + bp / 2.0, cs[-1] + bp / 2.0)
+    mesh = interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
+    return mesh - float(state.get('zero', 0.0))

@@ -331,6 +331,7 @@ def apply_registry(
         instrument: str,
         *,
         protect_px: list[tuple[float, float]] | None = None,
+        snapshot: list | None = None,
         tag: str = '',
 ) -> tuple[list[dict], list[str]]:
     """Replace catalog rows with a registry entry's frozen components.
@@ -367,7 +368,7 @@ def apply_registry(
     consumed : list of str
         Names of the registry entries consumed (frozen).
     """
-    if not registry:
+    if not registry and not snapshot:
         return comps, []
     wcs = stamp.wcs
     pix = stamp.pixscale
@@ -397,7 +398,18 @@ def apply_registry(
         return best
 
     live, tomb_entries = [], []
-    for name, entry in registry.items():
+    # Sidecar-first: a pinned reconstruction consumes the frozen shapes the
+    # fit stored (the registry_consumed snapshot), so it reproduces even
+    # after the mutable registry is rewritten. No snapshot -> live registry.
+    if snapshot is not None:
+        for entry in snapshot:
+            clist = entry.get('shapes')
+            if not clist:
+                continue
+            x0, y0 = [float(v) for v in wcs.world_to_pixel(
+                SkyCoord(clist[0]['ra'], clist[0]['dec'], unit='deg'))]
+            live.append((entry['name'], clist, x0, y0))
+    for name, entry in (registry.items() if snapshot is None else ()):
         by_band = entry.get('components') or {}
         clist = by_band.get(band_key) or by_band.get(instrument)
         tomb = ((entry.get('tombstones') or {}).get(band_key)

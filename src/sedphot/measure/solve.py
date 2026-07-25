@@ -590,3 +590,60 @@ def joint_fit(
                 solve_info=solve_info, cols=cols, owners=owners,
                 fixed=fixed, col_flux=col_flux, seats_local=seats_local,
                 seat_params=seat_params, seat_amps=seat_amps)
+
+
+def pinned_fit(
+        image: np.ndarray,
+        good: np.ndarray,
+        stamp: Stamp,
+        psf: np.ndarray,
+        comps: list[dict],
+        seats: list[dict],
+        drops: set[str],
+        *,
+        pin: dict,
+) -> dict:
+    """joint_fit's result, rebuilt from a stored fit -- no solve at all.
+
+    The pinned reconstruction: seats render at the stored shape vector
+    (pin['seat_params'], already in THIS band's pixels), amplitudes are
+    taken from the sidecar by owner name (pin['amps']), and the plane is
+    re-evaluated from its stored coefficients (pin['bg_coefs']). Nothing
+    is optimized, so the expensive shape solve, the amplitude solve, and
+    the background fit are all skipped. The band is treated as self-
+    contained -- its own stored shape, its own grid -- so no reference/
+    transfer state is threaded. Returns the same dict joint_fit does, so
+    the measurement flow downstream is identical.
+
+    An owner absent from pin['amps'] (a catalog source the stored fit did
+    not carry) falls back to its own catalog flux -- amplitude one, the
+    scene's default prediction -- rather than vanishing from the scene.
+    """
+    from .background import eval_plane
+
+    cf = stamp.cf
+    fixed = [c for c in comps if c['name'] not in drops]
+    fixed_bases = [c['base'] for c in fixed]
+    fixed_flux = [c['flux0'] for c in fixed]
+    p = (np.asarray(pin['seat_params'], float)
+         if pin.get('seat_params') is not None else None)
+    if seats and p is not None:
+        cols, owners = render_seats(seats, p, stamp, psf,
+                                    anchors=seat_anchors(seats, stamp))
+    else:
+        cols, owners = [], []
+    col_flux = [max(float(c.sum()) * cf, 1e-9) for c in cols]
+    bases = fixed_bases + cols
+    base_owner = [c['name'] for c in fixed] + owners
+    name_amp = {o: float(a) for o, a in pin['amps']}
+    flux = np.asarray(fixed_flux + col_flux) if bases else np.zeros(0)
+    amps = np.array([name_amp.get(o, f) for o, f in zip(base_owner, flux)])
+    mults = amps / flux if flux.size else amps
+    coefs = [float(v) for v in pin['bg_coefs']]
+    bg = dict(img=eval_plane(coefs, image.shape), const=coefs[0],
+              coefs=coefs, n_rej=0, n_bins=0,
+              keep_px=np.zeros(image.shape, bool))
+    return dict(amps=amps, mults=mults, bg=bg, track=[coefs[0]],
+                solve_info=None, cols=cols, owners=owners, fixed=fixed,
+                col_flux=col_flux, seats_local=seats, seat_params=p,
+                seat_amps=[float(a) for a in amps[len(fixed_bases):]])

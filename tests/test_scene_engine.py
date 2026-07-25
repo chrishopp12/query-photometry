@@ -25,7 +25,7 @@ from sedphot.measure.seats import (apply_registry, build_seats,
                                    harvest_seats, load_registry,
                                    registry_name, save_registry,
                                    seat_slices)
-from sedphot.measure.solve import joint_fit
+from sedphot.measure.solve import joint_fit, pinned_fit
 from sedphot.measure.stamp import Stamp, radii_arcsec
 
 PIX = 0.5
@@ -330,6 +330,47 @@ def test_point_source_renders_at_subpixel_position():
     assert cy_m == pytest.approx(point['y'], abs=0.05)
 
 
+def test_pinned_fit_reproduces_the_solved_scene():
+    """pinned_fit rebuilds joint_fit's exact scene from joint_fit's own
+    outputs -- the guarantee the beyond-grid reconstruction stands on."""
+    rng = np.random.default_rng(7)
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    image = (inject_sersic((240, 240), psf, flux=400.0, reff_px=3.0 / PIX,
+                           n=2.5, x=stamp.cx, y=stamp.cy)
+             + inject_sersic((240, 240), psf, flux=150.0, reff_px=2.0 / PIX,
+                             n=1.5, x=stamp.cx + 30, y=stamp.cy + 8)
+             + rng.normal(0.0, NOISE, (240, 240)))
+    cat = make_catalog([
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy, flux_nmgy=400.0 / 3.631,
+                    shape_r=3.0),
+        catalog_row(stamp.wcs, stamp.cx + 30, stamp.cy + 8,
+                    flux_nmgy=150.0 / 3.631, shape_r=2.0, rchisq=9.0),
+    ])
+    comps = build_components(cat, stamp, psf, 1.3)
+    good = np.ones((240, 240), bool)
+    seats, drops = build_seats(comps, {}, stamp, image)
+    fit = joint_fit(image, good, stamp, psf, comps, seats, drops)
+
+    # Pin from the fit's own outputs, exactly as the sidecar stores them.
+    base_owner = [c['name'] for c in fit['fixed']] + fit['owners']
+    pin = dict(seat_params=fit['seat_params'],
+               amps=[[o, float(a)] for o, a in zip(base_owner, fit['amps'])],
+               bg_coefs=fit['bg']['coefs'], mesh=None)
+    pfit = pinned_fit(image, good, stamp, psf, comps, seats, drops, pin=pin)
+
+    def scene(f):
+        s = np.zeros_like(image)
+        for m, b in zip(f['mults'],
+                        [c['base'] for c in f['fixed']] + f['cols']):
+            s += max(m, 0.0) * b
+        return s
+
+    # The reconstructed scene and plane match the solved ones exactly.
+    assert np.allclose(scene(pfit), scene(fit), atol=1e-6)
+    assert np.allclose(pfit['bg']['img'], fit['bg']['img'], atol=1e-9)
+
+
 def test_flags_carry_the_farfield_witness():
     witness = dict(cov=1.0, maskfrac_ap=0.01, twinfrac=1.0,
                    nbsub_ap_uJy=2.0, excess_growth_uJy=1.0,
@@ -502,6 +543,38 @@ def test_registry_harvest_then_consume_round_trip():
     for c in frozen:
         assert c['amp_lohi'][0] == pytest.approx(lo * 300.0)
         assert c['amp_lohi'][1] == pytest.approx(hi * 300.0)
+
+
+def test_apply_registry_snapshot_reproduces_live_consumption():
+    """Consuming the registry_consumed SNAPSHOT yields the same frozen
+    components as consuming the live registry -- so a pinned reconstruction
+    reproduces even against an empty (rewritten) registry."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    cat, comps = _components_with_gated(stamp, psf)
+    seats, drops = build_seats(comps, {}, stamp, stamp.data)
+    params = np.concatenate([s['p0'] for s in seats])
+    registry: dict = {}
+    harvest_seats(registry, seats, params, [300.0] * len(seats), stamp,
+                  band_key='Legacy_r')
+    for name in list(registry):
+        for rc in registry[name]['components']['Legacy_r']:
+            rc['vantage'] = 'target'
+
+    out_live, consumed = apply_registry(build_components(cat, stamp, psf, 1.3),
+                                        registry, stamp, psf, 'Legacy_r',
+                                        'Legacy')
+    # The snapshot path runs against an EMPTY registry: shapes come from
+    # `consumed`, not the live store.
+    out_snap, consumed2 = apply_registry(build_components(cat, stamp, psf, 1.3),
+                                         {}, stamp, psf, 'Legacy_r', 'Legacy',
+                                         snapshot=consumed)
+    assert [c['name'] for c in consumed2] == [c['name'] for c in consumed]
+    assert [c['name'] for c in out_snap] == [c['name'] for c in out_live]
+    live_frozen = [c for c in out_live if c.get('reg')]
+    snap_frozen = [c for c in out_snap if c.get('reg')]
+    assert len(snap_frozen) == len(live_frozen) == 1
+    assert np.allclose(snap_frozen[0]['base'], live_frozen[0]['base'])
 
 
 def test_registry_offstamp_source_renders_only_its_wing():

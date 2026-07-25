@@ -141,7 +141,9 @@ def _cmd_sed(args: argparse.Namespace) -> None:
 def _cmd_remeasure(args: argparse.Namespace) -> None:
     from .remeasure import remeasure
     aperture = None if args.integrated else args.aperture
-    table = remeasure(args.provenance, aperture, mode=args.mode)
+    table = remeasure(args.provenance, aperture, mode=args.mode,
+                      shape=args.shape, registry_path=args.registry,
+                      write_qa=args.write_qa)
     if table.empty:
         sys.exit(f"sedphot remeasure: no band has a stored model in "
                  f"{args.provenance}")
@@ -344,6 +346,19 @@ def build_parser() -> argparse.ArgumentParser:
                                   "[default: sersic]")
     p_remeasure.add_argument('--aperture', type=float, default=12.0,
                              help="Circular aperture radius, arcsec [default: 12]")
+    p_remeasure.add_argument('--shape', choices=['forced', 'fitted'],
+                             default='forced',
+                             help="Beyond-grid aperture reconstruction: forced "
+                                  "(instrument reference-band shape) or fitted "
+                                  "(each band's own) [default: forced]")
+    p_remeasure.add_argument('--registry', type=str, default=None,
+                             help="Cross-field registry fallback for beyond-"
+                                  "grid reconstruction [default: sibling of "
+                                  "the galaxy directory; the sidecar's own "
+                                  "consumed-shape snapshot is used first]")
+    p_remeasure.add_argument('--write-qa', action='store_true',
+                             help="Write per-band scene figures for a beyond-"
+                                  "grid reconstruction to a scoped QA subdir")
     p_remeasure.add_argument('--integrated', action='store_true',
                              help="Integrated model total (ignores --aperture)")
     p_remeasure.add_argument('--out', type=str, default=None,
