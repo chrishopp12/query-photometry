@@ -523,6 +523,34 @@ def registry_name(ra_deg: float, dec_deg: float) -> str:
             f"{sign}{int(dd):02d}{int(dm):02d}{int(round(ds)):02d}")
 
 
+def resolve_registry_key(registry: dict, ra_deg: float, dec_deg: float,
+                         tol_arcsec: float = None) -> str:
+    """Registry key for (ra, dec), reusing a near-duplicate entry.
+
+    registry_name() alone fragments a source whose seat anchor drifts
+    across bands: a coarse-pixel PS1 solve can land ~0.3" off the deep-
+    band anchor and round to a different JHHMMSS+DDMMSS, so the source's
+    bands split across two near-identical keys. Coalescing to the nearest
+    existing entry within tol keeps one physical source on one key -- and
+    since consumption already places every entry by position, an entry
+    that is never split is never a candidate for the same-band double
+    subtraction two drifted keys could invite.
+    """
+    tol = recipe.REGISTRY_KEY_COALESCE_AS if tol_arcsec is None else tol_arcsec
+    fresh = registry_name(ra_deg, dec_deg)
+    best, best_sep = fresh, tol
+    c0 = SkyCoord(ra_deg, dec_deg, unit='deg')
+    for key, entry in registry.items():
+        try:
+            sep = c0.separation(
+                SkyCoord(entry['ra'], entry['dec'], unit='deg')).arcsec
+        except (KeyError, TypeError, ValueError):
+            continue
+        if sep < best_sep:
+            best, best_sep = key, sep
+    return best
+
+
 def harvest_seats(
         registry: dict,
         seats: list[dict],
@@ -594,7 +622,7 @@ def harvest_seats(
                                     col_flux):
         if seat['owner'] == 'target' and not include_target:
             continue
-        name = registry_name(seat['ra'], seat['dec'])
+        name = resolve_registry_key(registry, seat['ra'], seat['dec'])
         anchors[name] = (seat['ra'], seat['dec'])
         if capped:
             dead[name] = 'solve hit its evaluation cap'

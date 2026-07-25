@@ -307,6 +307,12 @@ REFERENCE_PREFERENCE = ('r', 'i', 'z', 'g', 'y', 'u')
 # fluxes, never cross-band guesses.
 REGISTRY_AMP_BAND = (0.8, 1.25)
 REGISTRY_MATCH_AS = 2.0   # catalog rows within this of an entry are replaced
+# A seat anchor drifts across bands (a coarse-pixel PS1 solve can land
+# ~0.3" off the deep-band anchor), so keying each band on its own rounded
+# position splits one source into near-duplicate entries. Coalesce a
+# harvest onto any existing entry within this radius -- comfortably above
+# the observed drift, well below the separation of distinct seated sources.
+REGISTRY_KEY_COALESCE_AS = 1.0
 
 
 # ------------------------------------
