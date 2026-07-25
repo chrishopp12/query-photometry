@@ -47,7 +47,7 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient
-from .common import warn_undersized_cache
+from .common import mosaic_first_valid, warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -113,6 +113,39 @@ def _covers_target(content: bytes, coord: SkyCoord, pad_arcsec: float = 15.0) ->
         return bool(good.mean() > 0.8)
     except Exception:
         return False
+
+
+def _mosaic_clipping_stacks(cutouts: list[bytes], coord: SkyCoord,
+                            size_arcsec: float) -> bytes | None:
+    """First-valid mosaic of SODA cutouts that each clip the target.
+
+    A target on a MegaPipe tile boundary is covered by no single stack but by
+    several overlapping ones; combine them so an adjacent tile fills the
+    clipped side. PHOTZP is carried from a source stack (all MegaPipe stacks
+    share it) so the mosaic stays photometric.
+    """
+    planes, photzp = [], None
+    for content in cutouts:
+        try:
+            with fits.open(io.BytesIO(content)) as hdul:
+                hdu = next(h for h in hdul
+                           if h.data is not None and h.data.ndim == 2)
+                planes.append((hdu.data.astype('f4'), WCS(hdu.header)))
+                if photzp is None and 'PHOTZP' in hdu.header:
+                    photzp = hdu.header['PHOTZP']
+        except Exception:
+            continue
+    if len(planes) < 2 or photzp is None:
+        return None
+    pixscale = float(np.mean(proj_plane_pixel_scales(planes[0][1]))) * 3600.0
+    data, wcs = mosaic_first_valid(planes, coord, size_arcsec, pixscale)
+    if data is None:
+        return None
+    header = wcs.to_header()
+    header['PHOTZP'] = photzp
+    buf = io.BytesIO()
+    fits.PrimaryHDU(data=data, header=header).writeto(buf)
+    return buf.getvalue()
 
 
 # ------------------------------------
@@ -218,6 +251,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                     print(f"  [CFHT] no cutout URL for {band}")
                     continue
                 content = None
+                clipped = []
                 for url in urls:
                     # One dead candidate must not kill the band (let alone
                     # the provider) -- log it and try the next stack.
@@ -233,6 +267,16 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                     if _covers_target(resp.content, coord):
                         content = resp.content
                         break
+                    clipped.append(resp.content)
+                if content is None and len(clipped) >= 2:
+                    # No single stack covers the aperture -- the target sits
+                    # on a tile boundary. Mosaic the overlapping stacks so an
+                    # adjacent tile fills the clipped side.
+                    mosaic = _mosaic_clipping_stacks(clipped, coord, size_arcsec)
+                    if mosaic is not None and _covers_target(mosaic, coord):
+                        content = mosaic
+                        print(f"  [CFHT] {band}: mosaicked {len(clipped)} "
+                              f"tile-edge stacks")
                 if content is None:
                     print(f"  [CFHT] {band}: all {len(urls)} stack(s) clip the "
                           f"target at their edge (near survey boundary)")
