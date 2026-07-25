@@ -361,6 +361,8 @@ def run_measure(
                          'cache_dir': cache_dir}
         if name == 'legacy':
             options.update(dr=legacy_dr, use_bricks=legacy_bricks)
+        if name == 'cfht':
+            options.update(aperture_arcsec=aperture_arcsec)
         if name == 'hst' and hst_proposal_id:
             options.update(proposal_id=hst_proposal_id)
         try:

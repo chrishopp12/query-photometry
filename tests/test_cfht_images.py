@@ -62,6 +62,17 @@ def test_partial_edge_through_aperture_fails():
     assert not _covers_target(_fits_bytes(data), TARGET)
 
 
+def test_covers_target_respects_the_requested_aperture():
+    # A blank column ~13" right of the target sits inside a 20" aperture but
+    # clear of a 12" one: coverage must track the aperture it is asked about,
+    # not a hardcoded 12". This is what lets the fetch/mosaic decision match
+    # the measurement gate at whatever science aperture the run uses.
+    data = np.ones((400, 400), np.float32)
+    data[:, 270:] = 0.0                       # target at x=200; 70 px ~= 13"
+    assert _covers_target(_fits_bytes(data), TARGET, 12.0)
+    assert not _covers_target(_fits_bytes(data), TARGET, 20.0)
+
+
 def test_garbage_bytes_fail():
     assert not _covers_target(b"this is not a FITS file", TARGET)
 

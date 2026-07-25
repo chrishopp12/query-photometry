@@ -174,7 +174,8 @@ def _mosaic_clipping_stacks(cutouts: list[bytes], coord: SkyCoord,
 # Provider entry
 # ------------------------------------
 def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 120.0,
-          cache_dir: str | Path) -> list[ImageProduct] | ProviderResult:
+          cache_dir: str | Path,
+          aperture_arcsec: float = 12.0) -> list[ImageProduct] | ProviderResult:
     """Fetch MegaPipe stack cutouts at the target via CADC SODA.
 
     Parameters
@@ -187,6 +188,10 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
         Cutout width. [default: 120]
     cache_dir : str or Path
         Photometry/CFHT/ directory; downloads are cached here.
+    aperture_arcsec : float
+        Science aperture the stack coverage is judged against: a stack that
+        clips inside it fails and drives the tile-edge mosaic, matching the
+        measurement coverage gate at the SAME aperture. [default: 12]
 
     Returns
     -------
@@ -286,7 +291,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                         print(f"  [CFHT] {band}: candidate stack failed "
                               f"({type(e).__name__}: {e}); trying the next")
                         continue
-                    if _covers_target(resp.content, coord):
+                    if _covers_target(resp.content, coord, aperture_arcsec):
                         content = resp.content
                         break
                     clipped.append(resp.content)
@@ -295,7 +300,8 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                     # on a tile boundary. Mosaic the overlapping stacks so an
                     # adjacent tile fills the clipped side.
                     mosaic = _mosaic_clipping_stacks(clipped, coord, size_arcsec)
-                    if mosaic is not None and _covers_target(mosaic, coord):
+                    if mosaic is not None and _covers_target(mosaic, coord,
+                                                             aperture_arcsec):
                         content = mosaic
                         print(f"  [CFHT] {band}: mosaicked {len(clipped)} "
                               f"tile-edge stacks")
