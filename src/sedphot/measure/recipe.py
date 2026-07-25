@@ -24,8 +24,14 @@ import numpy as np
 # Curve of growth, witnesses, coverage
 # ------------------------------------
 # Curve-of-growth radii (arcsec). Witness radii are interpolated on the
-# curve, so the grid does not need to contain them exactly.
-DEFAULT_RGRID = np.arange(2.0, 30.0, 1.0)
+# curve, so the grid does not need to contain them exactly. The grid runs
+# to 40" -- well past where ordinary galaxies converge, but the most
+# extended members (large cD/BCG halos) are still growing beyond 30", and
+# storing the empirical curve that far lets a larger-aperture remeasure
+# read a true enclosed value instead of capping at the grid end. 40" stays
+# within the default 120" stamp (60" half-width) in every band, so the
+# aperture never runs off the footprint.
+DEFAULT_RGRID = np.arange(2.0, 41.0, 1.0)
 
 # Excess-growth witness: measured growth minus the target model's own
 # growth, from the aperture out to this radius. Growth the model cannot
