@@ -29,6 +29,7 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
+from ..retry import retry_transient
 
 # ------------------------------------
 # Constants
@@ -67,27 +68,56 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve the frame covering the target ONCE via a region query, then
+    # fetch each band from it by (run, rerun, camcol, field). Fetching by
+    # coordinates -- SDSS.get_images(coordinates=...) -- is unreliable: its
+    # internal field lookup can return a malformed or short table for some
+    # positions, surfacing as InconsistentTableError or KeyError 'run' and
+    # failing EVERY band even where imaging plainly exists (query_region at
+    # the same spot returns objects fine). query_region hands back the frame
+    # identifiers directly, and matches= fetches from them without that
+    # lookup. Retry the transport itself for genuine service flaps.
+    frame = None
+    need = [b for b in bands
+            if not (cache_dir / f"sdss_{b}_frame.fits").exists()]
+    if need:
+        try:
+            xid = retry_transient(
+                lambda: SDSS.query_region(coord, radius=30 * u.arcsec,
+                                          spectro=False),
+                "SDSS region")
+        except Exception as e:
+            return ProviderResult(provider='sdss', status=STATUS_ERROR,
+                                  message=f"region query: "
+                                          f"{type(e).__name__}: {e}")
+        if xid is None or not len(xid):
+            return ProviderResult(provider='sdss', status=STATUS_NO_COVERAGE,
+                                  message="no SDSS objects at this position")
+        # The object nearest the target sits on the frame that contains it
+        # (frames are 13.5'x9.9', far larger than the 30" search cone).
+        seps = coord.separation(SkyCoord(xid['ra'], xid['dec'], unit='deg'))
+        i = int(seps.argmin())
+        frame = xid['run', 'rerun', 'camcol', 'field'][i:i + 1]
+
     products: list[ImageProduct] = []
     failures: list[str] = []
     for band in bands:
         path = cache_dir / f"sdss_{band}_frame.fits"
-        # Per-band containment: astroquery's frame lookup can fail
-        # positionally (e.g. KeyError 'run' when the field query returns a
-        # row without imaging identifiers); one bad band must not take the
-        # others down.
+        # Per-band containment: one bad band must not take the others down.
         try:
             if not path.exists():
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    images = SDSS.get_images(coordinates=coord, radius=30 * u.arcsec,
-                                             band=band)
+                def _get_frame(band=band, frame=frame):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        return SDSS.get_images(matches=frame, band=band)
+                images = retry_transient(_get_frame, f"SDSS {band}")
                 if not images:
                     print(f"  [SDSS] no {band} frame here")
                     continue
                 hdu = images[0][0]
                 fits.writeto(path, hdu.data, hdu.header, overwrite=True)
         except Exception as e:
-            print(f"  [SDSS] {band} lookup failed: {type(e).__name__}: {e}")
+            print(f"  [SDSS] {band} fetch failed: {type(e).__name__}: {e}")
             failures.append(f"{band}: {type(e).__name__}: {e}")
             continue
         products.append(ImageProduct(
