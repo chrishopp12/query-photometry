@@ -67,3 +67,53 @@ def warn_undersized_cache(path: str | Path, size_arcsec: float,
           f"likely cached by an earlier smaller --cutout-size run; "
           f"delete the file to refetch at full size")
     return True
+
+
+def mosaic_first_valid(planes, coord, size_arcsec, pixscale):
+    """First-valid mosaic of overlapping cutouts onto a target-centered grid.
+
+    When a target lands on a survey's tile boundary, no single tile covers the
+    aperture but adjacent tiles overlap it from opposite sides. Reproject every
+    plane onto a common TAN grid centered on the target and take, at each output
+    pixel, the value of the FIRST plane that covers it -- so the tiles fill each
+    other's clipped side without averaging their separately-calibrated pixels.
+    General across any provider whose footprints tile the sky.
+
+    Parameters
+    ----------
+    planes : list of (ndarray, WCS)
+        Each cutout's 2-D data and its WCS.
+    coord : SkyCoord
+        Target position; the output grid is centered here.
+    size_arcsec : float
+        Output width and height, arcsec.
+    pixscale : float
+        Output pixel scale (arcsec/pixel); use the tiles' native scale.
+
+    Returns
+    -------
+    (data, wcs) : (ndarray, WCS)
+        The mosaic (NaN where no plane covers) and its WCS, or (None, None)
+        when reproject is unavailable or the coadd fails.
+    """
+    try:
+        from reproject import reproject_interp
+        from reproject.mosaicking import reproject_and_coadd
+    except ImportError:
+        return None, None
+    npix = max(1, int(round(size_arcsec / pixscale)))
+    target = WCS(naxis=2)
+    target.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    target.wcs.crval = [float(coord.ra.deg), float(coord.dec.deg)]
+    target.wcs.crpix = [npix / 2 + 0.5, npix / 2 + 0.5]
+    target.wcs.cd = np.array([[-pixscale / 3600.0, 0.0],
+                              [0.0, pixscale / 3600.0]])
+    try:
+        array, footprint = reproject_and_coadd(
+            planes, output_projection=target, shape_out=(npix, npix),
+            reproject_function=reproject_interp, combine_function='first')
+    except Exception:
+        return None, None
+    array = array.astype('f4')
+    array[footprint == 0] = np.nan   # honest no-coverage, not a 0 fill value
+    return array, target
