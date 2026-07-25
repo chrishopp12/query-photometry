@@ -84,7 +84,7 @@ TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
 # test -- a shape solve pointed at it can only rail its parameters
 # trying to become the artifact.
 GATE_FLUX_UJY = 100.0
-GATE_RCHISQ = 4.0
+GATE_RCHISQ = 6.0
 GATE_RCHISQ_MAX = 1000.0
 
 # Gate reach stops short of the stamp edge: a source with part of its
