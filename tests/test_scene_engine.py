@@ -304,7 +304,9 @@ def test_build_seats_standard_set():
     seats, drops = build_seats(comps, {}, stamp, stamp.data)
     kinds = [(s['owner'], s['kind']) for s in seats]
     gated = next(c['name'] for c in comps if c['gate'])
-    assert (gated, 'sersic') in kinds and (gated, 'nuker') in kinds
+    # A gated neighbor gets a Sersic core only (recipe.GATED_HALO=False);
+    # the extended Nuker halo belongs to the target via 'target_halo'.
+    assert (gated, 'sersic') in kinds and (gated, 'nuker') not in kinds
     assert ('target', 'sersic') in kinds     # the refit is standard
     assert drops == {gated, 'target'}
     assert all(len(s['p0']) == recipe.SEAT_NPARAMS for s in seats)
@@ -472,11 +474,11 @@ def test_registry_harvest_then_consume_round_trip():
     assert len(touched) == 1
     entry = registry[touched[0]]
     assert set(entry['components']) == {'Legacy_r'}
-    assert len(entry['components']['Legacy_r']) == 2   # core + halo
+    assert len(entry['components']['Legacy_r']) == 1   # sersic core only
     # re-harvest replaces, never doubles
     harvest_seats(registry, seats, params, amps, stamp,
                   band_key='Legacy_r')
-    assert len(entry['components']['Legacy_r']) == 2
+    assert len(entry['components']['Legacy_r']) == 1
 
     # a TARGET-vantage entry consumes frozen: the matched catalog row
     # drops and the frozen comps take its place
@@ -490,7 +492,7 @@ def test_registry_harvest_then_consume_round_trip():
     gated = next(c['name'] for c in fresh if c['gate'])
     assert gated not in names
     frozen = [c for c in out if c.get('reg')]
-    assert len(frozen) == 2
+    assert len(frozen) == 1
     lo, hi = recipe.REGISTRY_AMP_BAND
     # on-stamp (this field == the home field geometry): the physical
     # wing flux equals the home flux, so the leash lands on flux_ref
@@ -559,7 +561,7 @@ def test_registry_v2_vantage_tombstones_and_zero_amp():
                                    'Legacy_r', 'Legacy')
     assert consumed == [name]
     assert gated not in [c['name'] for c in out]
-    assert sum(1 for c in out if c.get('reg')) == 2
+    assert sum(1 for c in out if c.get('reg')) == 1
 
     # a capped solve tombstones the band; consumption kills the gate
     harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r',
@@ -582,15 +584,13 @@ def test_registry_v2_vantage_tombstones_and_zero_amp():
     assert 'Legacy_r' not in (reg2[name].get('tombstones') or {})
 
     # a zero-amplitude seat is a verdict, not a record: never stored.
-    # src0's entry holds its two seats -- zero the sersic, the nuker
-    # survives, and the dropped shape is nowhere in the record.
+    # The gated neighbor is a lone Sersic core -- zero it and its entry
+    # is written nowhere.
     reg3: dict = {}
     zero_amps = [0.0] + [300.0] * (len(seats) - 1)
     harvest_seats(reg3, seats, params, zero_amps, stamp,
                   band_key='Legacy_r')
-    stored = reg3[name]['components'].get('Legacy_r', [])
-    assert [rc['kind'] for rc in stored] == ['nuker']
-    assert all(rc['flux_ref'] >= recipe.MARGIN_MIN_UJY for rc in stored)
+    assert name not in reg3
 
     # a healthy re-harvest clears the tombstone...
     harvest_seats(reg, seats, params, amps, stamp, band_key='Legacy_r')

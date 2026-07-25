@@ -187,6 +187,7 @@ def build_seats(
         frac = float(profile.sum()) / max(
             sersic_total(1.0, p0_core[0], p0_core[1], p0_core[2], 1.0),
             1e-12)
+        seated = False
         if comp['cat'] * frac < recipe.MARGIN_MIN_UJY:
             print(f"    {tag}{comp['name']}: gated core seat has "
                   f"{comp['cat'] * frac:.2g} uJy in-stamp at catalog "
@@ -198,16 +199,22 @@ def build_seats(
                  p0_core[3] - recipe.PA_BOX_DEG, -dxy, -dxy],
                 [core_hi, n_hi, recipe.SERSIC_E_MAX,
                  p0_core[3] + recipe.PA_BOX_DEG, dxy, dxy]))
-        p0_halo = [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
-                   shape['pa'], 0.0, 0.0]
-        seats.append(_seat(
-            'nuker', comp['name'], wcs, x, y, p0_halo,
-            [recipe.NUKER_RB_AS[0] / pix, recipe.NUKER_BETA[0], 0.0,
-             p0_halo[3] - recipe.PA_BOX_DEG, -dxy_out, -dxy_out],
-            [recipe.NUKER_RB_AS[1] / pix, recipe.NUKER_BETA[1],
-             recipe.NUKER_E_MAX,
-             p0_halo[3] + recipe.PA_BOX_DEG, dxy_out, dxy_out]))
-        drops.add(comp['name'])
+            seated = True
+        if recipe.GATED_HALO:
+            p0_halo = [recipe.NUKER_RB0_AS / pix, 2.0, shape['ellip'],
+                       shape['pa'], 0.0, 0.0]
+            seats.append(_seat(
+                'nuker', comp['name'], wcs, x, y, p0_halo,
+                [recipe.NUKER_RB_AS[0] / pix, recipe.NUKER_BETA[0], 0.0,
+                 p0_halo[3] - recipe.PA_BOX_DEG, -dxy_out, -dxy_out],
+                [recipe.NUKER_RB_AS[1] / pix, recipe.NUKER_BETA[1],
+                 recipe.NUKER_E_MAX,
+                 p0_halo[3] + recipe.PA_BOX_DEG, dxy_out, dxy_out]))
+            seated = True
+        # Drop the catalog base only if a seat replaced it; a pruned core
+        # with no halo leaves the row as its fixed catalog render.
+        if seated:
+            drops.add(comp['name'])
 
     # Custom free seats: single-Sersic seats granted by the patches
     # file to named positions (companion nuclei, retyped rows).

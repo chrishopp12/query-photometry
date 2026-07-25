@@ -240,6 +240,14 @@ SEAT_DXY_AS = 1.0
 # science aperture.
 GATED_CORE_REFF_MAX_AS = 5.0
 FREE_SEAT_REFF_MAX_AS = 6.0   # patch free seats (companion nuclei)
+
+# Gated NEIGHBORS get a Sersic core only. The extended Nuker halo is a cD
+# envelope model and belongs to the TARGET, granted through the patches'
+# "target_halo". On an ordinary bright galaxy the neighbor halo fits to a
+# few percent of the light with a railed beta -- a degenerate seat that
+# wanders the solve and buys nothing. Flip to True to restore the old
+# blanket core+halo on every gated seat.
+GATED_HALO = False
 REFIT_REFF_MAX_AS = 10.0      # the standard target-refit seat
 
 PA_BOX_DEG = 95.0       # position-angle freedom about the catalog value
