@@ -43,7 +43,7 @@ from astropy.wcs import WCS
 
 from ..catalogs.legacy import LEGACY_DR_DEFAULT
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
-from ..retry import retry_transient
+from ..retry import retry_transient, try_services
 from .common import warn_undersized_cache
 
 # ------------------------------------
@@ -52,6 +52,17 @@ from .common import warn_undersized_cache
 VIEWER_URL = "https://www.legacysurvey.org/viewer/fits-cutout"
 COADD_BASE = "https://portal.nersc.gov/cfs/cosmo/data/legacysurvey"
 TAP_URL = "https://datalab.noirlab.edu/tap"
+# NOIRLab Data Lab cutout service: serves the SAME DR coadd pixels as the
+# viewer, from a host independent of NERSC -- the cutout fallback when
+# legacysurvey.org and portal.nersc.gov are down. The brick is resolved from
+# the Data Lab TAP catalog (also NERSC-independent), then each band is cut
+# from legacysurvey-<brick>-image-<band>.fits.fz.
+NOIRLAB_CUTOUT_URL = "https://datalab.noirlab.edu/svc/cutout"
+
+# A dead host hangs rather than refuses, so the viewer request fails fast on
+# connect (letting the service rotation reach NOIRLab) but stays patient on
+# read for a slow-but-live viewer.
+CUTOUT_TIMEOUT = (6, 180)
 
 PIXSCALE = 0.262           # native arcsec/pixel
 SEEING = 1.2               # typical arcsec, for detection kernels
@@ -97,8 +108,10 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
             url = (f"{VIEWER_URL}?ra={coord.ra.deg:.8f}&dec={coord.dec.deg:.8f}"
                    f"&layer={layer}&pixscale={PIXSCALE}&bands={''.join(bands)}"
                    f"&size={size_px}")
-            response = retry_transient(
-                lambda: requests.get(url, timeout=300), f"Legacy cutout {layer}")
+            # One attempt, fail fast: try_services rotates to the NOIRLab
+            # fallback on failure, so a dead viewer must not burn a backoff
+            # cycle here first.
+            response = requests.get(url, timeout=CUTOUT_TIMEOUT)
             response.raise_for_status()
             cube = fits.open(io.BytesIO(response.content))[0]
             if cube.data is None or not float(abs(cube.data).sum()) > 0:
@@ -126,9 +139,78 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
 
 
 # ------------------------------------
+# NOIRLab SIA route (NERSC-independent cutout fallback)
+# ------------------------------------
+def _fetch_noirlab(coord: SkyCoord, bands: tuple, size_arcsec: float,
+                   cache_dir: Path, dr: str) -> list[ImageProduct]:
+    """NOIRLab Data Lab cutouts: the SAME DR coadd pixels as the viewer,
+    served from datalab.noirlab.edu, so a drop-in fallback when NERSC is down.
+
+    Same nanomaggy calibration and 0.262"/pixel scale, no inverse variance
+    (errors fall back to sky rms, exactly as the viewer route). Files take the
+    viewer-route name so sedfit's filename provenance stays uniform; the real
+    source is stamped in the header (FETCHSRC = noirlab-cutout).
+
+    The brick is resolved from the Data Lab TAP catalog (strict, so a TAP
+    outage raises and the whole rotation reports an error rather than a silent
+    no-coverage), then each band is cut directly from its coadd. Cutting
+    directly -- rather than trusting the SIA product list -- also recovers the
+    MzLS z coadd, which the north SIA collection does not index.
+    """
+    hemis = _hemisphere(coord, dr)
+    layer = VIEWER_LAYERS.get((dr, hemis)) or f"ls-{dr}"
+    size_deg = size_arcsec / 3600.0
+    paths = {band: cache_dir / f"legacy_{layer}_{band}.fits" for band in bands}
+
+    brick = None
+    if any(not p.exists() for p in paths.values()):
+        resolved = _resolve_brick(coord, dr, strict=True)
+        if resolved is None:
+            return []      # no brick here -> genuine no coverage
+        brick, _ = resolved
+
+    products: list[ImageProduct] = []
+    for band in bands:
+        path = paths[band]
+        if not path.exists():
+            # A RAW comma in POS is essential: urlencoding it to %2C makes the
+            # cutout service ignore POS and return the whole ~50 MB brick.
+            url = (f"{NOIRLAB_CUTOUT_URL}?col=ls_{dr}"
+                   f"&siaRef=legacysurvey-{brick}-image-{band}.fits.fz&extn=1"
+                   f"&POS={coord.ra.deg:.8f},{coord.dec.deg:.8f}"
+                   f"&SIZE={size_deg:.6f}")
+            try:
+                response = requests.get(url, timeout=CUTOUT_TIMEOUT)
+                response.raise_for_status()
+                hdul = fits.open(io.BytesIO(response.content))
+                hdu = next((h for h in hdul if h.data is not None), None)
+            except Exception as e:
+                # A single absent/failed band must not drop the others; the
+                # brick already resolved, so this is not a full outage.
+                print(f"  [Legacy] NOIRLab {band}: {type(e).__name__}: {e}")
+                continue
+            if hdu is None or not float(abs(hdu.data).sum()) > 0:
+                print(f"  [Legacy] NOIRLab {band}: blank cutout")
+                continue
+            header = WCS(hdu.header).celestial.to_header()
+            header["BUNIT"] = "nanomaggy"
+            header["SURVEY"] = f"Legacy_{layer}"
+            header["FILTER"] = band
+            header["FETCHSRC"] = "noirlab-cutout"
+            fits.writeto(path, hdu.data.astype("f4"), header, overwrite=True)
+        if path.exists():
+            products.append(ImageProduct(
+                provider='legacy', instrument='Legacy', band=band,
+                path=str(path), calib='nmgy', seeing_arcsec=SEEING,
+                wave_um=WAVE_UM.get(band, float('nan'))))
+    return products
+
+
+# ------------------------------------
 # Brick route
 # ------------------------------------
-def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
+def _resolve_brick(coord: SkyCoord, dr: str,
+                   strict: bool = False) -> tuple[str, str] | None:
     """(brickname, hemisphere) at the target position, from the Tractor catalog.
 
     The CLOSEST brick-primary source names the brick: bricks overlap by
@@ -160,6 +242,8 @@ def _resolve_brick(coord: SkyCoord, dr: str) -> tuple[str, str] | None:
         result = retry_transient(_run, "Legacy brick TAP")
     except Exception as e:
         print(f"  [Legacy] brick resolution failed after retries: {e}")
+        if strict:
+            raise      # let a TAP outage surface as an error, not no-coverage
         return None
     if len(result) == 0:
         return None
@@ -263,7 +347,16 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
         if use_bricks:
             products = _fetch_bricks(coord, bands, cache_dir, dr)
         else:
-            products = _fetch_cutouts(coord, bands, size_arcsec, cache_dir, dr)
+            # Rotate cutout services: the NERSC viewer first, then the
+            # NOIRLab SIA (same DR pixels, independent host). Alternating on
+            # failure reaches the live fallback without waiting out a dead
+            # primary's backoff.
+            products = try_services([
+                ('NERSC viewer', lambda: _fetch_cutouts(
+                    coord, bands, size_arcsec, cache_dir, dr)),
+                ('NOIRLab cutout', lambda: _fetch_noirlab(
+                    coord, bands, size_arcsec, cache_dir, dr)),
+            ], 'Legacy cutout')
     except Exception as e:
         return ProviderResult(provider='legacy', status=STATUS_ERROR,
                               message=f"{type(e).__name__}: {e}")

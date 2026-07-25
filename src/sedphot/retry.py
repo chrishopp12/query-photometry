@@ -135,6 +135,75 @@ def query_vizier_mirrors(query_fn: Callable[[str], object], label: str):
     return None
 
 
+def try_services(
+        services: list[tuple[str, Callable[[], object]]],
+        label: str,
+        *,
+        rounds: int = 2,
+        base_delay: float = TRANSIENT_BASE_DELAY,
+):
+    """Try alternate services in order; the first truthy result wins.
+
+    Where retry_transient waits out one flaky endpoint, this ROTATES: a
+    service that errors is skipped immediately and the next is tried at
+    once, so a service that is DOWN costs a single failed call rather than
+    a full backoff cycle. A backoff happens only between whole rounds --
+    the case of every service flapping at once, not one being down -- so a
+    live fallback is reached without waiting on the dead primary.
+
+    A service that returns cleanly with no data (a falsy result) is taken
+    as authoritative ("nothing here"): rotation stops and None is
+    returned, because a working endpoint has already answered.
+
+    Parameters
+    ----------
+    services : list of (str, callable)
+        (name, thunk) pairs; each thunk performs ONE fetch attempt and
+        returns a truthy result on success, a falsy one for no data. A
+        thunk should fail fast (no internal backoff) so rotation stays cheap.
+    label : str
+        Log prefix.
+    rounds : int
+        Full rotations before giving up when every service errors. [2]
+    base_delay : float
+        Backoff before the second round, doubling thereafter. [2.0]
+
+    Returns
+    -------
+    The first truthy result, or None when a service answered with no data.
+
+    Raises
+    ------
+    The last exception when every service errored on every round.
+    """
+    delay = base_delay
+    last_error: Exception | None = None
+    for rnd in range(1, rounds + 1):
+        answered = False
+        for name, thunk in services:
+            try:
+                result = thunk()
+            except Exception as e:
+                last_error = e
+                print(f"  [{label}] {name} down ({type(e).__name__}: {e}); "
+                      f"trying the next service")
+                continue
+            answered = True
+            if result:
+                return result
+            print(f"  [{label}] {name} has nothing here")
+        if answered:
+            return None
+        if rnd < rounds:
+            print(f"  [{label}] every service errored (round {rnd}); "
+                  f"retrying in {delay:.0f}s")
+            time.sleep(delay)
+            delay *= 2.0
+    if last_error is not None:
+        raise last_error
+    return None
+
+
 def retry_transient(
         call: Callable[[], object],
         label: str,
