@@ -314,6 +314,7 @@ def measure_band(
         aperture_arcsec: float,
         cutout_half_arcsec: float,
         rgrid: np.ndarray,
+        scene_aperture_arcsec: float | None = None,
         target_shape: dict | None = None,
         registry_update: bool = False,
         pin: dict | None = None,
@@ -344,6 +345,9 @@ def measure_band(
         Stamp half-size.
     rgrid : np.ndarray
         Curve-of-growth radii.
+    scene_aperture_arcsec : float, optional
+        Aperture the scene was BUILT for (shred rule, star zone), when it
+        differs from the one being integrated. [default: the same]
     target_shape : dict, optional
         Explicit target shape (n, reff_arcsec, ellip, pa_deg): pins the
         target to a fixed profile instead of the standard refit
@@ -366,6 +370,12 @@ def measure_band(
     new_ref : dict or None
         Reference for sibling bands, when this band solved shapes.
     """
+    # Scene construction (which catalog rows exist, which stars get a
+    # column) belongs to the aperture the fit was BUILT for; only the
+    # integration uses the requested one. A pinned reconstruction at a
+    # larger radius must not re-adjudicate the scene it is pinning.
+    scene_ap = (aperture_arcsec if scene_aperture_arcsec is None
+                else scene_aperture_arcsec)
     cat, stars = scene['cat'], scene['stars']
     patches = dict(scene['patches'])
     band_key = f"{product.instrument}_{product.band}"
@@ -483,7 +493,7 @@ def measure_band(
     star_img, star_masks, comps, star_log = subtract_stars(
         stamp, raw, good, comps, stars, bg0['const'],
         colors=_band_colors(cat, product.band) if len(cat) else None,
-        aperture_arcsec=aperture_arcsec, tag=tag)
+        aperture_arcsec=scene_ap, tag=tag)
     image = raw - star_img
 
     # A masked-mode star (in-zone revert) has no column and nothing

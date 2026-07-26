@@ -144,6 +144,44 @@ def test_reconstruct_reports_bands_the_rebuild_dropped(tmp_path, capsys,
     assert 'not enough values to unpack' in printed   # and the reason replayed
 
 
+def test_reconstruct_replays_the_fetch_options(tmp_path, monkeypatch):
+    """The fetch options decide which PIXELS arrive, so defaulting them
+    rebuilds on different data: `bricks` swaps Legacy brick coadds (with real
+    inverse variance) for viewer cutouts on a different pixel grid. A
+    reconstruction that re-fetches differently is not reproducing the fit."""
+    import pandas as pd
+
+    from sedphot import pipeline
+
+    prov = {'git_rev': 'abc123',
+            'target': {'ra_deg': 150.0, 'dec_deg': 2.0, 'label': 'g5'},
+            'instruments': ['legacy'], 'cutout_arcsec': 120.0,
+            'legacy': {'dr': 'dr10', 'bricks': True},
+            'hst_proposal_id': '15307',
+            'per_band': {'Legacy_r': {
+                'solve': {'params': [1.0] * 6, 'pix_ref': 0.262},
+                'fit_state': {'amps': [['target', 1.0]],
+                              'bg_coefs': [0.0, 0.0, 0.0],
+                              'rgrid': [2.0, 20.0]}}}}
+    p = tmp_path / 'Photometry' / 'g5_measured.provenance.json'
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps(prov))
+
+    seen = {}
+
+    def fake_run_measure(*a, **k):
+        seen.update(k)
+        return pd.DataFrame([{'band': 'Legacy_r', 'flux_uJy': 1.0}])
+
+    monkeypatch.setattr(pipeline, 'run_measure', fake_run_measure)
+    reconstruct(p, 30.0)
+    assert seen['legacy_bricks'] is True
+    assert seen['legacy_dr'] == 'dr10'
+    assert seen['hst_proposal_id'] == '15307'
+    # ... and the sky boundary the fit was built on rides along too.
+    assert 'sky_rmin_arcsec' in seen
+
+
 def test_aperture_mode_is_shape_independent_within_the_grid(tmp_path):
     """The empirical curve is a measurement of the pixels, so shape cannot
     change it inside the grid -- only the beyond-grid rebuild uses shape."""

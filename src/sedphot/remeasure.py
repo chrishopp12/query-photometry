@@ -277,6 +277,7 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     import io
 
     from astropy.coordinates import SkyCoord
+    from .catalogs.legacy import LEGACY_DR_DEFAULT
     from .pipeline import run_measure
 
     prov = json.loads(Path(provenance_path).read_text())
@@ -290,6 +291,19 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     # A run that moved the target/sky boundary must be rebuilt on the same
     # one -- it decides which pixels the plane and mesh ever saw.
     sky_rmin = ((prov.get('scene') or {}).get('recipe') or {}).get('BG_RMIN_AS')
+    # Replay the FETCH options too. They decide which pixels arrive, so a
+    # default here silently rebuilds on different data: `bricks` swaps Legacy
+    # brick coadds (with real inverse variance) for viewer cutouts, on a
+    # different pixel grid. Reproducing a fit means reproducing its images.
+    legacy = prov.get('legacy') or {}
+    legacy_dr = legacy.get('dr') or LEGACY_DR_DEFAULT
+    legacy_bricks = bool(legacy.get('bricks'))
+    hst_proposal_id = prov.get('hst_proposal_id')
+    # The SCENE belongs to the aperture the fit was built for: the
+    # target-substructure rule and the star zone are both scoped to it,
+    # so asking for a larger radius here would delete catalog rows as
+    # 'target shreds' that the fit had modelled and subtracted.
+    science_ap = float(prov.get('aperture_arcsec') or aperture_arcsec)
     if aperture_arcsec > cutout / 2.0:
         raise ValueError(
             f"aperture {aperture_arcsec:g}\" exceeds the stamp half-width "
@@ -311,8 +325,12 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
         frame = run_measure(coord, label, str(galaxy_dir),
                             instruments=instruments,
                             aperture_arcsec=aperture_arcsec,
-                            cutout_arcsec=cutout, sky_rmin_arcsec=sky_rmin,
+                            cutout_arcsec=cutout,
+                            scene_aperture_arcsec=science_ap,
+                            sky_rmin_arcsec=sky_rmin,
                             rgrid=grid, pin_by_band=pin,
+                            legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                            hst_proposal_id=hst_proposal_id,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
