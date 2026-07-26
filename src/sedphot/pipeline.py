@@ -591,6 +591,11 @@ def run_spherex(
     mjd_range : [float, float], optional
         Restrict to visits in this MJD window (the IRSA workaround for
         broken-metadata epochs).
+    label : str
+        Output stem, recorded in the table's sidecar.
+    target_name : str, optional
+        Original name string, recorded in the table's sidecar. The IRSA
+        request carries a position only, so no name reaches the query.
 
     Returns
     -------
@@ -668,7 +673,8 @@ def run_spherex(
                                bkg_region_size=bkg_size,
                                mjd_range=tuple(mjd_range) if mjd_range else None,
                                poll=poll, timeout=timeout,
-                               shape_origin=shape_origin)
+                               shape_origin=shape_origin,
+                               label=label, target_name=target_name)
     print(f"\n  spherex {result.status}: {result.message}")
     return result
 
