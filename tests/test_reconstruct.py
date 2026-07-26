@@ -142,8 +142,8 @@ def test_pinned_fit_rescales_shapes_onto_the_bands_own_grid():
     Radial seat parameters are grid-relative, so rendering a reference-band
     vector verbatim on a finer-pixel sibling shrinks the source by the scale
     ratio -- silent, and invisible on any instrument with one pixel scale.
-    Doubling seat_pix must be identical to doubling the radial entries by
-    hand (size and center offsets; ellipticity and PA do not scale).
+    Doubling seat_pix must equal doubling the radial entries by hand (size
+    and center offsets; ellipticity and PA do not scale).
     """
     stamp = _stamp()
     psf = moffat_kernel(0.9, stamp.pixscale)
@@ -155,7 +155,7 @@ def test_pinned_fit_rescales_shapes_onto_the_bands_own_grid():
     assert np.allclose(coarse, by_hand, atol=1e-9)
 
     # ... and the guard: ignoring seat_pix is a DIFFERENT render, so this
-    # test fails if the rescale is ever dropped again.
+    # test fails if the rescale is dropped.
     unscaled = _pinned_seat_column(
         stamp, psf, [4.0, 2.0, 0.15, 20.0, 1.0, -0.5], seat_pix=None)
     assert not np.allclose(unscaled, by_hand, atol=1e-6)
@@ -225,9 +225,9 @@ def _band(params, *, pix_ref=0.262, free=None):
 
 def test_pin_refuses_a_partial_transfer_vector(capsys):
     """A transfer band's `solve` record covers only the NEIGHBOR seats it
-    re-solved; rendered as a full seat vector it truncates the target's seats
-    away, and every such band silently vanishes from the report. 'fitted'
-    must fall back to forced, and say which bands it demoted."""
+    re-solved. Rendered as a full seat vector it truncates the target's seats
+    away, and the band leaves the report with no trace. 'fitted' must fall
+    back to forced, and name the bands it demoted."""
     prov = {'per_band': {'Legacy_r': _band(list(range(12))),
                          'Legacy_z': _band(list(range(6)))}}
     pin = _build_pin_by_band(prov, 'fitted')
@@ -248,8 +248,8 @@ def test_pin_uses_a_stored_free_vector_when_present():
 
 def test_pin_reference_is_the_first_band_not_the_r_band():
     """per_band preserves order_bands order, so the first band of each
-    instrument is its reference. A second 'ends with _r' rule agreed only by
-    construction and hid that invariant."""
+    instrument is its reference -- position in the record is the rule, not
+    the band name."""
     prov = {'per_band': {'CFHT_i': _band(list(range(12))),
                          'CFHT_r': _band(list(range(6)))}}
     pin = _build_pin_by_band(prov, 'forced')
@@ -273,11 +273,10 @@ def test_pin_carries_the_solve_grid():
 def test_transfer_band_free_shape_survives_to_a_pinned_render():
     """Solve -> witness -> JSON -> pin -> pinned render, on a transfer band.
 
-    Unit tests on either side of this seam both passed while it was broken:
-    the engine recorded the frozen-target science solve (neighbour seats
-    only) and the pin builder read it as a full seat vector, so every
-    transfer band raised inside run_measure's per-band except and vanished
-    from the report. Exercised end to end, through a real JSON round trip.
+    Unit tests on either side of this seam can both pass while the seam
+    itself is wrong: the engine records the frozen-target science solve
+    (neighbor seats only), and the pin builder needs a full seat vector.
+    Exercised end to end, through a real JSON round trip.
     """
     rng = np.random.default_rng(7)
     stamp = _stamp((240, 240))

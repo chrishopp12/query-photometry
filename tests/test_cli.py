@@ -59,8 +59,8 @@ MEASURE_OPTS = ('mode', 'bands', 'aperture', 'radii', 'cutout_size',
 def test_measure_options_reach_both_verbs(verb):
     """The flagship must accept every option the verb it drives accepts.
 
-    run_all used to take a reduced set, so a measurement option given to
-    `run` was simply absent -- discoverable only from a wrong answer.
+    A reduced set on run_all leaves a measurement option given to `run`
+    simply absent -- discoverable only from a wrong answer.
     """
     args = cli.build_parser().parse_args(
         [verb, '--ra', '10.0', '--dec', '20.0']
@@ -94,7 +94,7 @@ def test_run_forwards_every_measure_option(monkeypatch):
                                   ['--sersic-seeing', '0.9'],
                                   ['--sersic-params', '2', '1.5', '30', '3']])
 def test_shape_flags_refused_under_aperture_mode(verb, flag, monkeypatch):
-    """A shape flag with --mode aperture used to be accepted and dropped."""
+    """A shape flag with --mode aperture must be refused, never dropped."""
     monkeypatch.setattr(sys, 'argv',
                         ['sedphot', verb, '--ra', '10.0', '--dec', '20.0']
                         + (['--all'] if verb == 'measure' else [])

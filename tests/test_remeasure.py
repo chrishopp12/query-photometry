@@ -108,8 +108,8 @@ def test_reconstruct_reports_bands_the_rebuild_dropped(tmp_path, capsys,
 
     run_measure reports a dead band by printing and continuing, and
     reconstruct runs it under a stdout redirect to keep the re-report clean
-    -- so the message went into a discarded buffer and the band simply left
-    the table.
+    -- so that message lands in a discarded buffer and the band leaves the
+    table with nothing said.
     """
     import pandas as pd
 

@@ -560,9 +560,8 @@ def measure_band(
     base_owner = [c['name'] for c in fit['fixed']] + fit['owners']
     # A fixed component pinned at a leash bound is a WITNESS: the solve
     # wanted an amplitude the leash forbade (a mis-scaled star leash, a
-    # registry anchor the data contradict). Silent before -- the fake
-    # east-edge star halo sat exactly at 0.5x its bound with nothing
-    # complaining.
+    # registry anchor the data contradict). Unrecorded, a component parked
+    # exactly at its bound is indistinguishable from a converged fit.
     leashed_at_bound = []
     for comp, amp in zip(fit['fixed'], fit['amps'][:len(fit['fixed'])]):
         lo, hi = comp.get('amp_lohi', (None, None))

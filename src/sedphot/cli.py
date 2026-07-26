@@ -90,9 +90,9 @@ def _resolve_from_args(args: argparse.Namespace):
 def _add_measure_args(parser: argparse.ArgumentParser) -> None:
     """Every measurement option, shared by the measure and run verbs.
 
-    One definition, so the flagship cannot drift into accepting a smaller
-    set than the verb it drives -- a flag `run` quietly lacked is a flag
-    whose absence has to be discovered from a wrong answer.
+    One definition, so the flagship cannot accept a smaller set than the
+    verb it drives -- a flag `run` lacks is a flag whose absence shows up
+    only as a wrong answer.
     """
     group = parser.add_argument_group("measurement")
     group.add_argument('--mode', type=str, default='aperture',
@@ -256,10 +256,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
 def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
     """Refuse a measurement request whose flags contradict each other.
 
-    A shape flag under --mode aperture used to be accepted and dropped: the
-    run reported curve-of-growth fluxes while the caller believed a shape
-    had been forced. Refuse instead -- an ignored flag is a wrong answer
-    waiting to be trusted.
+    A shape flag under --mode aperture has nothing to act on: the run would
+    report curve-of-growth fluxes while the caller expects a forced shape.
+    Refuse rather than ignore -- a dropped flag is a wrong answer waiting to
+    be trusted.
     """
     if args.registry_update and not args.registry:
         sys.exit(f"sedphot {verb}: --registry-update needs --registry PATH")

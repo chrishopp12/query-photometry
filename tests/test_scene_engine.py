@@ -608,7 +608,8 @@ def test_registry_offstamp_source_renders_only_its_wing():
     assert float(wing['base'].sum()) < 0.3 * 5000.0
     # and the leash tracks that wing, not the home flux
     assert wing['amp_lohi'][1] < 0.3 * 5000.0
-    # the OLD bug would have forced the wing's integral up to ~5000
+    # flux0 normalizes the design column, so it must be the wing's own
+    # integral: set from the home flux it would cram 5000 into these pixels
     assert wing['flux0'] < 0.3 * 5000.0
 
 

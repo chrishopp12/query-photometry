@@ -61,11 +61,11 @@ def _cog_source(mode: str, shape: str, fit_state: dict) -> tuple[str, str]:
     gating target's bands stored one -- the forced curve stands everywhere
     else, and the caller reports which bands fell back.
 
-    'aperture' ignores shape here, and that is not an ignored flag: the
-    empirical curve is a MEASUREMENT of the pixels, not a rendering of a
-    chosen shape, so it has no per-shape variant to pick. Shape reaches the
-    empirical path only PAST the grid, where reconstruct rebuilds the scene
-    and the target shape decides what gets subtracted from the aperture.
+    'aperture' takes no shape here: the empirical curve is a MEASUREMENT of
+    the pixels, not a rendering of a chosen shape, so there is no per-shape
+    variant to pick. Shape reaches the empirical path only PAST the grid,
+    where reconstruct rebuilds the scene and the target shape decides what
+    gets subtracted from the aperture.
     """
     if mode == 'aperture':
         return 'enclosed_uJy', ''
@@ -184,8 +184,8 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     per_band = prov.get('per_band') or {}
     # per_band preserves engine.order_bands order, so the FIRST band of each
     # instrument is its reference -- the one band that solved every seat
-    # free. One rule, not two: a second "ends with _r" test only ever agreed
-    # with this one by construction, and hid the actual invariant.
+    # free. Position in the record IS the rule: a band-name test would only
+    # restate it, and only for instruments that happen to have an r band.
     ref: dict = {}
     for band, b in per_band.items():
         solve = b.get('solve') or {}
@@ -298,11 +298,11 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
-    # run_measure reports a dead band by PRINTING and moving on, so under
-    # the redirect a band could vanish from the table with no trace at all.
-    # Compare what was asked for against what came back -- that catches
-    # every drop mechanism, not just the two the pipeline has messages for
-    # -- and replay the reasons it did give.
+    # run_measure reports a dead band by PRINTING and moving on, so under the
+    # redirect its only trace lands in the discarded buffer. Compare what was
+    # asked for against what came back -- that catches every drop mechanism,
+    # not just the two the pipeline has messages for -- and replay whatever
+    # reasons it did give.
     missing = [band for band in pin if band not in out]
     if missing:
         print(f"  [remeasure] {len(missing)} band(s) dropped by the pinned "
