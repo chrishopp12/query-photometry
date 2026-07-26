@@ -15,6 +15,7 @@ from sedphot.measure.aperture import witness_row
 from sedphot.measure.background import (bin_plane, residual_mesh,
                                         eval_plane, eval_mesh)
 from sedphot.measure.components import build_components
+from sedphot.measure.engine import _used_shapes
 from sedphot.measure.psf import moffat_kernel
 from sedphot.measure.render import ampl_from_total, render_sersic
 from sedphot.measure.seats import build_seats
@@ -346,11 +347,17 @@ def test_transfer_band_free_shape_survives_to_a_pinned_render():
 
     def band(fit, solve_free=None):
         owners = [c['name'] for c in fit['fixed']] + fit['owners']
-        row = _witness(fit['solve_info'], solve_free=solve_free)
+        row = _witness(fit['solve_info'], solve_free=solve_free,
+                       shapes=_used_shapes(fit, seats, stamp))
         row['fit_state'] = dict(
             amps=[[o, float(a)] for o, a in zip(owners, fit['amps'])],
             bg_coefs=fit['bg']['coefs'])
         return row
+
+    # The engine's own shapes record covers every seat on both bands, which is
+    # what makes the pin correct without leaning on the reference fallback.
+    assert len(_used_shapes(science, seats, stamp)['params']) == need
+    assert len(_used_shapes(ref_fit, seats, stamp)['params']) == need
 
     prov = json.loads(json.dumps(
         {'per_band': {'Legacy_r': band(ref_fit),
