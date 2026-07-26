@@ -211,9 +211,15 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
 def _cmd_remeasure(args: argparse.Namespace) -> None:
     from .remeasure import remeasure
     aperture = None if args.integrated else args.aperture
-    table = remeasure(args.provenance, aperture, mode=args.mode,
-                      shape=args.shape, registry_path=args.registry,
-                      write_qa=args.write_qa)
+    try:
+        table = remeasure(args.provenance, aperture, mode=args.mode,
+                          shape=args.shape, registry_path=args.registry,
+                          write_qa=args.write_qa)
+    except ValueError as e:
+        # A refusal the caller can act on -- an aperture past the stamp, a
+        # sidecar with nothing pinnable -- reads as a bug when it arrives as a
+        # traceback. Same treatment the other verbs give their own refusals.
+        sys.exit(f"sedphot remeasure: {e}")
     if table.empty:
         sys.exit(f"sedphot remeasure: no band has a stored model in "
                  f"{args.provenance}")

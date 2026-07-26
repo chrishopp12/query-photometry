@@ -15,6 +15,7 @@ from sedphot.measure.aperture import witness_row
 from sedphot.measure.background import (bin_plane, residual_mesh,
                                         eval_plane, eval_mesh)
 from sedphot.measure.components import build_components
+from sedphot.measure.engine import _used_shapes
 from sedphot.measure.psf import moffat_kernel
 from sedphot.measure.render import ampl_from_total, render_sersic
 from sedphot.measure.seats import build_seats
@@ -161,6 +162,41 @@ def test_pinned_fit_rescales_shapes_onto_the_bands_own_grid():
     assert not np.allclose(unscaled, by_hand, atol=1e-6)
 
 
+def test_pinned_fit_keeps_two_seats_of_one_owner_apart():
+    """A target_halo target owns TWO seats -- core Sersic and Nuker halo -- so
+    the stored amps carry the same owner twice. Keyed by name they collapse and
+    the core renders at the halo's amplitude."""
+    stamp = _stamp()
+    psf = moffat_kernel(0.9, stamp.pixscale)
+    ra, dec = float(stamp.wcs.wcs.crval[0]), float(stamp.wcs.wcs.crval[1])
+    seats = [dict(kind='sersic', owner='target', ra=ra, dec=dec),
+             dict(kind='nuker', owner='target', ra=ra, dec=dec)]
+    pin = dict(seat_params=[4.0, 2.0, 0.1, 0.0, 0.0, 0.0,
+                           20.0, 3.0, 0.1, 0.0, 0.0, 0.0],
+               seat_pix=None, bg_coefs=[0.0, 0.0, 0.0],
+               amps=[['target', 100.0], ['target', 900.0]])
+    fit = pinned_fit(np.zeros(stamp.data.shape),
+                     np.ones(stamp.data.shape, bool), stamp, psf, [],
+                     seats, set(), pin=pin)
+    assert list(fit['amps']) == [100.0, 900.0]      # order preserved, not 900/900
+    assert fit['seat_amps'] == [100.0, 900.0]
+
+
+def test_pinned_fit_falls_back_for_an_owner_with_no_stored_amp():
+    """An owner the stored fit never carried keeps its own catalog flux."""
+    stamp = _stamp()
+    psf = moffat_kernel(0.9, stamp.pixscale)
+    seat = [dict(kind='sersic', owner='n1',
+                 ra=float(stamp.wcs.wcs.crval[0]),
+                 dec=float(stamp.wcs.wcs.crval[1]))]
+    pin = dict(seat_params=[4.0, 2.0, 0.1, 0.0, 0.0, 0.0], seat_pix=None,
+               bg_coefs=[0.0, 0.0, 0.0], amps=[['somebody_else', 5.0]])
+    fit = pinned_fit(np.zeros(stamp.data.shape),
+                     np.ones(stamp.data.shape, bool), stamp, psf, [],
+                     seat, set(), pin=pin)
+    assert fit['amps'][0] == pytest.approx(fit['col_flux'][0])
+
+
 def test_pinned_fit_without_a_stored_grid_assumes_the_bands_own():
     """A sidecar predating pix_ref renders on this band's grid unchanged."""
     stamp = _stamp()
@@ -174,7 +210,7 @@ def test_pinned_fit_without_a_stored_grid_assumes_the_bands_own():
 # ------------------------------------
 # What the witness records
 # ------------------------------------
-def _witness(solve_info, solve_free=None):
+def _witness(solve_info, solve_free=None, shapes=None):
     stamp = _stamp((40, 40))
     zeros = np.zeros(stamp.data.shape)
     return witness_row(np.zeros(3), np.zeros(3), None, stamp,
@@ -185,7 +221,7 @@ def _witness(solve_info, solve_free=None):
                        [0.0], 0.0, 1.0, 'test',
                        rgrid=np.array([2.0, 5.0, 10.0]),
                        aperture_arcsec=5.0, solve_info=solve_info,
-                       solve_free=solve_free)
+                       solve_free=solve_free, shapes=shapes)
 
 
 def _solve(params, pix_ref=0.262):
@@ -213,14 +249,54 @@ def test_witness_omits_the_free_solve_where_none_ran():
 # ------------------------------------
 # The pin record's seat vector
 # ------------------------------------
-def _band(params, *, pix_ref=0.262, free=None):
+def _band(params, *, pix_ref=0.262, free=None, shapes=None, shapes_pix=None):
     band = {'fit_state': {'amps': [['target', 1.0]],
                           'bg_coefs': [0.1, 0.0, 0.0]}}
     if params is not None:
         band['solve'] = {'params': params, 'pix_ref': pix_ref}
     if free is not None:
         band['solve_free'] = {'params': free, 'pix_ref': pix_ref}
+    if shapes is not None:
+        band['shapes'] = {'params': shapes,
+                          'pix': shapes_pix if shapes_pix else pix_ref,
+                          'seats': ['t:s'] * (len(shapes) // 6)}
     return band
+
+
+def test_witness_records_the_shapes_it_measured_with():
+    """`shapes` is the whole seat list on the band's own grid, whatever put
+    each shape there. `solve` reports only what its solve varied."""
+    row = _witness(_solve([1.0] * 6, pix_ref=0.262),
+                   shapes=dict(seats=['n:s', 't:s'], params=[2.0] * 12,
+                               pix=0.262))
+    assert len(row['solve']['params']) == 6      # the free subset
+    assert len(row['shapes']['params']) == 12    # every seat
+    assert row['shapes']['pix'] == 0.262
+
+
+def test_pin_prefers_the_measured_shapes_over_the_reference_fallback():
+    """A band that records what it measured with needs no fallback, and it
+    brings its OWN grid -- which is what makes a differing pixel scale safe."""
+    prov = {'per_band': {
+        'HST_F606W': _band(list(range(12)), pix_ref=0.04),
+        'HST_F160W': _band(list(range(6)), pix_ref=0.04,
+                           shapes=[9.0] * 12, shapes_pix=0.09)}}
+    pin = _build_pin_by_band(prov, 'forced')
+    assert pin['HST_F160W']['seat_params'] == [9.0] * 12
+    assert pin['HST_F160W']['seat_pix'] == 0.09     # its own grid, not 0.04
+    # The reference band still supplies the fallback for bands without it.
+    assert pin['HST_F606W']['seat_params'] == list(range(12))
+    assert pin['HST_F606W']['seat_pix'] == 0.04
+
+
+def test_pin_falls_back_for_sidecars_predating_the_shapes_record():
+    """Older sidecars carry only the reference band's solve; that IS the
+    shape a transfer band's target was frozen at, so forced is still right."""
+    prov = {'per_band': {'Legacy_r': _band(list(range(12))),
+                         'Legacy_z': _band(list(range(6)))}}
+    pin = _build_pin_by_band(prov, 'forced')
+    assert pin['Legacy_z']['seat_params'] == list(range(12))
+    assert pin['Legacy_z']['seat_pix'] == 0.262
 
 
 def test_pin_refuses_a_partial_transfer_vector(capsys):
@@ -306,11 +382,17 @@ def test_transfer_band_free_shape_survives_to_a_pinned_render():
 
     def band(fit, solve_free=None):
         owners = [c['name'] for c in fit['fixed']] + fit['owners']
-        row = _witness(fit['solve_info'], solve_free=solve_free)
+        row = _witness(fit['solve_info'], solve_free=solve_free,
+                       shapes=_used_shapes(fit, seats, stamp))
         row['fit_state'] = dict(
             amps=[[o, float(a)] for o, a in zip(owners, fit['amps'])],
             bg_coefs=fit['bg']['coefs'])
         return row
+
+    # The engine's own shapes record covers every seat on both bands, which is
+    # what makes the pin correct without leaning on the reference fallback.
+    assert len(_used_shapes(science, seats, stamp)['params']) == need
+    assert len(_used_shapes(ref_fit, seats, stamp)['params']) == need
 
     prov = json.loads(json.dumps(
         {'per_band': {'Legacy_r': band(ref_fit),

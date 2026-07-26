@@ -252,6 +252,7 @@ def run_measure(
         bands: list[str] | None = None,
         aperture_arcsec: float = 10.0,
         cutout_arcsec: float = 120.0,
+        scene_aperture_arcsec: float | None = None,
         sky_rmin_arcsec: float | None = None,
         rgrid: list[float] | None = None,
         sersic_from: str | None = None,
@@ -373,6 +374,9 @@ def run_measure(
 
     # BG_RMIN_AS is module state every measure module reads at call
     # time; scope the override so no run can leak it into the next.
+    scene_ap = (aperture_arcsec if scene_aperture_arcsec is None
+                else scene_aperture_arcsec)
+
     with recipe.sky_floor(sky_rmin_arcsec):
         # Phase 1 -- fetch every provider's images.
         fetched_products: list[tuple[str, list[ImageProduct]]] = []
@@ -435,7 +439,7 @@ def run_measure(
         # confirmed stars (cache-first under Photometry/scene/), the optional
         # patches file, and the cross-field registry.
         scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
-                              aperture_arcsec=aperture_arcsec,
+                              aperture_arcsec=scene_ap,
                               cutout_half_arcsec=cutout_arcsec / 2.0,
                               legacy_dr=legacy_dr, registry_path=registry_path)
         print()
@@ -459,6 +463,7 @@ def run_measure(
                         aperture_arcsec=aperture_arcsec,
                         cutout_half_arcsec=cutout_arcsec / 2.0,
                         rgrid=rgrid_arr,
+                        scene_aperture_arcsec=scene_ap,
                         target_shape=shape_sky if mode == 'sersic' else None,
                         registry_update=registry_update,
                         pin=pin,

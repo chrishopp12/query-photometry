@@ -264,6 +264,23 @@ def _fit_images(fit: dict, system: set[str],
     return scene, target
 
 
+def _used_shapes(fit: dict, seats: list[dict], stamp) -> dict | None:
+    """The seat shapes this band was MEASURED with, on this band's grid.
+
+    Always the whole seat list, however each shape got there -- solved here,
+    transferred from the reference band, or frozen from a previous solve.
+    That is what a reconstruction has to re-render, and it is NOT what
+    `solve` records: a solve reports only the parameters it varied, so on a
+    transfer band its vector covers the free (neighbor) seats alone.
+    """
+    params = fit.get('seat_params')
+    if params is None or not seats:
+        return None
+    return dict(seats=[f"{s['owner']}:{s['kind']}" for s in seats],
+                params=[float(v) for v in params],
+                pix=float(stamp.pixscale))
+
+
 def _target_gates(comps: list[dict], cat: pd.DataFrame) -> bool:
     """Whether the target's own catalog row qualifies for a shape gate.
 
@@ -297,6 +314,7 @@ def measure_band(
         aperture_arcsec: float,
         cutout_half_arcsec: float,
         rgrid: np.ndarray,
+        scene_aperture_arcsec: float | None = None,
         target_shape: dict | None = None,
         registry_update: bool = False,
         pin: dict | None = None,
@@ -327,6 +345,9 @@ def measure_band(
         Stamp half-size.
     rgrid : np.ndarray
         Curve-of-growth radii.
+    scene_aperture_arcsec : float, optional
+        Aperture the scene was BUILT for (shred rule, star zone), when it
+        differs from the one being integrated. [default: the same]
     target_shape : dict, optional
         Explicit target shape (n, reff_arcsec, ellip, pa_deg): pins the
         target to a fixed profile instead of the standard refit
@@ -349,6 +370,12 @@ def measure_band(
     new_ref : dict or None
         Reference for sibling bands, when this band solved shapes.
     """
+    # Scene construction (which catalog rows exist, which stars get a
+    # column) belongs to the aperture the fit was BUILT for; only the
+    # integration uses the requested one. A pinned reconstruction at a
+    # larger radius must not re-adjudicate the scene it is pinning.
+    scene_ap = (aperture_arcsec if scene_aperture_arcsec is None
+                else scene_aperture_arcsec)
     cat, stars = scene['cat'], scene['stars']
     patches = dict(scene['patches'])
     band_key = f"{product.instrument}_{product.band}"
@@ -466,7 +493,7 @@ def measure_band(
     star_img, star_masks, comps, star_log = subtract_stars(
         stamp, raw, good, comps, stars, bg0['const'],
         colors=_band_colors(cat, product.band) if len(cat) else None,
-        aperture_arcsec=aperture_arcsec, tag=tag)
+        aperture_arcsec=scene_ap, tag=tag)
     image = raw - star_img
 
     # A masked-mode star (in-zone revert) has no column and nothing
@@ -494,6 +521,14 @@ def measure_band(
         if comps:
             seats, drops = build_seats(comps, patches, stamp, image,
                                        tag=tag)
+            # Mark which seats are the target's OWN light. A declared
+            # target_system member is attributed to the target and never
+            # subtracted, so its shape belongs to the measurement definition
+            # and transfer bands freeze it with the target (solve._target_side).
+            # Only the engine knows the system, so it tags the seats here and
+            # the tag rides ref['seats'] to every sibling band.
+            for seat in seats:
+                seat['system'] = seat['owner'] in system
     elif ref.get('seats'):
         seats, drops = ref['seats'], set(ref['drops'])
 
@@ -510,31 +545,45 @@ def measure_band(
                          pin=pin)
         harvest_fit, fit_free, target_gates = fit, None, False
     else:
-        fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
-                        ref=fit_ref)
-        # Registry harvest source. The science flux always comes from `fit`
-        # (forced-target on transfer bands, so colors stay shape-consistent).
-        # The reference band already solved the target free -- it harvests
-        # itself. On a transfer band a GATING target gets a SECOND, free-
-        # target solve (Solve 1): the per-band shape every neighbor's forced
-        # photometry consumes must come from its own centered best view, not
-        # the frozen reference shape.
+        # The science flux always comes from `fit`: forced-target on transfer
+        # bands, so colors stay shape-consistent. A GATING target's transfer
+        # band also needs its own free per-band shape (Solve 1) -- the
+        # data-driven envelope every neighbor's forced photometry consumes
+        # must come from this object's own centered best view, not the
+        # frozen reference shape. For a real color gradient that differs from
+        # the transferred shape and fits the halo better (a genuinely compact
+        # z-envelope under an extended r, say). The plane background cannot
+        # absorb a radial halo, so the free solve cannot cheaply collapse
+        # when the envelope is truly extended.
+        #
+        # The reference band solved the target free already, so it harvests
+        # itself and needs no second pass.
         target_gates = _target_gates(comps, cat)
+        two_solve = ref is not None and target_gates and bool(seats)
         fit_free = None
-        if ref is None or not (target_gates and seats):
-            harvest_fit = fit
-        else:
-            # A gating target harvests its per-band free shape (Solve 1): the
-            # data-driven envelope every neighbor's forced photometry consumes.
-            # For a real color gradient this differs from the transferred
-            # reference shape and fits the halo better (a genuinely compact
-            # z-envelope under an extended r, say). The plane background cannot absorb a
-            # radial halo, so the free solve cannot cheaply collapse when the
-            # envelope is truly extended -- it lands on the shape the data
-            # supports, no aperture-residual veto required.
+        if two_solve and recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE:
+            # Free first, then freeze: the free solve settles every seat, and
+            # the science pass adopts its NEIGHBOR shapes and re-freezes the
+            # target, leaving only amplitudes and background to solve. One
+            # nonlinear solve, one neighbor shape per band -- stored and used
+            # -- and the same treatment a neighbor gets when its shape came
+            # from the registry instead.
             fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
                                  drops, ref=fit_ref, free_target=True)
+            fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                            ref=fit_ref,
+                            freeze_neighbors=fit_free['seat_params'])
             harvest_fit = fit_free
+        else:
+            fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                            ref=fit_ref)
+            if not two_solve:
+                harvest_fit = fit
+            else:
+                fit_free = joint_fit(image, good_fit, stamp, psf, comps,
+                                     seats, drops, ref=fit_ref,
+                                     free_target=True)
+                harvest_fit = fit_free
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
     # The free-target solve's own scene, built once and shared by the
@@ -558,19 +607,24 @@ def measure_band(
 
     bases = [c['base'] for c in fit['fixed']] + fit['cols']
     base_owner = [c['name'] for c in fit['fixed']] + fit['owners']
-    # A fixed component pinned at a leash bound is a WITNESS: the solve
-    # wanted an amplitude the leash forbade (a mis-scaled star leash, a
-    # registry anchor the data contradict). Unrecorded, a component parked
-    # exactly at its bound is indistinguishable from a converged fit.
+    # An amplitude pinned at its leash bound is a WITNESS: the solve wanted
+    # a value the leash forbade (a mis-scaled star leash, a registry anchor
+    # the data contradict, a frozen seat whose shape the band disagrees
+    # with). Unrecorded, a column parked exactly at its bound is
+    # indistinguishable from a converged fit. Checked over EVERY column,
+    # seats included -- a frozen seat is precisely the case where the
+    # amplitude is the only freedom left, so it is the one that must not go
+    # unwatched.
     leashed_at_bound = []
-    for comp, amp in zip(fit['fixed'], fit['amps'][:len(fit['fixed'])]):
-        lo, hi = comp.get('amp_lohi', (None, None))
+    for owner, amp, band_lohi in zip(base_owner, fit['amps'],
+                                     fit.get('amp_bounds') or []):
+        lo, hi = band_lohi
         span = (hi - lo) if (lo is not None and hi is not None) else None
         if span and span > 0 and (amp - lo < 1e-3 * span
                                   or hi - amp < 1e-3 * span):
-            leashed_at_bound.append(comp['name'])
+            leashed_at_bound.append(owner)
     if leashed_at_bound:
-        print(f"    {tag}leash-bound fixed amps: {sorted(leashed_at_bound)}")
+        print(f"    {tag}leash-bound amps: {sorted(leashed_at_bound)}")
     scene_img = np.zeros_like(image)
     neighbors = np.zeros_like(image)
     target_img = np.zeros_like(image)
@@ -640,7 +694,8 @@ def measure_band(
                           rgrid=rgrid, aperture_arcsec=aperture_arcsec,
                           solve_info=solve_info,
                           solve_free=(fit_free['solve_info']
-                                      if fit_free is not None else None))
+                                      if fit_free is not None else None),
+                          shapes=_used_shapes(fit, seats, stamp))
     witness['stars'] = star_log
     witness['n_comps'] = len(comps)
     witness['artifact_as2'] = round(artifact_as2, 1)

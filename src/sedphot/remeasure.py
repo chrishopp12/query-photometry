@@ -112,18 +112,26 @@ def remeasure(provenance_path: str | Path,
     # Past the stored grid the empirical curve holds no value to read;
     # reconstruct the scene from the pinned fit and integrate at R.
     per_band = prov.get('per_band') or {}
-    grid_max = max((((b.get('fit_state') or {}).get('rgrid') or [0.0])[-1]
-                    for b in per_band.values()), default=0.0)
+    # The SHORTEST stored grid decides: past its end that band has no value
+    # left to read and would silently return its capped outermost point.
+    # Taking the longest instead would let short-grid bands do exactly that.
+    ends = [(b.get('fit_state') or {}).get('rgrid')[-1]
+            for b in per_band.values()
+            if (b.get('fit_state') or {}).get('rgrid')]
+    grid_max = min(ends) if ends else 0.0
     if mode == 'aperture' and not integrated and aperture_arcsec > grid_max:
+        state: dict = {}
         recon = reconstruct(provenance_path, float(aperture_arcsec),
                             shape=shape, registry_path=registry_path,
-                            write_qa=write_qa)
+                            write_qa=write_qa, status=state)
+        solved = set(state.get('solved') or ())
         return pd.DataFrame(
             [dict(band=band, flux_uJy=round(flux, 4),
                   mag_AB=(round(UJY_AB_ZP - 2.5 * np.log10(flux), 4)
                           if flux > 0 else float('nan')),
                   aperture_as=float(aperture_arcsec), mode='aperture',
-                  source=f"reconstruct_{shape}:{rev}")
+                  source=(f"solved_{shape}:{rev}" if band in solved
+                          else f"reconstruct_{shape}:{rev}"))
              for band, flux in recon.items()],
             columns=['band', 'flux_uJy', 'mag_AB', 'aperture_as',
                      'mode', 'source'])
@@ -163,23 +171,37 @@ def remeasure(provenance_path: str | Path,
                                        'aperture_as', 'mode', 'source'])
 
 
+def _vector(record: dict | None) -> tuple:
+    """(params, pix) out of a shapes / solve / solve_free record.
+
+    The three name their grid differently (`pix` vs `pix_ref`) because two
+    of them are a solver's own output and one is the engine's statement of
+    what it rendered. Read them uniformly.
+    """
+    params = (record or {}).get('params')
+    if not params:
+        return None, None
+    return params, (record.get('pix') if record.get('pix') is not None
+                    else record.get('pix_ref'))
+
+
 def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     """Per-band pin dict from the sidecar (owner->amp, shape, plane, mesh).
 
-    'forced' renders the target at the instrument's reference-band shape --
-    the shape the science curve was built on, and the only one stored on a
-    non-gating galaxy's transfer bands. 'fitted' prefers each band's own
-    free-target vector, falling back to forced where a band stored none.
+    'forced' rebuilds each band on the shapes it was MEASURED with -- the
+    ones the science curve came from. 'fitted' substitutes each band's own
+    free-target vector, which only a gating target has, falling back to
+    forced (loudly) where a band stored none.
 
-    Each pin carries seat_pix, the arcsec/px grid its radial parameters
-    live in, so pinned_fit can rescale onto the band it re-renders on.
+    Each pin carries seat_pix, the arcsec/px grid its radial parameters live
+    in, so pinned_fit can rescale onto the band it re-renders on.
 
-    A candidate vector whose length disagrees with its instrument's
-    reference vector cannot describe the same seat list, so it is refused
-    in favor of forced. A transfer band's `solve` record is exactly that
-    case: it covers only the NEIGHBOR seats that band re-solved (the target
-    was frozen there), so it is not a full seat vector and must never be
-    rendered as one.
+    `shapes` is the authoritative source: the whole seat list, on the band's
+    own grid. Sidecars predating it fall back to the instrument's reference
+    band `solve` record -- correct, because a transfer band's target was
+    frozen at exactly that shape. What must never be used is a transfer
+    band's OWN `solve`: it covers the free (neighbor) seats alone, so a
+    length check refuses it.
     """
     per_band = prov.get('per_band') or {}
     # per_band preserves engine.order_bands order, so the FIRST band of each
@@ -188,10 +210,10 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     # restate it, and only for instruments that happen to have an r band.
     ref: dict = {}
     for band, b in per_band.items():
-        solve = b.get('solve') or {}
+        params, pix = _vector(b.get('solve'))
         inst = band.split('_')[0]
-        if solve.get('params') and inst not in ref:
-            ref[inst] = (band, solve['params'], solve.get('pix_ref'))
+        if params and inst not in ref:
+            ref[inst] = (band, params, pix)
 
     pin: dict = {}
     demoted: list[str] = []
@@ -200,12 +222,23 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
         if not fs.get('amps') or not fs.get('bg_coefs'):
             continue
         forced = ref.get(band.split('_')[0])
-        if forced is None:
+        # The shapes this band was measured with, else the reference band's.
+        seat, seat_pix = _vector(b.get('shapes'))
+        if seat is None and forced is not None:
+            _, seat, seat_pix = forced
+        if seat is None and b.get('seat_owners') == []:
+            # A scene with NO seats needs no shape vector: pinned_fit renders
+            # the fixed components at their stored amplitudes on the stored
+            # plane, which is the whole fit. Pinnable, not a gap.
+            seat, seat_pix = None, None
+        elif seat is None:
+            # Seats existed and no vector covers them, so this band cannot be
+            # rebuilt. Leaving it out of the pin sends it down the SOLVING
+            # path, which is a fresh measurement wearing a reconstruction
+            # label -- the caller reports it instead.
             continue
-        ref_band, ref_params, ref_pix = forced
-        seat, seat_pix = ref_params, ref_pix
-        if shape == 'fitted':
-            own = _fitted_vector(band, b, forced)
+        if shape == 'fitted' and seat is not None:
+            own = _fitted_vector(band, b, forced, len(seat))
             if own is None:
                 demoted.append(band)
             else:
@@ -216,33 +249,36 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
                          consumed=b.get('registry_consumed'))
     if demoted:
         print(f"  [remeasure] no per-band free-target shape stored for "
-              f"{sorted(demoted)}; those bands use the forced "
-              f"(reference-band) shape")
+              f"{sorted(demoted)}; those bands use the shapes they were "
+              f"measured with")
     return pin
 
 
-def _fitted_vector(band: str, witness: dict,
-                   forced: tuple) -> tuple | None:
+def _fitted_vector(band: str, witness: dict, forced: tuple | None,
+                   expect: int) -> tuple | None:
     """This band's own free-target shape vector, or None when it has none.
 
-    The reference band solved every seat free, so its `solve` record IS the
-    free vector. On a transfer band the science solve froze the target, so
-    only a gating target's separate free-target pass has one, recorded as
-    `solve_free`. Length must match the reference vector or the record
-    cannot cover the same seats.
+    The reference band solved every seat free, so the shapes it measured
+    with ARE the free ones. On a transfer band the science pass had the
+    target frozen, so only a gating target's separate free-target solve has
+    one, recorded as `solve_free`. Either way the vector must cover the
+    whole seat list.
     """
-    ref_band, ref_params, _ = forced
-    source = ((witness.get('solve') or {}) if band == ref_band
-              else (witness.get('solve_free') or {}))
-    params = source.get('params')
-    if not params or len(params) != len(ref_params):
+    if forced is not None and band == forced[0]:
+        params, pix = _vector(witness.get('shapes'))
+        if params is None:
+            params, pix = _vector(witness.get('solve'))
+    else:
+        params, pix = _vector(witness.get('solve_free'))
+    if not params or len(params) != expect:
         return None
-    return params, source.get('pix_ref')
+    return params, pix
 
 
 def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                 shape: str = 'forced', registry_path: str | None = None,
-                write_qa: bool = False) -> dict:
+                write_qa: bool = False,
+                status: dict | None = None) -> dict:
     """Empirical flux at aperture_arcsec, past the stored grid, no solve.
 
     Rebuilds the galaxy's scene from the immutable sidecar (every shape,
@@ -254,15 +290,24 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     are never touched. write_qa writes per-band scene figures to a scoped
     QA/remeasure_R<N>as/ subdir (never the science QA). Returns
     {band: flux_uJy}.
+
+    status, when given, is filled with 'solved': the bands that had no
+    pinnable fit and so were SOLVED rather than reconstructed. They are
+    still returned -- best available answer -- but a caller that labels
+    its output must not call them pinned.
     """
     import contextlib
     import io
 
     from astropy.coordinates import SkyCoord
+    from .catalogs.legacy import LEGACY_DR_DEFAULT
     from .pipeline import run_measure
 
     prov = json.loads(Path(provenance_path).read_text())
     tgt = prov.get('target') or {}
+    if tgt.get('ra_deg') is None or tgt.get('dec_deg') is None:
+        raise ValueError(f"{provenance_path} records no target position, so "
+                         f"there is nothing to rebuild the scene around")
     coord = SkyCoord(tgt['ra_deg'], tgt['dec_deg'], unit='deg')
     galaxy_dir = Path(provenance_path).parent.parent
     label = (tgt.get('label')
@@ -272,6 +317,19 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     # A run that moved the target/sky boundary must be rebuilt on the same
     # one -- it decides which pixels the plane and mesh ever saw.
     sky_rmin = ((prov.get('scene') or {}).get('recipe') or {}).get('BG_RMIN_AS')
+    # Replay the FETCH options too. They decide which pixels arrive, so a
+    # default here silently rebuilds on different data: `bricks` swaps Legacy
+    # brick coadds (with real inverse variance) for viewer cutouts, on a
+    # different pixel grid. Reproducing a fit means reproducing its images.
+    legacy = prov.get('legacy') or {}
+    legacy_dr = legacy.get('dr') or LEGACY_DR_DEFAULT
+    legacy_bricks = bool(legacy.get('bricks'))
+    hst_proposal_id = prov.get('hst_proposal_id')
+    # The SCENE belongs to the aperture the fit was built for: the
+    # target-substructure rule and the star zone are both scoped to it,
+    # so asking for a larger radius here would delete catalog rows as
+    # 'target shreds' that the fit had modelled and subtracted.
+    science_ap = float(prov.get('aperture_arcsec') or aperture_arcsec)
     if aperture_arcsec > cutout / 2.0:
         raise ValueError(
             f"aperture {aperture_arcsec:g}\" exceeds the stamp half-width "
@@ -293,20 +351,33 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
         frame = run_measure(coord, label, str(galaxy_dir),
                             instruments=instruments,
                             aperture_arcsec=aperture_arcsec,
-                            cutout_arcsec=cutout, sky_rmin_arcsec=sky_rmin,
+                            cutout_arcsec=cutout,
+                            scene_aperture_arcsec=science_ap,
+                            sky_rmin_arcsec=sky_rmin,
                             rgrid=grid, pin_by_band=pin,
+                            legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                            hst_proposal_id=hst_proposal_id,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
+    # A band with no pin took run_measure's SOLVING path -- a fresh fit, not a
+    # reconstruction. It is still the best available answer, so it is kept, but
+    # the caller must be able to label it honestly rather than call it pinned.
+    solved = sorted(band for band in out if band not in pin)
+    if status is not None:
+        status['solved'] = solved
+    if solved:
+        print(f"  [remeasure] {len(solved)} band(s) had no pinnable fit and "
+              f"were SOLVED, not reconstructed: {solved}")
     # run_measure reports a dead band by PRINTING and moving on, so under the
-    # redirect its only trace lands in the discarded buffer. Compare what was
-    # asked for against what came back -- that catches every drop mechanism,
-    # not just the two the pipeline has messages for -- and replay whatever
-    # reasons it did give.
-    missing = [band for band in pin if band not in out]
+    # redirect its only trace lands in the discarded buffer. Compare the whole
+    # sidecar against what came back -- that catches every drop mechanism, not
+    # just the two the pipeline has messages for -- and replay whatever reasons
+    # it did give.
+    missing = [band for band in (prov.get('per_band') or {}) if band not in out]
     if missing:
-        print(f"  [remeasure] {len(missing)} band(s) dropped by the pinned "
-              f"rebuild: {sorted(missing)}")
+        print(f"  [remeasure] {len(missing)} band(s) absent from the rebuild: "
+              f"{sorted(missing)}")
         for line in log.getvalue().splitlines():
             if 'FAILED' in line or 'no_coverage' in line:
                 print(f"    {line.strip()}")

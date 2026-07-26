@@ -12,12 +12,12 @@ exactly at every trial of the shape parameters -- with the Gram block
 of the constant fixed columns precomputed and shared across the
 alternation's warm re-solves.
 
-Reference bands solve seat shapes; transfer bands freeze the TARGET
-seat at the reference shape (the measurement definition never
-re-negotiates per band) and re-solve NEIGHBOR seat shapes warm, with
-seat fluxes leashed to color-scaled reference values (subtraction wants
-per-band fidelity: chromatic morphology is real, especially for large
-envelopes).
+Reference bands solve seat shapes; transfer bands freeze every
+TARGET-SYSTEM seat at the reference shape (the measurement definition
+never re-negotiates per band, and a declared member's light is the
+target's own) and re-solve NEIGHBOR seat shapes warm, with seat fluxes
+leashed to color-scaled reference values (subtraction wants per-band
+fidelity: chromatic morphology is real, especially for large envelopes).
 
 Requirements:
     numpy, scipy, astropy
@@ -31,6 +31,7 @@ Notes:
 from __future__ import annotations
 
 import time
+from collections import defaultdict, deque
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -360,7 +361,24 @@ def solve_shapes(
 # ------------------------------------
 # Transfer-band plumbing
 # ------------------------------------
-def _transfer_setup(seats, ref, stamp, psf, free_target=False):
+def _target_side(seat: dict) -> bool:
+    """Whether a seat's light belongs to the target system.
+
+    A declared target_system member -- a dumbbell's second nucleus, a bound
+    companion -- is the target's OWN light: integrated into the aperture,
+    never subtracted, never masked. Its shape is therefore part of the
+    measurement definition, so a transfer band freezes it exactly as it
+    freezes the target, and the system's total shape is not re-negotiated
+    band by band through one of its components.
+
+    Seats built without the tag fall back to the name, which is the same
+    answer wherever no member was declared.
+    """
+    if 'system' in seat:
+        return bool(seat['system'])
+    return seat['owner'] == 'target'
+def _transfer_setup(seats, ref, stamp, psf, free_target=False,
+                    freeze_neighbors=None):
     """Band-local seat machinery for a transfer band.
 
     Scales the reference seats and solved parameters onto this band's
@@ -369,17 +387,31 @@ def _transfer_setup(seats, ref, stamp, psf, free_target=False):
     free_target, the target seats join the free set too: the per-band
     free shape a gating target harvests for the registry (Solve 1),
     versus the forced-shape science pass that freezes it (Solve 2).
+
+    freeze_neighbors adopts a full band-local vector's NEIGHBOR slices and
+    freezes every seat, so no shape solve runs at all: the target holds the
+    reference shape, the neighbors hold the shapes that vector carries, and
+    only amplitudes and background are left to solve. The merged vector is
+    what gets rendered AND what the fit reports, so the shapes used and the
+    shapes recorded are one object.
     """
     s_px = ref['pix'] / stamp.pixscale
     seats_local = [_scale_seat(s, s_px) for s in seats]
     p_local = _scale_params(seats, ref['p'], s_px)
     slices = seat_slices(seats)
-    if free_target:
+    if freeze_neighbors is not None:
+        adopted = np.asarray(freeze_neighbors, float)
+        for i, seat in enumerate(seats):
+            if not _target_side(seat):
+                p_local[slices[i]] = adopted[slices[i]]
+        free_idx = []
+        frozen_idx = list(range(len(seats)))
+    elif free_target:
         free_idx = list(range(len(seats)))
         frozen_idx = []
     else:
-        free_idx = [i for i, s in enumerate(seats) if s['owner'] != 'target']
-        frozen_idx = [i for i, s in enumerate(seats) if s['owner'] == 'target']
+        free_idx = [i for i, s in enumerate(seats) if not _target_side(s)]
+        frozen_idx = [i for i, s in enumerate(seats) if _target_side(s)]
     frozen_cols = (render_seats(
         [seats_local[i] for i in frozen_idx],
         np.concatenate([p_local[slices[i]] for i in frozen_idx]),
@@ -438,6 +470,7 @@ def joint_fit(
         *,
         ref: dict | None = None,
         free_target: bool = False,
+        freeze_neighbors=None,
 ) -> dict:
     """The whole fit: {shapes + amplitudes} <-> background, block
     coordinate descent to a fixed point.
@@ -471,6 +504,15 @@ def joint_fit(
         reference pixel scale (pix), per-seat reference fluxes
         (col_flux), and per-seat color factors (col_color). None on a
         reference band -- seats solve their own shapes.
+    free_target : bool
+        Solve the target's shape too (the registry-harvest pass), instead
+        of freezing it at the reference shape.
+    freeze_neighbors : array-like, optional
+        A full band-local seat vector whose NEIGHBOR shapes this fit adopts
+        and holds fixed. With it no shape solves at all -- every seat is a
+        fixed column and only amplitudes and background are solved, so
+        solve_info is None. Used by the free-solve-first ordering
+        (recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE).
 
     Returns
     -------
@@ -490,9 +532,12 @@ def joint_fit(
     track = [bg['const']]
     solve_info, nfev_hist = None, []
     cols, owners, col_flux, bounds = [], [], [], None
+    amp_bounds: list = []
 
     solving = bool(seats) and ref is None
-    transfer = (_transfer_setup(seats, ref, stamp, psf, free_target=free_target)
+    transfer = (_transfer_setup(seats, ref, stamp, psf,
+                                free_target=free_target,
+                                freeze_neighbors=freeze_neighbors)
                 if seats and ref is not None else None)
 
     p = None
@@ -559,8 +604,8 @@ def joint_fit(
                                for o in owners]
             else:
                 seat_bounds = bounds
-            design = _design(bases, good, fixed_flux + col_flux,
-                             fixed_bounds + seat_bounds)
+            amp_bounds = fixed_bounds + seat_bounds
+            design = _design(bases, good, fixed_flux + col_flux, amp_bounds)
         scene = np.zeros_like(image)
         if design is not None:
             amps = _amp_solve(*design, (image - bg['img'])[good])
@@ -596,7 +641,8 @@ def joint_fit(
     return dict(amps=amps, mults=mults, bg=bg, track=track,
                 solve_info=solve_info, cols=cols, owners=owners,
                 fixed=fixed, col_flux=col_flux, seats_local=seats_local,
-                seat_params=seat_params, seat_amps=seat_amps)
+                seat_params=seat_params, seat_amps=seat_amps,
+                amp_bounds=amp_bounds)
 
 
 def pinned_fit(
@@ -651,9 +697,17 @@ def pinned_fit(
     col_flux = [max(float(c.sum()) * cf, 1e-9) for c in cols]
     bases = fixed_bases + cols
     base_owner = [c['name'] for c in fixed] + owners
-    name_amp = {o: float(a) for o, a in pin['amps']}
+    # One owner can hold SEVERAL columns: a target_halo target owns both a
+    # core Sersic and a Nuker halo seat. Keying the stored amplitudes by name
+    # collapses those into one, so the core would render at the halo's
+    # amplitude. Queue per owner and consume in the recorded order, which is
+    # the order base_owner is built in on both sides.
+    queued: dict = defaultdict(deque)
+    for owner, amp in pin['amps']:
+        queued[owner].append(float(amp))
     flux = np.asarray(fixed_flux + col_flux) if bases else np.zeros(0)
-    amps = np.array([name_amp.get(o, f) for o, f in zip(base_owner, flux)])
+    amps = np.array([queued[o].popleft() if queued[o] else f
+                     for o, f in zip(base_owner, flux)])
     mults = amps / flux if flux.size else amps
     coefs = [float(v) for v in pin['bg_coefs']]
     bg = dict(img=eval_plane(coefs, image.shape), const=coefs[0],
