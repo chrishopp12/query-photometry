@@ -92,8 +92,16 @@ def _soda_nodata(data: np.ndarray) -> np.ndarray:
     SODA fills a clipped region with exact zeros AND deeply-negative values --
     the latter finite and non-zero, so an isfinite/non-zero test counts them as
     real data (and the mosaic's first-valid combine would keep them over an
-    adjacent tile's good pixels). Flag them as the gate does: non-finite, exact
-    zero, or more than 10 robust sigma below the median level.
+    adjacent tile's good pixels). Same RULE as the measurement gate
+    (stamp.load_stamp): non-finite, exact zero, or more than 10 robust sigma
+    below the outer level.
+
+    The level here is a median + MAD where the gate uses a clipped mean and
+    its clipped sigma. Deliberate, and the one place that difference is safe:
+    this is a DETECTION threshold at -10 sigma, where the two estimators agree
+    far more closely than the threshold's own margin, and no flux is summed
+    from it. Where a level feeds photometry the clipped mean is mandatory --
+    see background.py on why a median biases a sum.
     """
     nodata = ~np.isfinite(data) | (data == 0.0)
     good = data[~nodata]
