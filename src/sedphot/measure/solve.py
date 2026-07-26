@@ -282,7 +282,14 @@ def solve_shapes(
                 for k_par in range(sl.stop - sl.start):
                     idx = sl.start + k_par
                     h = sqrt_eps * max(1.0, abs(p[idx]))
+                    # Step inward from whichever bound the parameter sits
+                    # on. Flipping only at the ceiling leaves the floor
+                    # unguarded: on a box narrower than the step -- the
+                    # staged center freeze is 2e-6 wide -- the flip would
+                    # itself leave the box and render an out-of-bounds trial.
                     if p[idx] + h > hi[idx]:
+                        h = -h
+                    if p[idx] + h < lo[idx]:
                         h = -h
                     p2 = p.copy()
                     p2[idx] += h
