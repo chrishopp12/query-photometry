@@ -239,11 +239,11 @@ def ambient_surface(
         too few for a surface worth the name.
     """
     usable = good & ~mask & (rr > recipe.BG_RMIN_AS)
-    row_starts, col_starts, bin_px, medians = bin_grid(work, usable,
-                                                       pixscale)
-    if np.isfinite(medians).sum() <= 8:
+    row_starts, col_starts, bin_px, levels = bin_grid(work, usable,
+                                                      pixscale)
+    if np.isfinite(levels).sum() <= 8:
         return None
-    smoothed = convolve(medians, Gaussian2DKernel(1.0),
+    smoothed = convolve(levels, Gaussian2DKernel(1.0),
                         boundary='extend', nan_treatment='interpolate',
                         preserve_nan=False)
     interp = RegularGridInterpolator(
@@ -310,11 +310,11 @@ def residual_mesh(
         The residual background surface per pixel (counts); zeros when
         fewer than nine bins vote.
     """
-    row_starts, col_starts, bin_px, medians = bin_grid(resid, vote,
-                                                       pixscale)
-    if np.isfinite(medians).sum() <= 8:
+    row_starts, col_starts, bin_px, levels = bin_grid(resid, vote,
+                                                      pixscale)
+    if np.isfinite(levels).sum() <= 8:
         return np.zeros_like(resid)
-    smoothed = convolve(medians, Gaussian2DKernel(1.0), boundary='extend',
+    smoothed = convolve(levels, Gaussian2DKernel(1.0), boundary='extend',
                         nan_treatment='interpolate', preserve_nan=False)
     interp = RegularGridInterpolator(
         (row_starts + bin_px / 2.0, col_starts + bin_px / 2.0), smoothed,

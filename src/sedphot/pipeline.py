@@ -272,8 +272,8 @@ def run_measure(
 
     Every band runs through the scene engine: survey-catalog components,
     measured-star subtraction, a joint amplitude(+shape) solve against a
-    bin-median-plane background, then mask, twin fill, and the curve of
-    growth. Bands are measured per instrument, reference band first.
+    clipped-bin-mean plane background, then mask, twin fill, and the curve
+    of growth. Bands are measured per instrument, reference band first.
 
     Parameters
     ----------

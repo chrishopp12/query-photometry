@@ -585,7 +585,7 @@ def measure_band(
     mask, flood_ujy = build_mask(comps, fitted_by, star_masks, stamp,
                                  seeing, scene_img, neighbors, image,
                                  good, tag=tag)
-    # Post-fit residual mesh: the bin-median surface of the light no
+    # Post-fit residual mesh: the bin-level surface of the light no
     # model claimed, subtracted only inside the curve of growth. Every
     # fitted component (the target's own envelope included) is already
     # out of the residual, so a well-fit source leaves the mesh
