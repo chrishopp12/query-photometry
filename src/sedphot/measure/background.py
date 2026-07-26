@@ -185,9 +185,9 @@ def bin_plane(
             break
         keep = new_keep
 
-    yy, xx = np.indices(work.shape)
-    img = (coef[0] + coef[1] * (xx - nx / 2) / nx
-           + coef[2] * (yy - ny / 2) / ny)
+    # Evaluated through eval_plane, the same function the sidecar
+    # reconstruction uses, so the parametrization has exactly one home.
+    img = eval_plane(coef, work.shape)
     keep_px = np.zeros(work.shape, bool)
     for i, j, kept in zip(ii, jj, keep):
         if kept:
@@ -316,16 +316,8 @@ def residual_mesh(
         return np.zeros_like(resid)
     smoothed = convolve(levels, Gaussian2DKernel(1.0), boundary='extend',
                         nan_treatment='interpolate', preserve_nan=False)
-    interp = RegularGridInterpolator(
-        (row_starts + bin_px / 2.0, col_starts + bin_px / 2.0), smoothed,
-        bounds_error=False, fill_value=None)
-    ny, nx = resid.shape
-    yy, xx = np.indices((ny, nx))
-    ys = np.clip(yy.ravel(), row_starts[0] + bin_px / 2.0,
-                 row_starts[-1] + bin_px / 2.0)
-    xs = np.clip(xx.ravel(), col_starts[0] + bin_px / 2.0,
-                 col_starts[-1] + bin_px / 2.0)
-    mesh = interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
+    mesh = _bin_surface(row_starts, col_starts, bin_px, smoothed,
+                        resid.shape)
     zero_over = vote if level_px is None else (vote & level_px)
     if not zero_over.any():
         zero_over = vote
@@ -348,12 +340,34 @@ def eval_plane(coefs, shape: tuple[int, int]) -> np.ndarray:
     The inverse of bin_plane's `coefs` -- [level, x-tilt, y-tilt] in the
     centered/normalized parametrization -- so a pinned reconstruction
     reproduces bin_plane's `img` from the sidecar alone, with no bins and
-    no fit. Kept beside bin_plane so the parametrization cannot drift.
+    no fit. bin_plane BUILDS its own plane through this function, so the
+    two cannot drift apart: there is one parametrization, in one place.
     """
     ny, nx = shape
     yy, xx = np.indices((ny, nx))
     c0, c1, c2 = (float(v) for v in coefs)
     return c0 + c1 * (xx - nx / 2) / nx + c2 * (yy - ny / 2) / ny
+
+
+def _bin_surface(row_starts, col_starts, bin_px: float,
+                 smoothed: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Bilinear bin-grid surface at pixel resolution, clamped to the hull.
+
+    The shared core of residual_mesh and eval_mesh: queries are clamped to
+    the bin-center hull so the surface never extrapolates outward at the
+    stamp edge. Both the producer and the sidecar reconstruction call it,
+    so a mesh always re-evaluates to what it was.
+    """
+    rs = np.asarray(row_starts, float)
+    cs = np.asarray(col_starts, float)
+    interp = RegularGridInterpolator((rs + bin_px / 2.0, cs + bin_px / 2.0),
+                                     smoothed, bounds_error=False,
+                                     fill_value=None)
+    ny, nx = shape
+    yy, xx = np.indices((ny, nx))
+    ys = np.clip(yy.ravel(), rs[0] + bin_px / 2.0, rs[-1] + bin_px / 2.0)
+    xs = np.clip(xx.ravel(), cs[0] + bin_px / 2.0, cs[-1] + bin_px / 2.0)
+    return interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
 
 
 def eval_mesh(state: dict | None, shape: tuple[int, int]) -> np.ndarray:
@@ -366,16 +380,7 @@ def eval_mesh(state: dict | None, shape: tuple[int, int]) -> np.ndarray:
     """
     if not state or not state.get('smoothed'):
         return np.zeros(shape)
-    rs = np.asarray(state['row_starts'], float)
-    cs = np.asarray(state['col_starts'], float)
-    bp = float(state['bin_px'])
-    smoothed = np.asarray(state['smoothed'], float)
-    interp = RegularGridInterpolator((rs + bp / 2.0, cs + bp / 2.0),
-                                     smoothed, bounds_error=False,
-                                     fill_value=None)
-    ny, nx = shape
-    yy, xx = np.indices((ny, nx))
-    ys = np.clip(yy.ravel(), rs[0] + bp / 2.0, rs[-1] + bp / 2.0)
-    xs = np.clip(xx.ravel(), cs[0] + bp / 2.0, cs[-1] + bp / 2.0)
-    mesh = interp(np.stack([ys, xs], axis=1)).reshape(ny, nx)
+    mesh = _bin_surface(state['row_starts'], state['col_starts'],
+                        float(state['bin_px']),
+                        np.asarray(state['smoothed'], float), shape)
     return mesh - float(state.get('zero', 0.0))
