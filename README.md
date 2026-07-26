@@ -153,7 +153,39 @@ aperture integral -- forced photometry through the same scene fit. The
 shape is the standard reference-band refit, a fit on a chosen band
 (`--sersic-from`), or explicit `--sersic-params`; fitted n and r_eff are
 PSF-sensitive, so explicit parameters from a trusted fit are the
-precision path.
+precision path. The shape flags apply to `--mode sersic` only, and are
+refused rather than ignored under `--mode aperture`.
+
+`sedphot run` accepts every option `measure` does, so the flagship never
+measures under different settings than the verb it drives.
+
+### Re-reporting from a stored fit
+
+`sedphot remeasure <sidecar>` re-derives band fluxes from the immutable
+provenance without re-fetching or re-fitting:
+
+    sedphot remeasure Photometry/g1_measured.provenance.json \
+        --mode aperture --aperture 10
+
+Because the curve of growth is stored to 40", changing the science
+aperture inside the grid is an interpolation. `--mode sersic` reads the
+fitted model's curve instead; `--integrated` gives the model total.
+
+`--shape` picks which target shape the report is built on:
+
+| | |
+|---|---|
+| `forced` (default) | the instrument's reference-band shape -- the one the science curve was built on |
+| `fitted` | each band's own free-target shape, which only a **gating** target has (the engine solves such a target twice per transfer band: frozen for the science flux, free for the registry) |
+
+Bands with no free-target record fall back to `forced`, name themselves
+in the log, and say so in their `source` column. In `--mode aperture`
+`--shape` applies only *past* the stored grid, where the scene is rebuilt
+from the pinned fit and the shape decides what gets subtracted; inside
+the grid the empirical curve is a measurement of the pixels, with no
+per-shape variant. `--write-qa` sends a beyond-grid rebuild's per-band
+figures to a scoped `QA/remeasure_R<N>as/` subdirectory, never the
+science QA.
 
 ## SPHEREx
 

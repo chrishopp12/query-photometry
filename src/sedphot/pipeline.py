@@ -272,8 +272,8 @@ def run_measure(
 
     Every band runs through the scene engine: survey-catalog components,
     measured-star subtraction, a joint amplitude(+shape) solve against a
-    bin-median-plane background, then mask, twin fill, and the curve of
-    growth. Bands are measured per instrument, reference band first.
+    clipped-bin-mean plane background, then mask, twin fill, and the curve
+    of growth. Bands are measured per instrument, reference band first.
 
     Parameters
     ----------
@@ -318,6 +318,18 @@ def run_measure(
         frozen components).
     registry_update : bool
         Also write this galaxy's solved seats back to the registry.
+    pin_by_band : dict, optional
+        Reconstruction hook: {band_key: pin} rebuilds each band from a
+        stored fit instead of solving (see measure.solve.pinned_fit). A
+        pinned band is treated as self-contained, so no reference/transfer
+        state is threaded through it.
+    write_outputs : bool
+        False suppresses every product -- no table, no sidecar, no growth
+        curves -- so a re-report cannot touch the science-aperture files.
+        The frame is still returned. [default: True]
+    qa_dir : str or Path, optional
+        Send QA figures here instead of <Inst>/QA/, so a reconstruction's
+        figures land in their own scoped directory.
     dump_arrays : bool
         Write per-band array bundles under <Inst>/QA/ (debug).
     legacy_dr : str
@@ -591,6 +603,11 @@ def run_spherex(
     mjd_range : [float, float], optional
         Restrict to visits in this MJD window (the IRSA workaround for
         broken-metadata epochs).
+    label : str
+        Output stem, recorded in the table's sidecar.
+    target_name : str, optional
+        Original name string, recorded in the table's sidecar. The IRSA
+        request carries a position only, so no name reaches the query.
 
     Returns
     -------
@@ -668,9 +685,32 @@ def run_spherex(
                                bkg_region_size=bkg_size,
                                mjd_range=tuple(mjd_range) if mjd_range else None,
                                poll=poll, timeout=timeout,
-                               shape_origin=shape_origin)
+                               shape_origin=shape_origin,
+                               label=label, target_name=target_name)
     print(f"\n  spherex {result.status}: {result.message}")
     return result
+
+
+# ------------------------------------
+# Table discovery, shared by the report verbs
+# ------------------------------------
+def _resolve_label(label: str | None, phot_dir: Path) -> str:
+    """The output stem, inferred from the tables on disk when not given.
+
+    Both report verbs (sed, overlay) read whatever tables a galaxy already
+    has, so both need the same inference and the same refusal: a directory
+    holding more than one stem is ambiguous, and guessing would silently
+    report the wrong galaxy.
+    """
+    if label is not None:
+        return label
+    stems = {p.name.rsplit('_', 1)[0]
+             for p in list(phot_dir.glob("*_catalog.csv"))
+             + list(phot_dir.glob("*_measured.csv"))}
+    if len(stems) != 1:
+        raise ValueError(f"cannot infer --label in {phot_dir}: "
+                         f"found stems {sorted(stems)}")
+    return stems.pop()
 
 
 # ------------------------------------
@@ -695,14 +735,7 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
     from .qa import plot_sed
 
     phot_dir = Path(out_dir) / "Photometry"
-    if label is None:
-        stems = {p.name.rsplit('_', 1)[0]
-                 for p in list(phot_dir.glob("*_catalog.csv"))
-                 + list(phot_dir.glob("*_measured.csv"))}
-        if len(stems) != 1:
-            raise ValueError(f"cannot infer --label in {phot_dir}: "
-                             f"found stems {sorted(stems)}")
-        label = stems.pop()
+    label = _resolve_label(label, phot_dir)
 
     frames = {}
     for kind in ("catalog", "measured"):
@@ -757,14 +790,7 @@ def run_overlay(
     from .overlay import build
 
     phot_dir = Path(out_dir) / "Photometry"
-    if label is None:
-        stems = {p.name.rsplit('_', 1)[0]
-                 for p in list(phot_dir.glob("*_catalog.csv"))
-                 + list(phot_dir.glob("*_measured.csv"))}
-        if len(stems) != 1:
-            raise ValueError(f"cannot infer --label in {phot_dir}: "
-                             f"found stems {sorted(stems)}")
-        label = stems.pop()
+    label = _resolve_label(label, phot_dir)
 
     # Both tables describe one target, so they share one panel pair --
     # the point of the figure is seeing every provider's match together.
@@ -796,14 +822,21 @@ def run_all(
         skip: list[str] | None = None,
         radius_arcsec: float = 2.0,
         dered: bool = False,
+        mode: str = 'aperture',
+        bands: list[str] | None = None,
         aperture_arcsec: float = 10.0,
         cutout_arcsec: float = 120.0,
+        sky_rmin_arcsec: float | None = None,
+        rgrid: list[float] | None = None,
+        sersic_from: str | None = None,
+        sersic_seeing: float | None = None,
         registry_path: str | None = None,
         registry_update: bool = False,
         spherex_model: str = 'off',
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> dict[str, str]:
     """Everything: catalogs -> images + scene measurement -> SPHEREx
@@ -823,7 +856,16 @@ def run_all(
         names where they overlap).
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
-    Other parameters as in run_catalogs / run_measure.
+    sersic_params, sersic_from, sersic_seeing
+        The shape declaration, shared by the measurement stage's sersic
+        mode and the SPHEREx extraction -- one shape per galaxy, not two.
+        Left unset, each stage keeps its OWN default: the measurement
+        refits the target on its reference band, SPHEREx looks the shape up
+        in the Tractor catalog.
+    Other parameters as in run_catalogs / run_measure. Every measurement
+    option run_measure accepts is forwarded, because a flag the flagship
+    silently drops is a flag whose absence has to be discovered from a
+    wrong answer.
 
     Returns
     -------
@@ -851,11 +893,18 @@ def run_all(
     before = coverage_path.stat().st_mtime if coverage_path.exists() else None
     try:
         run_measure(coord, label, out_dir, instruments=image_set,
+                    mode=mode, bands=bands,
                     aperture_arcsec=aperture_arcsec,
                     cutout_arcsec=cutout_arcsec,
+                    sky_rmin_arcsec=sky_rmin_arcsec,
+                    rgrid=rgrid,
+                    sersic_from=sersic_from,
+                    sersic_params=sersic_params,
+                    sersic_seeing=sersic_seeing,
                     registry_path=registry_path,
                     registry_update=registry_update,
                     legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                    hst_proposal_id=hst_proposal_id,
                     target_name=target_name)
     except Exception as e:
         failures['measure'] = f"{type(e).__name__}: {e}"
@@ -873,6 +922,9 @@ def run_all(
         try:
             result = run_spherex(coord, label, out_dir, model=spherex_model,
                                  sersic_params=sersic_params,
+                                 sersic_from=sersic_from,
+                                 sersic_seeing=sersic_seeing,
+                                 cutout_arcsec=cutout_arcsec,
                                  legacy_dr=legacy_dr,
                                  target_name=target_name)
         except Exception as e:

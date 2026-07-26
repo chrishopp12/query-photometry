@@ -5,7 +5,8 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 
-from sedphot.images.cfht import _covers_target, _footprint_center_offset
+from sedphot.images.cfht import (_covers_target, _footprint_center_offset,
+                                 _mosaic_clipping_stacks)
 
 TARGET = SkyCoord(150.0, 30.0, unit='deg')
 SCALE_DEG = 0.187 / 3600.0  # MegaPipe pixel scale
@@ -50,13 +51,13 @@ def test_nan_blank_cutout_fails():
 def test_truncated_strip_fails():
     # A stack-boundary cutout arrives as a thin strip: the target sits on
     # real data but closer than pad_arcsec to the array edge, so the
-    # aperture cannot fit (the c35 failure).
+    # aperture cannot fit.
     assert not _covers_target(_fits_bytes(np.ones((60, 400), np.float32)), TARGET)
 
 
 def test_partial_edge_through_aperture_fails():
     # Blank edge slicing through the pad box but not the target pixel
-    # itself (the ~30x-low c12 failure).
+    # itself -- the failure mode that reported fluxes ~30x low.
     data = np.ones((400, 400), np.float32)
     data[:, 230:] = 0.0  # target at x=200, pad box reaches x=280
     assert not _covers_target(_fits_bytes(data), TARGET)
@@ -109,3 +110,63 @@ def test_unparseable_rows_sort_last():
                 {'position_bounds_samples': [np.nan, np.nan]},
                 {}):
         assert _footprint_center_offset(row, TARGET) == 1e9
+
+
+# ------------------------------------
+# _mosaic_clipping_stacks
+# ------------------------------------
+def _stack_bytes(data, *, photzp=30.0, crval=(150.0, 30.0)):
+    """A SODA cutout carrying MegaPipe's photometric zeropoint."""
+    ny, nx = data.shape
+    header = fits.Header()
+    header['CTYPE1'], header['CTYPE2'] = 'RA---TAN', 'DEC--TAN'
+    header['CRVAL1'], header['CRVAL2'] = crval
+    header['CRPIX1'], header['CRPIX2'] = nx // 2 + 1, ny // 2 + 1
+    header['CD1_1'], header['CD1_2'] = -SCALE_DEG, 0.0
+    header['CD2_1'], header['CD2_2'] = 0.0, SCALE_DEG
+    if photzp is not None:
+        header['PHOTZP'] = photzp
+    buf = io.BytesIO()
+    fits.PrimaryHDU(data=data, header=header).writeto(buf)
+    return buf.getvalue()
+
+
+def _clipped_pair():
+    """Two stacks that clip the target from OPPOSITE sides.
+
+    The tile-boundary failure mode: neither stack covers the aperture on its
+    own, but together they do.
+    """
+    left, right = (np.ones((400, 400), np.float32) for _ in range(2))
+    left[:, 200:] = 0.0     # SODA zero-fills past the stack boundary
+    right[:, :200] = 0.0
+    return [_stack_bytes(left), _stack_bytes(right)]
+
+
+def test_mosaic_fills_each_stacks_clipped_side():
+    got = _mosaic_clipping_stacks(_clipped_pair(), TARGET, 60.0)
+    assert got is not None
+    with fits.open(io.BytesIO(got)) as hdul:
+        hdu = next(h for h in hdul if h.data is not None and h.data.ndim == 2)
+        # Neither input covered the target's aperture; the mosaic does.
+        assert np.isfinite(hdu.data).mean() > 0.95
+        assert hdu.header['PHOTZP'] == 30.0    # carried, so it stays photometric
+    # ... and the inputs really were each insufficient alone.
+    assert not any(_covers_target(c, TARGET) for c in _clipped_pair())
+
+
+def test_mosaic_needs_two_usable_planes():
+    one = [_stack_bytes(np.ones((400, 400), np.float32))]
+    assert _mosaic_clipping_stacks(one, TARGET, 60.0) is None
+    # An unparseable member does not count toward the two.
+    assert _mosaic_clipping_stacks(one + [b'not a fits file'],
+                                   TARGET, 60.0) is None
+
+
+def test_mosaic_refuses_without_a_zeropoint():
+    """No PHOTZP anywhere means the mosaic could not be calibrated, and an
+    uncalibrated stack must not reach the measurement."""
+    planes = [_stack_bytes(d, photzp=None) for d in
+              (np.ones((400, 400), np.float32),
+               np.ones((400, 400), np.float32))]
+    assert _mosaic_clipping_stacks(planes, TARGET, 60.0) is None

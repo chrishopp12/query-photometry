@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from sedphot.remeasure import model_flux_within, remeasure
+from sedphot.remeasure import model_flux_within, reconstruct, remeasure
 
 
 def test_model_flux_within_interpolates_and_caps():
@@ -53,3 +53,102 @@ def test_remeasure_both_modes_and_skips(tmp_path):
 
     with pytest.raises(ValueError):
         remeasure(p, 12.0, mode='bogus')
+
+
+def _shape_prov():
+    """One gating band (a free-target curve stored) and one without."""
+    return {
+        'git_rev': 'abc123',
+        'per_band': {
+            'Legacy_r': {
+                'target_model_uJy': 570.0,
+                'target_model_free_uJy': 610.0,
+                'fit_state': {
+                    'rgrid': [2.0, 6.0, 12.0, 20.0],
+                    'model_cog_uJy': [100.0, 300.0, 500.0, 560.0],
+                    'model_cog_free_uJy': [110.0, 330.0, 550.0, 600.0],
+                    'enclosed_uJy': [90.0, 290.0, 480.0, 545.0]}},
+            'Legacy_z': {
+                'target_model_uJy': 400.0,
+                'fit_state': {
+                    'rgrid': [2.0, 6.0, 12.0, 20.0],
+                    'model_cog_uJy': [80.0, 240.0, 360.0, 395.0],
+                    'enclosed_uJy': [70.0, 230.0, 350.0, 390.0]}},
+        },
+    }
+
+
+def test_sersic_shape_selects_the_per_band_free_curve(tmp_path, capsys):
+    """--shape fitted reads the free-target curve where one was stored, and
+    demotes to forced -- loudly, and visibly in `source` -- where none was."""
+    p = tmp_path / 'g2.provenance.json'
+    p.write_text(json.dumps(_shape_prov()))
+
+    forced = remeasure(p, 12.0, mode='sersic', shape='forced')
+    fitted = remeasure(p, 12.0, mode='sersic', shape='fitted')
+    by_band = {r['band']: r for _, r in fitted.iterrows()}
+
+    # The gating band moves onto its own free-target curve...
+    assert dict(zip(forced['band'], forced['flux_uJy']))['Legacy_r'] == 500.0
+    assert by_band['Legacy_r']['flux_uJy'] == 550.0
+    assert 'fitted' in by_band['Legacy_r']['source']
+    # ... the band with no free record stays on the forced one, and says so.
+    assert by_band['Legacy_z']['flux_uJy'] == 360.0
+    assert 'forced' in by_band['Legacy_z']['source']
+    assert 'Legacy_z' in capsys.readouterr().out
+
+    # Integrated reads the matching total, not the forced one.
+    assert remeasure(p, None, mode='sersic',
+                     shape='fitted').iloc[0]['flux_uJy'] == 610.0
+
+
+def test_reconstruct_reports_bands_the_rebuild_dropped(tmp_path, capsys,
+                                                       monkeypatch):
+    """A band that dies inside the pinned rebuild must not vanish silently.
+
+    run_measure reports a dead band by printing and continuing, and
+    reconstruct runs it under a stdout redirect to keep the re-report clean
+    -- so that message lands in a discarded buffer and the band leaves the
+    table with nothing said.
+    """
+    import pandas as pd
+
+    from sedphot import pipeline
+
+    prov = {'git_rev': 'abc123',
+            'target': {'ra_deg': 150.0, 'dec_deg': 2.0, 'label': 'g4'},
+            'instruments': ['legacy'], 'cutout_arcsec': 120.0,
+            'per_band': {
+                'Legacy_r': {'solve': {'params': [1.0] * 6, 'pix_ref': 0.262},
+                             'fit_state': {'amps': [['target', 1.0]],
+                                           'bg_coefs': [0.0, 0.0, 0.0],
+                                           'rgrid': [2.0, 20.0]}},
+                'Legacy_z': {'solve': {'params': [1.0] * 6, 'pix_ref': 0.262},
+                             'fit_state': {'amps': [['target', 1.0]],
+                                           'bg_coefs': [0.0, 0.0, 0.0],
+                                           'rgrid': [2.0, 20.0]}}}}
+    p = tmp_path / 'Photometry' / 'g4_measured.provenance.json'
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps(prov))
+
+    def fake_run_measure(*a, **kw):
+        # Legacy_z dies the way the pipeline reports it: printed, then skipped.
+        print("  Legacy z FAILED: ValueError: not enough values to unpack")
+        return pd.DataFrame([{'band': 'Legacy_r', 'flux_uJy': 700.0}])
+
+    monkeypatch.setattr(pipeline, 'run_measure', fake_run_measure)
+    got = reconstruct(p, 30.0)
+    assert got == {'Legacy_r': 700.0}
+    printed = capsys.readouterr().out
+    assert 'Legacy_z' in printed              # named as dropped
+    assert 'not enough values to unpack' in printed   # and the reason replayed
+
+
+def test_aperture_mode_is_shape_independent_within_the_grid(tmp_path):
+    """The empirical curve is a measurement of the pixels, so shape cannot
+    change it inside the grid -- only the beyond-grid rebuild uses shape."""
+    p = tmp_path / 'g3.provenance.json'
+    p.write_text(json.dumps(_shape_prov()))
+    a = remeasure(p, 12.0, mode='aperture', shape='forced')
+    b = remeasure(p, 12.0, mode='aperture', shape='fitted')
+    assert list(a['flux_uJy']) == list(b['flux_uJy']) == [480.0, 350.0]

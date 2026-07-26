@@ -36,7 +36,6 @@ import warnings
 from pathlib import Path
 
 import requests
-import astropy.units as u  # noqa: F401  (kept for SkyCoord callers)
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS

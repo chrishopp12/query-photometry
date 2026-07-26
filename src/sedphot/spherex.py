@@ -677,7 +677,9 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
 def fetch(coord, *, out_dir, model: Sersic | None = None,
           bkg_region_size: float = 15, mjd_range: tuple | None = None,
           poll: float = 5, timeout: float = 3600,
-          shape_origin: str | None = None) -> ProviderResult:
+          shape_origin: str | None = None,
+          label: str | None = None,
+          target_name: str | None = None) -> ProviderResult:
     """Fetch the raw SPHEREx table for ONE extraction configuration.
 
     Each distinct configuration (source model + background region + MJD
@@ -711,6 +713,12 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
     shape_origin : str, optional
         Provenance of the Sersic shape (e.g. Tractor table + type, or the
         image fit); recorded in the sidecar's model block and the manifest.
+    label, target_name : str, optional
+        Output stem and original name string, recorded in the sidecar's
+        target block so it matches the catalog and measurement sidecars.
+        The IRSA request itself takes only a position -- its name box is a
+        resolver input, and sedphot resolves upstream -- so neither reaches
+        the query.
 
     Returns
     -------
@@ -777,7 +785,9 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
     write_sidecar(out_csv, {
         "kind": "spherex_spectrophotometry_raw",
         "extraction_tag": tag,
-        "target": {"ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
+        "target": {"name": target_name, "label": label,
+                   "ra_deg": float(coord.ra.deg),
+                   "dec_deg": float(coord.dec.deg)},
         "model": ("point" if model is None else
                   {"type": "sersic", "n": model.n, "axis_ratio": model.axis_ratio,
                    "pa_deg": model.pa_deg, "reff_arcsec": model.reff_arcsec,

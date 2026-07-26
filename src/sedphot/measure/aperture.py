@@ -247,7 +247,14 @@ def twin_fill(
 # ------------------------------------
 def curve(img: np.ndarray, rr: np.ndarray, cf: float,
           rgrid: np.ndarray) -> np.ndarray:
-    """Enclosed flux (uJy) at each curve-of-growth radius."""
+    """Enclosed flux (uJy) at each curve-of-growth radius.
+
+    One masked sum per radius. The obvious "one pass" rewrite -- sort by
+    radius, cumsum, index the grid -- measures ~2x SLOWER on a fine-pixel
+    HST stamp (774 vs 397 ms at 3000x3000, 39 radii), because sorting nine
+    million elements costs more than 39 vectorized reductions. Measure
+    before optimizing.
+    """
     return np.array([img[rr < r].sum() * cf for r in rgrid])
 
 
@@ -312,6 +319,7 @@ def witness_row(
         rgrid: np.ndarray,
         aperture_arcsec: float,
         solve_info: dict | None = None,
+        solve_free: dict | None = None,
 ) -> dict:
     """Assemble every per-band witness into one dict.
 
@@ -348,7 +356,15 @@ def witness_row(
     aperture_arcsec : float
         Science aperture radius.
     solve_info : dict, optional
-        Shape-solve diagnostics (solve.solve_shapes), when one ran.
+        Shape-solve diagnostics (solve.solve_shapes), when one ran. On a
+        TRANSFER band this covers only the neighbor seats that band
+        re-solved -- the target was frozen at the reference shape -- so it
+        is not a full seat vector.
+    solve_free : dict, optional
+        The free-target solve's diagnostics, on a transfer band where a
+        gating target solved its own per-band shape (engine's Solve 1).
+        This one IS a full seat vector, and it is the only record of that
+        shape outside the cross-field registry.
 
     Returns
     -------
@@ -391,12 +407,22 @@ def witness_row(
         seeing_src=seeing_src,
     )
     if solve_info is not None:
+        # pix_ref is the GRID the radial parameters live in. Without it a
+        # pinned reconstruction cannot know whether a stored vector needs
+        # rescaling onto the band it is re-rendered on -- silently wrong
+        # wherever one instrument spans several pixel scales (HST).
         row['solve'] = dict(seats=solve_info['seats'],
                             nfev=solve_info['nfev'],
                             nfev_track=solve_info.get('nfev_track'),
                             seconds=solve_info['seconds'],
                             at_bound=solve_info['at_bound'],
-                            params=solve_info['params'])
+                            params=solve_info['params'],
+                            pix_ref=solve_info.get('pix_ref'))
+    if solve_free is not None:
+        row['solve_free'] = dict(seats=solve_free['seats'],
+                                 params=solve_free['params'],
+                                 pix_ref=solve_free.get('pix_ref'),
+                                 at_bound=solve_free['at_bound'])
     return row
 
 
