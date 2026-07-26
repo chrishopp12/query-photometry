@@ -35,6 +35,8 @@ sedphot run --name "NGC 4889" --out-dir Clusters/Coma/Galaxies/NGC_4889
 | `measure`  | Fetch images, measure every band -> `<label>_measured.csv` + QA figures |
 | `spherex`  | Raw SPHEREx spectrophotometry table (IRSA), forced-Sersic (default) or PSF model |
 | `sed`      | Combined flux-vs-wavelength figure from the tables in `out-dir` |
+| `overlay`  | Each provider's matched position drawn on the HAP color composite -> `<label>_overlay.png` |
+| `remeasure`| Re-report band fluxes at a different aperture from a stored fit (no re-fetch, no refit) |
 | `run`      | catalogs -> measure -> SPHEREx (opt-in) -> SED plot; stages are isolated (a dead stage is recorded and the rest still run) and the verb exits nonzero if any stage failed |
 
 ## Providers
@@ -61,6 +63,7 @@ fetch-all.
     <label>_catalog.csv  (+ .provenance.json)
     <label>_measured.csv (+ .provenance.json)
     <label>_sed.png
+    <label>_overlay.png
     coverage_catalogs.json / coverage_measure.json
     Legacy/ PanSTARRS/ SDSS/ CFHT/ HST/     cached images + QA/ figures
     SPHEREx/table_photometry.<tag>.csv      raw per-visit x channel table,
@@ -181,18 +184,50 @@ the job to a known-good visit window (the IRSA workaround for
 broken-metadata epochs). The verb exits nonzero when the fetch fails, so
 shell chains can trust `$?`.
 
-## Legacy scripts
+## Position overlay
 
-`phot_coord_search.py`, `hst_aperture_photometry.py`, and
-`plot_hst_image.py` remain standalone and untouched; `sedphot catalogs`
-reproduces `phot_coord_search.py` row-for-row, and the HST curve-of-growth
-workflow lives on in `hst_aperture_photometry.py` until its specialized
-outputs are folded in.
+```bash
+sedphot overlay --out-dir Clusters/Coma/Galaxies/NGC_4889
+```
+
+The positional counterpart to `sed`: same tables, but it draws where each
+provider *matched* rather than what it measured, on the HAP pipeline's
+color composite for the field. It catches the failure the flux columns
+cannot show -- two providers confidently reporting photometry for two
+different objects -- and reads only `match_ra`, `match_dec`, and `source`,
+which is why the first twelve table columns are a frozen contract. Marker
+styles key on the `source` prefix vocabulary, so a provider that revs its
+data release keeps its symbol.
+
+The composite carries no WCS of its own, so the detection mosaic it was
+rendered from supplies one: a ~380 MB download the first time a field is
+used, cached under `Photometry/HST/` thereafter. `--wcs-from FITS` points
+at a local file already on that drizzle grid instead; the pixel dimensions
+are checked either way, and a mismatch refuses rather than silently
+misplacing every marker. The verb needs HAP coverage, so it exits nonzero
+where there is none.
+
+## Compact targets
+
+The measurement defaults are galaxy-survey sized: a 10" aperture, a
+curve-of-growth grid from 2" to 40", and sky estimated only beyond 15".
+A compact source on an HST mosaic needs all three moved together --
+
+```bash
+sedphot measure --ra ... --dec ... --instruments hst --aperture 1 \
+    --cutout-size 20 --sky-rmin 3 --radii 0.1 0.25 0.5 1 1.5 2 2.5
+```
+
+`--sky-rmin` is the target/sky boundary (`recipe.BG_RMIN_AS`): sky is
+estimated only beyond it, and no pixel inside it votes on the background,
+on star exclusion, or on artifact detection. It is scoped to the run and
+recorded in the sidecar's recipe snapshot, so `remeasure` rebuilds the
+scene on the same boundary the fit was solved on.
 
 ## Requirements
 
 Python 3.11+; numpy, scipy, pandas, astropy, astroquery,
-matplotlib, requests, defusedxml (see `pyproject.toml`).
+matplotlib, pillow, reproject, requests, defusedxml (see `pyproject.toml`).
 
 ## License
 
