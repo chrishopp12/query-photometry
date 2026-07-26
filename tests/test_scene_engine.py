@@ -19,12 +19,11 @@ from sedphot.measure.aperture import (build_mask, flux_error,
                                       witness_row)
 from sedphot.measure.components import build_components, gated_row
 from sedphot.measure.psf import moffat_kernel
-from sedphot.measure.render import (ampl_from_total, render_sersic,
-                                    sersic_profile)
+from sedphot.measure.render import ampl_from_total, render_sersic
 from sedphot.measure.seats import (apply_registry, build_seats,
                                    harvest_seats, load_registry,
                                    registry_name, resolve_registry_key,
-                                   save_registry, seat_slices)
+                                   save_registry)
 from sedphot.measure.solve import joint_fit, pinned_fit
 from sedphot.measure.stamp import Stamp, radii_arcsec
 
