@@ -810,14 +810,21 @@ def run_all(
         skip: list[str] | None = None,
         radius_arcsec: float = 2.0,
         dered: bool = False,
+        mode: str = 'aperture',
+        bands: list[str] | None = None,
         aperture_arcsec: float = 10.0,
         cutout_arcsec: float = 120.0,
+        sky_rmin_arcsec: float | None = None,
+        rgrid: list[float] | None = None,
+        sersic_from: str | None = None,
+        sersic_seeing: float | None = None,
         registry_path: str | None = None,
         registry_update: bool = False,
         spherex_model: str = 'off',
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> dict[str, str]:
     """Everything: catalogs -> images + scene measurement -> SPHEREx
@@ -837,7 +844,16 @@ def run_all(
         names where they overlap).
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
-    Other parameters as in run_catalogs / run_measure.
+    sersic_params, sersic_from, sersic_seeing
+        The shape declaration, shared by the measurement stage's sersic
+        mode and the SPHEREx extraction -- one shape per galaxy, not two.
+        Left unset, each stage keeps its OWN default: the measurement
+        refits the target on its reference band, SPHEREx looks the shape up
+        in the Tractor catalog.
+    Other parameters as in run_catalogs / run_measure. Every measurement
+    option run_measure accepts is forwarded, because a flag the flagship
+    silently drops is a flag whose absence has to be discovered from a
+    wrong answer.
 
     Returns
     -------
@@ -865,11 +881,18 @@ def run_all(
     before = coverage_path.stat().st_mtime if coverage_path.exists() else None
     try:
         run_measure(coord, label, out_dir, instruments=image_set,
+                    mode=mode, bands=bands,
                     aperture_arcsec=aperture_arcsec,
                     cutout_arcsec=cutout_arcsec,
+                    sky_rmin_arcsec=sky_rmin_arcsec,
+                    rgrid=rgrid,
+                    sersic_from=sersic_from,
+                    sersic_params=sersic_params,
+                    sersic_seeing=sersic_seeing,
                     registry_path=registry_path,
                     registry_update=registry_update,
                     legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                    hst_proposal_id=hst_proposal_id,
                     target_name=target_name)
     except Exception as e:
         failures['measure'] = f"{type(e).__name__}: {e}"
@@ -887,6 +910,9 @@ def run_all(
         try:
             result = run_spherex(coord, label, out_dir, model=spherex_model,
                                  sersic_params=sersic_params,
+                                 sersic_from=sersic_from,
+                                 sersic_seeing=sersic_seeing,
+                                 cutout_arcsec=cutout_arcsec,
                                  legacy_dr=legacy_dr,
                                  target_name=target_name)
         except Exception as e:

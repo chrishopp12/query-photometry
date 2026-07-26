@@ -26,6 +26,8 @@ Usage:
                      [--context-size 15.0] [--wcs-from FITS]
     sedphot run      (--name NAME | --ra DEG --dec DEG) [--skip ...]
                      [--spherex {off,psf,sersic}]
+                     [every measure option: --mode, --bands, --aperture,
+                      --radii, --sky-rmin, --sersic-*, --hst-proposal-id]
 
 Examples:
     Resolve a name to coordinates and the default output label:
@@ -83,6 +85,62 @@ def _resolve_from_args(args: argparse.Namespace):
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
+
+
+def _add_measure_args(parser: argparse.ArgumentParser) -> None:
+    """Every measurement option, shared by the measure and run verbs.
+
+    One definition, so the flagship cannot drift into accepting a smaller
+    set than the verb it drives -- a flag `run` quietly lacked is a flag
+    whose absence has to be discovered from a wrong answer.
+    """
+    group = parser.add_argument_group("measurement")
+    group.add_argument('--mode', type=str, default='aperture',
+                       choices=('aperture', 'sersic'),
+                       help="Measurement mode [default: aperture]")
+    group.add_argument('--bands', nargs='+', default=None,
+                       help="Band subset for every provider "
+                            "[default: provider defaults]")
+    group.add_argument('--aperture', type=float, default=10.0,
+                       help="Aperture radius in arcsec [default: 10.0]")
+    group.add_argument('--radii', nargs='+', type=float, default=None,
+                       help="Curve-of-growth radii override (arcsec)")
+    group.add_argument('--cutout-size', type=float, default=120.0,
+                       help="Stamp width in arcsec [default: 120]")
+    group.add_argument('--sky-rmin', type=float, default=None,
+                       help="Target/sky boundary in arcsec: sky is "
+                            "estimated only beyond it, and no pixel inside "
+                            "it votes on the background. The 15\" default is "
+                            "survey-galaxy sized; compact HST targets want a "
+                            "few arcsec [default: the recipe constant]")
+    group.add_argument('--registry', type=str, default=None,
+                       help="Cross-field registry JSON to consume (solved "
+                            "shared sources enter as frozen components)")
+    group.add_argument('--registry-update', action='store_true',
+                       help="Also write this galaxy's solved seats back to "
+                            "--registry (updates are last-writer-wins; run "
+                            "sweeps serially)")
+    group.add_argument('--sersic-from', type=str, default=None,
+                       help="Sersic mode: pin the target shape to a fit on "
+                            "this band ('z' or 'Legacy_z') [default: "
+                            "per-instrument reference-band refit]")
+    group.add_argument('--sersic-params', nargs=4, type=float, default=None,
+                       metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
+                       help="Sersic mode: explicit shape (n, a/b >= 1, PA "
+                            "deg E of N, r_eff arcsec) -- pins the target "
+                            "profile in every band")
+    group.add_argument('--sersic-seeing', type=float, default=None,
+                       help="PSF FWHM (arcsec) assumed by the --sersic-from "
+                            "shape fit; fitted n and r_eff are PSF-sensitive")
+    group.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
+                       choices=('dr10', 'dr9'),
+                       help="Legacy release for images and the scene catalog "
+                            f"[default: {LEGACY_DR_DEFAULT}]")
+    group.add_argument('--legacy-bricks', action='store_true',
+                       help="Fetch NERSC brick coadds (image + invvar; real "
+                            "per-pixel errors, ~40 MB/file)")
+    group.add_argument('--hst-proposal-id', type=str, default=None,
+                       help="Restrict the HST provider to one program")
 
 
 def _instruments_from_args(args: argparse.Namespace, registry: dict) -> list[str]:
@@ -167,31 +225,61 @@ def _cmd_remeasure(args: argparse.Namespace) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
-    if args.registry_update and not args.registry:
-        sys.exit("sedphot run: --registry-update needs --registry PATH")
+    _check_measure_args(args, 'run')
     coord, label = _resolve_from_args(args)
     failures = run_all(
         coord, label, args.out_dir,
         skip=args.skip,
         radius_arcsec=args.radius,
         dered=args.dered,
+        mode=args.mode,
+        bands=args.bands,
         aperture_arcsec=args.aperture,
         cutout_arcsec=args.cutout_size,
+        sky_rmin_arcsec=args.sky_rmin,
+        rgrid=args.radii,
+        sersic_from=args.sersic_from,
+        sersic_seeing=args.sersic_seeing,
         registry_path=args.registry,
         registry_update=args.registry_update,
         spherex_model=args.spherex,
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )
     if failures:
         sys.exit(1)
 
 
-def _cmd_measure(args: argparse.Namespace) -> None:
+def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
+    """Refuse a measurement request whose flags contradict each other.
+
+    A shape flag under --mode aperture used to be accepted and dropped: the
+    run reported curve-of-growth fluxes while the caller believed a shape
+    had been forced. Refuse instead -- an ignored flag is a wrong answer
+    waiting to be trusted.
+    """
     if args.registry_update and not args.registry:
-        sys.exit("sedphot measure: --registry-update needs --registry PATH")
+        sys.exit(f"sedphot {verb}: --registry-update needs --registry PATH")
+    shape_flags = [name for name, value in
+                   (('--sersic-from', args.sersic_from),
+                    ('--sersic-params', args.sersic_params),
+                    ('--sersic-seeing', args.sersic_seeing))
+                   if value is not None]
+    # Under `run`, --sersic-params also declares the SPHEREx extraction
+    # shape, so it is meaningful with an aperture-mode measurement.
+    if verb == 'run' and getattr(args, 'spherex', 'off') != 'off':
+        shape_flags = [f for f in shape_flags if f != '--sersic-params']
+    if args.mode != 'sersic' and shape_flags:
+        sys.exit(f"sedphot {verb}: {', '.join(shape_flags)} only applies to "
+                 f"--mode sersic (got --mode {args.mode}); drop the flag or "
+                 f"pass --mode sersic")
+
+
+def _cmd_measure(args: argparse.Namespace) -> None:
+    _check_measure_args(args, 'measure')
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
     run_measure(
@@ -259,57 +347,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Image providers to fetch and measure")
     p_measure.add_argument('--all', action='store_true',
                            help="Every registered image provider")
-    p_measure.add_argument('--mode', type=str, default='aperture',
-                           choices=('aperture', 'sersic'),
-                           help="Measurement mode [default: aperture]")
-    p_measure.add_argument('--bands', nargs='+', default=None,
-                           help="Band subset for every provider "
-                                "[default: provider defaults]")
-    p_measure.add_argument('--aperture', type=float, default=10.0,
-                           help="Aperture radius in arcsec [default: 10.0]")
-    p_measure.add_argument('--radii', nargs='+', type=float, default=None,
-                           help="Curve-of-growth radii override (arcsec)")
-    p_measure.add_argument('--cutout-size', type=float, default=120.0,
-                           help="Stamp width in arcsec [default: 120]")
-    p_measure.add_argument('--sky-rmin', type=float, default=None,
-                           help="Target/sky boundary in arcsec: sky is "
-                                "estimated only beyond it, and no pixel "
-                                "inside it votes on the background. The 15\" "
-                                "default is survey-galaxy sized; compact HST "
-                                "targets want a few arcsec "
-                                "[default: the recipe constant]")
-    p_measure.add_argument('--registry', type=str, default=None,
-                           help="Cross-field registry JSON to consume (solved "
-                                "shared sources enter as frozen components)")
-    p_measure.add_argument('--registry-update', action='store_true',
-                           help="Also write this galaxy's solved seats back "
-                                "to --registry (updates are last-writer-wins; "
-                                "run sweeps serially)")
+    _add_measure_args(p_measure)
     p_measure.add_argument('--dump-arrays', action='store_true',
                            help="Write per-band array bundles under <Inst>/QA/ "
                                 "(debug)")
-    p_measure.add_argument('--sersic-from', type=str, default=None,
-                           help="Sersic mode: pin the target shape to a fit "
-                                "on this band ('z' or 'Legacy_z') [default: "
-                                "per-instrument reference-band refit]")
-    p_measure.add_argument('--sersic-params', nargs=4, type=float, default=None,
-                           metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
-                           help="Sersic mode: explicit shape (n, a/b >= 1, "
-                                "PA deg E of N, r_eff arcsec) -- pins the "
-                                "target profile in every band")
-    p_measure.add_argument('--sersic-seeing', type=float, default=None,
-                           help="PSF FWHM (arcsec) assumed by the --sersic-from "
-                                "shape fit; fitted n and r_eff are "
-                                "PSF-sensitive")
-    p_measure.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
-                           choices=('dr10', 'dr9'),
-                           help="Legacy release for images and the scene "
-                                f"catalog [default: {LEGACY_DR_DEFAULT}]")
-    p_measure.add_argument('--legacy-bricks', action='store_true',
-                           help="Fetch NERSC brick coadds (image + invvar; "
-                                "real per-pixel errors, ~40 MB/file)")
-    p_measure.add_argument('--hst-proposal-id', type=str, default=None,
-                           help="Restrict the HST provider to one program")
     p_measure.set_defaults(func=_cmd_measure)
 
     p_spherex = subparsers.add_parser(
@@ -425,27 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Catalog search radius, arcsec [default: 2.0]")
     p_run.add_argument('--dered', action='store_true',
                        help="Apply MW dereddening to catalog fluxes")
-    p_run.add_argument('--aperture', type=float, default=10.0,
-                       help="Aperture radius, arcsec [default: 10.0]")
-    p_run.add_argument('--cutout-size', type=float, default=120.0,
-                       help="Stamp width, arcsec [default: 120]")
-    p_run.add_argument('--registry', type=str, default=None,
-                       help="Cross-field registry JSON to consume")
-    p_run.add_argument('--registry-update', action='store_true',
-                       help="Also write solved seats back to --registry "
-                            "(last-writer-wins; run sweeps serially)")
+    _add_measure_args(p_run)
     p_run.add_argument('--spherex', type=str, default='off',
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")
-    p_run.add_argument('--sersic-params', nargs=4, type=float, default=None,
-                       metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
-                       help="Shape for --spherex sersic")
-    p_run.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
-                       choices=('dr10', 'dr9'),
-                       help="Legacy Surveys data release, all stages "
-                            f"[default: {LEGACY_DR_DEFAULT}]")
-    p_run.add_argument('--legacy-bricks', action='store_true',
-                       help="Fetch NERSC bricks instead of viewer cutouts")
     p_run.set_defaults(func=_cmd_run)
 
     return parser
