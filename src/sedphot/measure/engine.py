@@ -684,8 +684,7 @@ def measure_band(
         # catalog's own band, and compares the TARGET'S OWN seats to
         # its own catalog row -- system members would read as runaway
         # refit.
-        if m_ap_cat is not None and target_comp is not None \
-                and target_comp['cat'] > 0:
+        if m_ap_cat is not None and target_comp['cat'] > 0:
             witness['target_refit_x_cat'] = round(
                 own_target_ujy / target_comp['cat'], 2)
 
