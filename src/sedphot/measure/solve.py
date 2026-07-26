@@ -531,6 +531,7 @@ def joint_fit(
     track = [bg['const']]
     solve_info, nfev_hist = None, []
     cols, owners, col_flux, bounds = [], [], [], None
+    amp_bounds: list = []
 
     solving = bool(seats) and ref is None
     transfer = (_transfer_setup(seats, ref, stamp, psf,
@@ -602,8 +603,8 @@ def joint_fit(
                                for o in owners]
             else:
                 seat_bounds = bounds
-            design = _design(bases, good, fixed_flux + col_flux,
-                             fixed_bounds + seat_bounds)
+            amp_bounds = fixed_bounds + seat_bounds
+            design = _design(bases, good, fixed_flux + col_flux, amp_bounds)
         scene = np.zeros_like(image)
         if design is not None:
             amps = _amp_solve(*design, (image - bg['img'])[good])
@@ -639,7 +640,8 @@ def joint_fit(
     return dict(amps=amps, mults=mults, bg=bg, track=track,
                 solve_info=solve_info, cols=cols, owners=owners,
                 fixed=fixed, col_flux=col_flux, seats_local=seats_local,
-                seat_params=seat_params, seat_amps=seat_amps)
+                seat_params=seat_params, seat_amps=seat_amps,
+                amp_bounds=amp_bounds)
 
 
 def pinned_fit(

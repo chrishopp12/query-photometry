@@ -597,19 +597,24 @@ def measure_band(
 
     bases = [c['base'] for c in fit['fixed']] + fit['cols']
     base_owner = [c['name'] for c in fit['fixed']] + fit['owners']
-    # A fixed component pinned at a leash bound is a WITNESS: the solve
-    # wanted an amplitude the leash forbade (a mis-scaled star leash, a
-    # registry anchor the data contradict). Unrecorded, a component parked
-    # exactly at its bound is indistinguishable from a converged fit.
+    # An amplitude pinned at its leash bound is a WITNESS: the solve wanted
+    # a value the leash forbade (a mis-scaled star leash, a registry anchor
+    # the data contradict, a frozen seat whose shape the band disagrees
+    # with). Unrecorded, a column parked exactly at its bound is
+    # indistinguishable from a converged fit. Checked over EVERY column,
+    # seats included -- a frozen seat is precisely the case where the
+    # amplitude is the only freedom left, so it is the one that must not go
+    # unwatched.
     leashed_at_bound = []
-    for comp, amp in zip(fit['fixed'], fit['amps'][:len(fit['fixed'])]):
-        lo, hi = comp.get('amp_lohi', (None, None))
+    for owner, amp, band_lohi in zip(base_owner, fit['amps'],
+                                     fit.get('amp_bounds') or []):
+        lo, hi = band_lohi
         span = (hi - lo) if (lo is not None and hi is not None) else None
         if span and span > 0 and (amp - lo < 1e-3 * span
                                   or hi - amp < 1e-3 * span):
-            leashed_at_bound.append(comp['name'])
+            leashed_at_bound.append(owner)
     if leashed_at_bound:
-        print(f"    {tag}leash-bound fixed amps: {sorted(leashed_at_bound)}")
+        print(f"    {tag}leash-bound amps: {sorted(leashed_at_bound)}")
     scene_img = np.zeros_like(image)
     neighbors = np.zeros_like(image)
     target_img = np.zeros_like(image)
