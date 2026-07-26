@@ -315,21 +315,28 @@ REFERENCE_PREFERENCE = ('r', 'i', 'z', 'g', 'y', 'u')
 # reference shape (the science flux, so colors stay shape-consistent). Which
 # of those two solves settles the NEIGHBOR seats is this knob.
 #
+# True    (default) the free solve runs first and settles every seat; the
+#         science pass adopts its neighbor shapes and re-freezes the target,
+#         leaving only amplitudes and background. One nonlinear solve, one
+#         neighbor shape per band, stored and used. It is also the treatment a
+#         neighbor gets when its shape comes from the registry, so a field's
+#         science flux does not depend on whether that neighbor was solved by
+#         some earlier field in the campaign.
 # False   each solve fits the neighbors itself. Two nonlinear solves, and the
 #         neighbor shapes STORED (from the free pass) are not the ones USED
 #         (from the frozen pass).
-# True    the free solve runs first and settles every seat; the science pass
-#         adopts its neighbor shapes and re-freezes the target, leaving only
-#         amplitudes and background. One nonlinear solve, one neighbor shape
-#         per band, stored and used. It is also the treatment a neighbor gets
-#         when its shape comes from the registry, so a field's science flux
-#         does not depend on whether that neighbor was solved by some earlier
-#         field in the campaign.
 #
 # Only gating targets have two solves to choose between. Elsewhere the
 # science pass is the only place a gated neighbor's shape can come from, and
 # it solves it either way.
-NEIGHBOR_SHAPE_FROM_FREE_SOLVE = False
+#
+# Measured on a gated target with a seated neighbor at 13% aperture
+# contamination and a real color gradient: the science flux moves 0.02 sigma,
+# no amplitude leash binds, and the pass is slightly cheaper. The gain is in
+# the HARVESTED shape other fields consume -- on a synthetic gradient the free
+# solve recovers an injected neighbor's r_eff to 3.98 px against a truth of
+# 4.0, where fitting it against a frozen, over-extended target gives 3.35.
+NEIGHBOR_SHAPE_FROM_FREE_SOLVE = True
 
 
 # ------------------------------------
