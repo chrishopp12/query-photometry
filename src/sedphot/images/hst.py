@@ -28,8 +28,9 @@ Requirements:
 
 Notes:
     HST pixel scales are 0.03-0.13 arcsec; the measure defaults (10 arcsec
-    aperture, 30-45 arcsec sky) are galaxy-survey-sized. For compact HST
-    targets pass e.g. --aperture 1 --cutout-size 20.
+    aperture, sky beyond 15 arcsec) are galaxy-survey-sized. For a compact
+    HST target pass e.g. --aperture 1 --cutout-size 20 --sky-rmin 3
+    --radii 0.1 0.25 0.5 1 1.5 2 2.5.
 """
 from __future__ import annotations
 
