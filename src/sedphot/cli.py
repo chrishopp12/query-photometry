@@ -22,6 +22,8 @@ Usage:
     sedphot spherex  (--name NAME | --ra DEG --dec DEG)
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
     sedphot sed      [--out-dir DIR] [--label STEM]
+    sedphot overlay  [--out-dir DIR] [--label STEM] [--zoom-size 5.0]
+                     [--context-size 15.0] [--wcs-from FITS]
     sedphot run      (--name NAME | --ra DEG --dec DEG) [--skip ...]
                      [--spherex {off,psf,sersic}]
 
@@ -48,7 +50,8 @@ import sys
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .images import IMAGE_PROVIDERS
-from .pipeline import run_all, run_catalogs, run_measure, run_sed, run_spherex
+from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
+                       run_sed, run_spherex)
 from .resolve import resolve_target
 from .results import STATUS_OK
 
@@ -136,6 +139,15 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
 
 def _cmd_sed(args: argparse.Namespace) -> None:
     run_sed(args.label, args.out_dir)
+
+
+def _cmd_overlay(args: argparse.Namespace) -> None:
+    if run_overlay(args.label, args.out_dir,
+                   zoom_arcsec=args.zoom_size,
+                   context_arcsec=args.context_size,
+                   wcs_from=args.wcs_from, dpi=args.dpi) is None:
+        sys.exit("sedphot overlay: no figure written "
+                 "(no tables, or no HAP composite covers this position)")
 
 
 def _cmd_remeasure(args: argparse.Namespace) -> None:
@@ -342,6 +354,27 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
 
+    p_overlay = subparsers.add_parser(
+        "overlay",
+        help="Overlay each catalog's matched position on the HAP color image")
+    p_overlay.add_argument('--out-dir', type=str, default=".",
+                           help="Galaxy directory [default: .]")
+    p_overlay.add_argument('--label', type=str, default=None,
+                           help="Output stem [default: inferred when "
+                                "unambiguous]")
+    p_overlay.add_argument('--zoom-size', type=float, default=5.0,
+                           help="Zoom panel half-width in arcsec [default: 5]")
+    p_overlay.add_argument('--context-size', type=float, default=15.0,
+                           help="Context panel half-width in arcsec "
+                                "[default: 15]")
+    p_overlay.add_argument('--wcs-from', type=str, default=None,
+                           help="Local FITS already on the composite's "
+                                "drizzle grid, instead of fetching the "
+                                "~380 MB detection mosaic for its WCS "
+                                "(dimension-checked; a mismatch refuses)")
+    p_overlay.add_argument('--dpi', type=int, default=200,
+                           help="Figure resolution [default: 200]")
+    p_overlay.set_defaults(func=_cmd_overlay)
 
     p_remeasure = subparsers.add_parser(
         "remeasure",

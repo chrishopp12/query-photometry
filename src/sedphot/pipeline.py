@@ -719,6 +719,73 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
 
 
 # ------------------------------------
+# Catalog-position overlay
+# ------------------------------------
+def run_overlay(
+        label: str | None,
+        out_dir: str | Path,
+        *,
+        zoom_arcsec: float = 5.0,
+        context_arcsec: float = 15.0,
+        wcs_from: str | None = None,
+        dpi: int = 200,
+) -> Path | None:
+    """Overlay the tables' matched positions on the HAP color composite.
+
+    The positional counterpart to run_sed: same table discovery, but it
+    plots where each provider matched rather than what it measured.
+
+    Parameters
+    ----------
+    label : str, optional
+        Output stem; inferred when exactly one table family exists.
+    out_dir : str or Path
+        Galaxy directory.
+    zoom_arcsec, context_arcsec : float
+        Panel half-widths in arcsec. [default: 5 and 15]
+    wcs_from : str, optional
+        Local FITS on the composite's drizzle grid, instead of fetching
+        the ~380 MB detection mosaic for its WCS.
+    dpi : int
+        Figure resolution. [default: 200]
+
+    Returns
+    -------
+    figure_path : Path or None
+        The written PNG, or None when no tables or no HAP composite.
+    """
+    from .overlay import build
+
+    phot_dir = Path(out_dir) / "Photometry"
+    if label is None:
+        stems = {p.name.rsplit('_', 1)[0]
+                 for p in list(phot_dir.glob("*_catalog.csv"))
+                 + list(phot_dir.glob("*_measured.csv"))}
+        if len(stems) != 1:
+            raise ValueError(f"cannot infer --label in {phot_dir}: "
+                             f"found stems {sorted(stems)}")
+        label = stems.pop()
+
+    # Both tables describe one target, so they share one panel pair --
+    # the point of the figure is seeing every provider's match together.
+    found = [pd.read_csv(phot_dir / f"{label}_{kind}.csv")
+             for kind in ("catalog", "measured")
+             if (phot_dir / f"{label}_{kind}.csv").exists()]
+    if not found:
+        print(f"  [overlay] no tables for {label!r} in {phot_dir}")
+        return None
+    tables = {label: pd.concat(found, ignore_index=True)}
+
+    out = build(tables, phot_dir / f"{label}_overlay.png",
+                phot_dir / INSTRUMENT_DIRS.get('hst', 'HST'),
+                zoom_arcsec=zoom_arcsec, context_arcsec=context_arcsec,
+                wcs_from=wcs_from, dpi=dpi)
+    if out is not None:
+        print(f"  [overlay] wrote {out}")
+    return out
+
+
+# ------------------------------------
 # The flagship: galaxy in, SED photometry out
 # ------------------------------------
 def run_all(
