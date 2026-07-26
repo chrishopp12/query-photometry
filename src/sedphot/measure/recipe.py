@@ -17,6 +17,8 @@ Notes:
 """
 from __future__ import annotations
 
+import contextlib
+
 import numpy as np
 
 
@@ -448,3 +450,37 @@ def snapshot() -> dict:
             value = list(value)
         out[name] = value
     return out
+
+
+# ------------------------------------
+# Runtime override
+# ------------------------------------
+@contextlib.contextmanager
+def sky_floor(rmin_arcsec: float | None):
+    """Scope BG_RMIN_AS -- the target/sky boundary -- to one run.
+
+    BG_RMIN_AS is absolute arcsec, which suits the survey galaxies the
+    defaults are tuned for and not a compact source on a 0.05"/pixel HST
+    mosaic, where 15" of excluded core is most of the visit. Every
+    consumer reads recipe.BG_RMIN_AS at call time -- background bins,
+    star exclusion, stamp validity, artifact detection, and both
+    empty-aperture placements -- so one override moves them together,
+    which is the intent: one boundary, one owner. snapshot() reads
+    globals() at call time too, so the sidecar records the value the run
+    actually used, and a reconstruction can read it back.
+
+    Parameters
+    ----------
+    rmin_arcsec : float or None
+        Replacement boundary radius; None leaves the default standing.
+    """
+    global BG_RMIN_AS
+    if rmin_arcsec is None:
+        yield
+        return
+    previous = BG_RMIN_AS
+    BG_RMIN_AS = float(rmin_arcsec)
+    try:
+        yield
+    finally:
+        BG_RMIN_AS = previous
