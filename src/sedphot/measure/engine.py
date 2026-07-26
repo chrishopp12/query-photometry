@@ -245,6 +245,25 @@ def _seat_colors(seats: list[dict], cat: pd.DataFrame,
     return colors
 
 
+def _fit_images(fit: dict, system: set[str],
+                shape_2d: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """(scene, target) images for a fit: every column at its solved amplitude.
+
+    The target image collects the declared target SYSTEM, matching the
+    science path's attribution rule.
+    """
+    bases = [c['base'] for c in fit['fixed']] + fit['cols']
+    owners = [c['name'] for c in fit['fixed']] + fit['owners']
+    scene = np.zeros(shape_2d)
+    target = np.zeros(shape_2d)
+    for mult, base, owner in zip(fit['mults'], bases, owners):
+        contribution = max(mult, 0.0) * base
+        scene += contribution
+        if owner in system:
+            target += contribution
+    return scene, target
+
+
 def _target_gates(comps: list[dict], cat: pd.DataFrame) -> bool:
     """Whether the target's own catalog row qualifies for a shape gate.
 
@@ -512,6 +531,13 @@ def measure_band(
             harvest_fit = fit_free
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
+    # The free-target solve's own scene, built once and shared by the
+    # witness and the QA dump. Its shape vector and model curve are the
+    # ONLY record of the per-band free shape outside the mutable registry,
+    # and a reconstruction must read this galaxy's own immutable sidecar.
+    free_scene = free_target = free_cog = None
+    if fit_free is not None:
+        free_scene, free_target = _fit_images(fit_free, system, image.shape)
     if solve_info is not None:
         print(f"    {tag}seat solve [{', '.join(solve_info['seats'])}]: "
               f"nfev "
@@ -590,6 +616,8 @@ def measure_band(
                          fill['filled'] - bg['img'] - mesh, 0.0),
                 stamp.rr, stamp.cf, rgrid)
     model_cog = curve(target_img, stamp.rr, stamp.cf, rgrid)
+    if free_target is not None:
+        free_cog = curve(free_target, stamp.rr, stamp.cf, rgrid)
 
     # Catalog-model comparison on the scene catalog's own native band:
     # the target's catalog base remains the survey anchor even when the
@@ -605,7 +633,9 @@ def measure_band(
                           fill['twin_frac'], neighbors, star_img, bg,
                           track, flood_ujy, seeing, seeing_src,
                           rgrid=rgrid, aperture_arcsec=aperture_arcsec,
-                          solve_info=solve_info)
+                          solve_info=solve_info,
+                          solve_free=(fit_free['solve_info']
+                                      if fit_free is not None else None))
     witness['stars'] = star_log
     witness['n_comps'] = len(comps)
     witness['artifact_as2'] = round(artifact_as2, 1)
@@ -625,6 +655,11 @@ def measure_band(
         rgrid=[float(r) for r in rgrid],
         enclosed_uJy=[round(float(v), 2) for v in enc],
         model_cog_uJy=[round(float(v), 2) for v in model_cog])
+    if free_cog is not None:
+        # The free-target model's own curve: what a per-band-shape
+        # re-report reads, where model_cog_uJy is the forced-shape one.
+        witness['fit_state']['model_cog_free_uJy'] = [
+            round(float(v), 2) for v in free_cog]
     witness['gated'] = [c['name'] for c in comps
                         if c['shape'] is not None and c['gate']]
     witness['seat_owners'] = sorted(drops)
@@ -642,6 +677,9 @@ def measure_band(
         # the flux a forced/sersic-mode row reports).
         witness['target_model_uJy'] = round(
             float(target_img.sum() * stamp.cf), 1)
+        if free_target is not None:
+            witness['target_model_free_uJy'] = round(
+                float(free_target.sum() * stamp.cf), 1)
         # The refit-vs-catalog ratio only means something on the scene
         # catalog's own band, and compares the TARGET'S OWN seats to
         # its own catalog row -- system members would read as runaway
@@ -688,15 +726,8 @@ def measure_band(
         # sees the free shape even when the guard rejected it; falls back
         # to the harvested fit where there was no free pass.
         src = fit_free if fit_free is not None else harvest_fit
-        h_bases = [c['base'] for c in src['fixed']] + src['cols']
-        h_owner = [c['name'] for c in src['fixed']] + src['owners']
-        free_scene = np.zeros_like(image)
-        free_target = np.zeros_like(image)
-        for mult, base, owner in zip(src['mults'], h_bases, h_owner):
-            contrib = max(mult, 0.0) * base
-            free_scene += contrib
-            if owner in system:
-                free_target += contrib
+        if free_target is None:
+            free_scene, free_target = _fit_images(src, system, image.shape)
         np.savez_compressed(
             Path(dump_dir) / f'{band_key}_arrays.npz',
             image=image, scene=scene_img, neighbors=neighbors,

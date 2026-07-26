@@ -312,6 +312,7 @@ def witness_row(
         rgrid: np.ndarray,
         aperture_arcsec: float,
         solve_info: dict | None = None,
+        solve_free: dict | None = None,
 ) -> dict:
     """Assemble every per-band witness into one dict.
 
@@ -348,7 +349,15 @@ def witness_row(
     aperture_arcsec : float
         Science aperture radius.
     solve_info : dict, optional
-        Shape-solve diagnostics (solve.solve_shapes), when one ran.
+        Shape-solve diagnostics (solve.solve_shapes), when one ran. On a
+        TRANSFER band this covers only the neighbor seats that band
+        re-solved -- the target was frozen at the reference shape -- so it
+        is not a full seat vector.
+    solve_free : dict, optional
+        The free-target solve's diagnostics, on a transfer band where a
+        gating target solved its own per-band shape (engine's Solve 1).
+        This one IS a full seat vector, and it is the only record of that
+        shape outside the cross-field registry.
 
     Returns
     -------
@@ -402,6 +411,11 @@ def witness_row(
                             at_bound=solve_info['at_bound'],
                             params=solve_info['params'],
                             pix_ref=solve_info.get('pix_ref'))
+    if solve_free is not None:
+        row['solve_free'] = dict(seats=solve_free['seats'],
+                                 params=solve_free['params'],
+                                 pix_ref=solve_free.get('pix_ref'),
+                                 at_bound=solve_free['at_bound'])
     return row
 
 

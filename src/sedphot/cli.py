@@ -390,9 +390,16 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Circular aperture radius, arcsec [default: 12]")
     p_remeasure.add_argument('--shape', choices=['forced', 'fitted'],
                              default='forced',
-                             help="Beyond-grid aperture reconstruction: forced "
-                                  "(instrument reference-band shape) or fitted "
-                                  "(each band's own) [default: forced]")
+                             help="Target shape the report is built on: "
+                                  "forced (the instrument's reference-band "
+                                  "shape) or fitted (each band's own "
+                                  "free-target shape, which only a gating "
+                                  "target has; other bands fall back to "
+                                  "forced and say so). Applies to sersic "
+                                  "mode, and to aperture mode only past the "
+                                  "stored grid -- within the grid the "
+                                  "empirical curve is a measurement, not a "
+                                  "rendering of a shape [default: forced]")
     p_remeasure.add_argument('--registry', type=str, default=None,
                              help="Cross-field registry fallback for beyond-"
                                   "grid reconstruction [default: sibling of "
