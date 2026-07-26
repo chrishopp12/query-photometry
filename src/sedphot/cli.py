@@ -18,7 +18,7 @@ Usage:
     sedphot measure  (--name NAME | --ra DEG --dec DEG)
                      (--instruments legacy sdss cfht ... | --all)
                      [--mode {aperture,sersic}] [--aperture 10.0]
-                     [--registry FILE [--registry-update]]
+                     [--sky-rmin AS] [--registry FILE [--registry-update]]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG)
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
     sedphot sed      [--out-dir DIR] [--label STEM]
@@ -192,6 +192,7 @@ def _cmd_measure(args: argparse.Namespace) -> None:
         sersic_seeing=args.sersic_seeing,
         aperture_arcsec=args.aperture,
         cutout_arcsec=args.cutout_size,
+        sky_rmin_arcsec=args.sky_rmin,
         rgrid=args.radii,
         registry_path=args.registry,
         registry_update=args.registry_update,
@@ -258,6 +259,13 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Curve-of-growth radii override (arcsec)")
     p_measure.add_argument('--cutout-size', type=float, default=120.0,
                            help="Stamp width in arcsec [default: 120]")
+    p_measure.add_argument('--sky-rmin', type=float, default=None,
+                           help="Target/sky boundary in arcsec: sky is "
+                                "estimated only beyond it, and no pixel "
+                                "inside it votes on the background. The 15\" "
+                                "default is survey-galaxy sized; compact HST "
+                                "targets want a few arcsec "
+                                "[default: the recipe constant]")
     p_measure.add_argument('--registry', type=str, default=None,
                            help="Cross-field registry JSON to consume (solved "
                                 "shared sources enter as frozen components)")
@@ -333,6 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
+
 
     p_remeasure = subparsers.add_parser(
         "remeasure",
