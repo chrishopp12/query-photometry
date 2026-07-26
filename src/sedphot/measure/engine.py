@@ -527,31 +527,45 @@ def measure_band(
                          pin=pin)
         harvest_fit, fit_free, target_gates = fit, None, False
     else:
-        fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
-                        ref=fit_ref)
-        # Registry harvest source. The science flux always comes from `fit`
-        # (forced-target on transfer bands, so colors stay shape-consistent).
-        # The reference band already solved the target free -- it harvests
-        # itself. On a transfer band a GATING target gets a SECOND, free-
-        # target solve (Solve 1): the per-band shape every neighbor's forced
-        # photometry consumes must come from its own centered best view, not
-        # the frozen reference shape.
+        # The science flux always comes from `fit`: forced-target on transfer
+        # bands, so colors stay shape-consistent. A GATING target's transfer
+        # band also needs its own free per-band shape (Solve 1) -- the
+        # data-driven envelope every neighbor's forced photometry consumes
+        # must come from this object's own centered best view, not the
+        # frozen reference shape. For a real color gradient that differs from
+        # the transferred shape and fits the halo better (a genuinely compact
+        # z-envelope under an extended r, say). The plane background cannot
+        # absorb a radial halo, so the free solve cannot cheaply collapse
+        # when the envelope is truly extended.
+        #
+        # The reference band solved the target free already, so it harvests
+        # itself and needs no second pass.
         target_gates = _target_gates(comps, cat)
+        two_solve = ref is not None and target_gates and bool(seats)
         fit_free = None
-        if ref is None or not (target_gates and seats):
-            harvest_fit = fit
-        else:
-            # A gating target harvests its per-band free shape (Solve 1): the
-            # data-driven envelope every neighbor's forced photometry consumes.
-            # For a real color gradient this differs from the transferred
-            # reference shape and fits the halo better (a genuinely compact
-            # z-envelope under an extended r, say). The plane background cannot absorb a
-            # radial halo, so the free solve cannot cheaply collapse when the
-            # envelope is truly extended -- it lands on the shape the data
-            # supports, no aperture-residual veto required.
+        if two_solve and recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE:
+            # Free first, then freeze: the free solve settles every seat, and
+            # the science pass adopts its NEIGHBOR shapes and re-freezes the
+            # target, leaving only amplitudes and background to solve. One
+            # nonlinear solve, one neighbor shape per band -- stored and used
+            # -- and the same treatment a neighbor gets when its shape came
+            # from the registry instead.
             fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
                                  drops, ref=fit_ref, free_target=True)
+            fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                            ref=fit_ref,
+                            freeze_neighbors=fit_free['seat_params'])
             harvest_fit = fit_free
+        else:
+            fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
+                            ref=fit_ref)
+            if not two_solve:
+                harvest_fit = fit
+            else:
+                fit_free = joint_fit(image, good_fit, stamp, psf, comps,
+                                     seats, drops, ref=fit_ref,
+                                     free_target=True)
+                harvest_fit = fit_free
     bg, track = fit['bg'], fit['track']
     solve_info = fit['solve_info']
     # The free-target solve's own scene, built once and shared by the

@@ -21,6 +21,7 @@ from sedphot.measure.components import build_components, gated_row
 from sedphot.measure.psf import moffat_kernel
 from sedphot.measure.render import ampl_from_total, render_sersic
 from sedphot.measure.seats import (apply_registry, build_seats,
+                                   seat_slices,
                                    harvest_seats, load_registry,
                                    registry_name, resolve_registry_key,
                                    save_registry)
@@ -788,6 +789,111 @@ def test_joint_fit_blind_scene_converges():
     assert len(fit['amps']) == 0
     assert fit['seat_amps'] == []
     assert fit['bg']['const'] == pytest.approx(0.05, abs=0.005)
+
+
+# ------------------------------------
+# Free-solve-first ordering
+# ------------------------------------
+def _gradient_bands():
+    """A reference band with an EXTENDED target and a transfer band with a
+    compact one -- a real colour gradient, so the free-target solve has
+    something to find and the transferred shape is genuinely wrong."""
+    shape_2d = (240, 240)
+    psf = moffat_kernel(1.3, PIX)
+    out = []
+    for target_reff_as in (3.0, 1.6):
+        rng = np.random.default_rng(7)
+        stamp = make_stamp(np.zeros(shape_2d))
+        image = (inject_sersic(shape_2d, psf, flux=400.0,
+                               reff_px=target_reff_as / PIX, n=2.5,
+                               x=stamp.cx, y=stamp.cy)
+                 + inject_sersic(shape_2d, psf, flux=150.0, reff_px=2.0 / PIX,
+                                 n=1.5, x=stamp.cx + 22, y=stamp.cy + 6)
+                 + rng.normal(0.0, NOISE, shape_2d))
+        cat = make_catalog([
+            catalog_row(stamp.wcs, stamp.cx, stamp.cy,
+                        flux_nmgy=400.0 / 3.631, shape_r=3.0),
+            catalog_row(stamp.wcs, stamp.cx + 22, stamp.cy + 6,
+                        flux_nmgy=150.0 / 3.631, shape_r=2.0, rchisq=9.0)])
+        comps = build_components(cat, stamp, psf, 1.3)
+        seats, drops = build_seats(comps, {}, stamp, image)
+        out.append((stamp, psf, image, comps, seats, drops))
+    return out
+
+
+def test_freeze_neighbors_adopts_the_free_solves_shapes():
+    """With freeze_neighbors nothing solves its shape: the target holds the
+    transferred reference shape, the neighbors hold the supplied ones, and
+    the reported vector is exactly what was rendered."""
+    (rstamp, rpsf, rimg, rcomps, rseats, rdrops), tr = _gradient_bands()
+    ref_fit = joint_fit(rimg, np.ones(rimg.shape, bool), rstamp, rpsf,
+                        rcomps, rseats, rdrops)
+    n_fixed = len(ref_fit['fixed'])
+    ref = dict(seats=rseats, drops=sorted(rdrops),
+               p=ref_fit['solve_info']['p'], pix=rstamp.pixscale,
+               col_flux=[max(float(a), 0.0)
+                         for a in ref_fit['amps'][n_fixed:]])
+
+    stamp, psf, image, comps, seats, drops = tr
+    args = (image, np.ones(image.shape, bool), stamp, psf, comps, seats, drops)
+    free = joint_fit(*args, ref=ref, free_target=True)
+    frozen = joint_fit(*args, ref=ref, freeze_neighbors=free['seat_params'])
+    plain = joint_fit(*args, ref=ref)
+
+    nb = [i for i, s in enumerate(seats) if s['owner'] != 'target']
+    tg = [i for i, s in enumerate(seats) if s['owner'] == 'target']
+    assert nb and tg
+    fp = np.asarray(free['seat_params'], float)
+    zp = np.asarray(frozen['seat_params'], float)
+    pp = np.asarray(plain['seat_params'], float)
+
+    # No shape solve ran, and the vector still covers every seat.
+    assert frozen['solve_info'] is None
+    assert plain['solve_info'] is not None
+    assert len(zp) == len(seats) * recipe.SEAT_NPARAMS
+
+    for i in nb:
+        sl = seat_slices(seats)[i]
+        assert np.allclose(zp[sl], fp[sl])        # neighbor: from the free solve
+    for i in tg:
+        sl = seat_slices(seats)[i]
+        assert np.allclose(zp[sl], pp[sl])        # target: still transferred
+
+
+def test_free_solve_first_recovers_the_neighbor_shape_better():
+    """A neighbor solved against a target held at the WRONG shape is biased.
+
+    The transferred reference shape is wrong wherever the target has a real
+    color gradient. Solved with the target free instead, the neighbor lands
+    on the truth -- and that free shape is what the registry stores, so
+    freezing it is what makes the stored and used shapes one thing."""
+    (rstamp, rpsf, rimg, rcomps, rseats, rdrops), tr = _gradient_bands()
+    ref_fit = joint_fit(rimg, np.ones(rimg.shape, bool), rstamp, rpsf,
+                        rcomps, rseats, rdrops)
+    n_fixed = len(ref_fit['fixed'])
+    ref = dict(seats=rseats, drops=sorted(rdrops),
+               p=ref_fit['solve_info']['p'], pix=rstamp.pixscale,
+               col_flux=[max(float(a), 0.0)
+                         for a in ref_fit['amps'][n_fixed:]])
+
+    stamp, psf, image, comps, seats, drops = tr
+    args = (image, np.ones(image.shape, bool), stamp, psf, comps, seats, drops)
+    free = joint_fit(*args, ref=ref, free_target=True)
+    plain = joint_fit(*args, ref=ref)
+
+    nb = next(i for i, s in enumerate(seats) if s['owner'] != 'target')
+    sl = seat_slices(seats)[nb]
+    truth_reff, truth_n = 2.0 / PIX, 1.5
+    free_reff, free_n = free['seat_params'][sl][0], free['seat_params'][sl][1]
+    plain_reff, plain_n = plain['seat_params'][sl][0], plain['seat_params'][sl][1]
+
+    # The free-target solve is closer to the injected neighbor on both.
+    assert abs(free_reff - truth_reff) < abs(plain_reff - truth_reff)
+    assert abs(free_n - truth_n) < abs(plain_n - truth_n)
+    # ... and the free solve found the compact target the gradient put there.
+    tg = next(i for i, s in enumerate(seats) if s['owner'] == 'target')
+    tsl = seat_slices(seats)[tg]
+    assert free['seat_params'][tsl][0] * PIX < 2.0      # ~1.6", not ~3.0"
 
 
 def test_joint_fit_target_refit_recovers_shape():

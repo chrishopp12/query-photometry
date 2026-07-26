@@ -308,6 +308,29 @@ BAND_COLOR_COL = {'u': 'flux_g', 'g': 'flux_g', 'r': 'flux_r',
 # in this order solves seat shapes for its instrument's other bands.
 REFERENCE_PREFERENCE = ('r', 'i', 'z', 'g', 'y', 'u')
 
+# Where a GATING target's transfer bands get their neighbor shapes.
+#
+# Such a band needs two target shapes: free (harvested to the registry, so
+# other fields consume this object's own centered view) and frozen at the
+# reference shape (the science flux, so colors stay shape-consistent). Which
+# of those two solves settles the NEIGHBOR seats is this knob.
+#
+# False   each solve fits the neighbors itself. Two nonlinear solves, and the
+#         neighbor shapes STORED (from the free pass) are not the ones USED
+#         (from the frozen pass).
+# True    the free solve runs first and settles every seat; the science pass
+#         adopts its neighbor shapes and re-freezes the target, leaving only
+#         amplitudes and background. One nonlinear solve, one neighbor shape
+#         per band, stored and used. It is also the treatment a neighbor gets
+#         when its shape comes from the registry, so a field's science flux
+#         does not depend on whether that neighbor was solved by some earlier
+#         field in the campaign.
+#
+# Only gating targets have two solves to choose between. Elsewhere the
+# science pass is the only place a gated neighbor's shape can come from, and
+# it solves it either way.
+NEIGHBOR_SHAPE_FROM_FREE_SOLVE = False
+
 
 # ------------------------------------
 # Cross-field registry

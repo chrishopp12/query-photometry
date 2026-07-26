@@ -360,7 +360,8 @@ def solve_shapes(
 # ------------------------------------
 # Transfer-band plumbing
 # ------------------------------------
-def _transfer_setup(seats, ref, stamp, psf, free_target=False):
+def _transfer_setup(seats, ref, stamp, psf, free_target=False,
+                    freeze_neighbors=None):
     """Band-local seat machinery for a transfer band.
 
     Scales the reference seats and solved parameters onto this band's
@@ -369,12 +370,26 @@ def _transfer_setup(seats, ref, stamp, psf, free_target=False):
     free_target, the target seats join the free set too: the per-band
     free shape a gating target harvests for the registry (Solve 1),
     versus the forced-shape science pass that freezes it (Solve 2).
+
+    freeze_neighbors adopts a full band-local vector's NEIGHBOR slices and
+    freezes every seat, so no shape solve runs at all: the target holds the
+    reference shape, the neighbors hold the shapes that vector carries, and
+    only amplitudes and background are left to solve. The merged vector is
+    what gets rendered AND what the fit reports, so the shapes used and the
+    shapes recorded are one object.
     """
     s_px = ref['pix'] / stamp.pixscale
     seats_local = [_scale_seat(s, s_px) for s in seats]
     p_local = _scale_params(seats, ref['p'], s_px)
     slices = seat_slices(seats)
-    if free_target:
+    if freeze_neighbors is not None:
+        adopted = np.asarray(freeze_neighbors, float)
+        for i, seat in enumerate(seats):
+            if seat['owner'] != 'target':
+                p_local[slices[i]] = adopted[slices[i]]
+        free_idx = []
+        frozen_idx = list(range(len(seats)))
+    elif free_target:
         free_idx = list(range(len(seats)))
         frozen_idx = []
     else:
@@ -438,6 +453,7 @@ def joint_fit(
         *,
         ref: dict | None = None,
         free_target: bool = False,
+        freeze_neighbors=None,
 ) -> dict:
     """The whole fit: {shapes + amplitudes} <-> background, block
     coordinate descent to a fixed point.
@@ -471,6 +487,15 @@ def joint_fit(
         reference pixel scale (pix), per-seat reference fluxes
         (col_flux), and per-seat color factors (col_color). None on a
         reference band -- seats solve their own shapes.
+    free_target : bool
+        Solve the target's shape too (the registry-harvest pass), instead
+        of freezing it at the reference shape.
+    freeze_neighbors : array-like, optional
+        A full band-local seat vector whose NEIGHBOR shapes this fit adopts
+        and holds fixed. With it no shape solves at all -- every seat is a
+        fixed column and only amplitudes and background are solved, so
+        solve_info is None. Used by the free-solve-first ordering
+        (recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE).
 
     Returns
     -------
@@ -492,7 +517,9 @@ def joint_fit(
     cols, owners, col_flux, bounds = [], [], [], None
 
     solving = bool(seats) and ref is None
-    transfer = (_transfer_setup(seats, ref, stamp, psf, free_target=free_target)
+    transfer = (_transfer_setup(seats, ref, stamp, psf,
+                                free_target=free_target,
+                                freeze_neighbors=freeze_neighbors)
                 if seats and ref is not None else None)
 
     p = None
