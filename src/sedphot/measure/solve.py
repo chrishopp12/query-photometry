@@ -606,7 +606,8 @@ def pinned_fit(
     """joint_fit's result, rebuilt from a stored fit -- no solve at all.
 
     The pinned reconstruction: seats render at the stored shape vector
-    (pin['seat_params'], already in THIS band's pixels), amplitudes are
+    (pin['seat_params'], whose radial entries live in pin['seat_pix']
+    arcsec/px and are rescaled onto this band's grid), amplitudes are
     taken from the sidecar by owner name (pin['amps']), and the plane is
     re-evaluated from its stored coefficients (pin['bg_coefs']). Nothing
     is optimized, so the expensive shape solve, the amplitude solve, and
@@ -627,8 +628,16 @@ def pinned_fit(
     fixed_flux = [c['flux0'] for c in fixed]
     p = (np.asarray(pin['seat_params'], float)
          if pin.get('seat_params') is not None else None)
+    # Radial parameters are grid-relative, so a vector solved on one band
+    # renders at the wrong physical size on a band with a different pixel
+    # scale. Rescale arcsec-invariantly, exactly as the live transfer path
+    # does (_transfer_setup). A sidecar written before pix_ref was recorded
+    # leaves seat_pix None: assume this band's own grid -- right for every
+    # instrument with a single pixel scale, and all such a record supports.
+    seat_pix = pin.get('seat_pix')
+    s_px = float(seat_pix) / stamp.pixscale if seat_pix else 1.0
     if seats and p is not None:
-        cols, owners = render_seats(seats, p, stamp, psf,
+        cols, owners = render_seats(seats, p, stamp, psf, s_px,
                                     anchors=seat_anchors(seats, stamp))
     else:
         cols, owners = [], []

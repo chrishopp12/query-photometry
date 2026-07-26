@@ -391,12 +391,17 @@ def witness_row(
         seeing_src=seeing_src,
     )
     if solve_info is not None:
+        # pix_ref is the GRID the radial parameters live in. Without it a
+        # pinned reconstruction cannot know whether a stored vector needs
+        # rescaling onto the band it is re-rendered on -- silently wrong
+        # wherever one instrument spans several pixel scales (HST).
         row['solve'] = dict(seats=solve_info['seats'],
                             nfev=solve_info['nfev'],
                             nfev_track=solve_info.get('nfev_track'),
                             seconds=solve_info['seconds'],
                             at_bound=solve_info['at_bound'],
-                            params=solve_info['params'])
+                            params=solve_info['params'],
+                            pix_ref=solve_info.get('pix_ref'))
     return row
 
 
