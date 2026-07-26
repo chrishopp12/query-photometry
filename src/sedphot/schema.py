@@ -4,9 +4,10 @@ schema.py
 Output Table Schema and Row Builder
 ---------------------------------------------------------
 The one table contract every catalog provider and measurement writes. The
-first twelve columns are the legacy retrieval-script column set, kept in
-order so existing consumers (plot_hst_image overlays, analysis notebooks)
-read new tables unchanged; the appended columns carry retrieval provenance.
+first twelve columns are the original retrieval-script column set, kept in
+order so existing consumers (overlay.py's position figures, analysis
+notebooks) read new tables unchanged; the appended columns carry retrieval
+provenance.
 
 Column conventions:
     band            <Instrument>_<filter>  (Legacy_g, PS1_g, GALEX_FUV, HST_F475W)
