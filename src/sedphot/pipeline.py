@@ -680,6 +680,28 @@ def run_spherex(
 
 
 # ------------------------------------
+# Table discovery, shared by the report verbs
+# ------------------------------------
+def _resolve_label(label: str | None, phot_dir: Path) -> str:
+    """The output stem, inferred from the tables on disk when not given.
+
+    Both report verbs (sed, overlay) read whatever tables a galaxy already
+    has, so both need the same inference and the same refusal: a directory
+    holding more than one stem is ambiguous, and guessing would silently
+    report the wrong galaxy.
+    """
+    if label is not None:
+        return label
+    stems = {p.name.rsplit('_', 1)[0]
+             for p in list(phot_dir.glob("*_catalog.csv"))
+             + list(phot_dir.glob("*_measured.csv"))}
+    if len(stems) != 1:
+        raise ValueError(f"cannot infer --label in {phot_dir}: "
+                         f"found stems {sorted(stems)}")
+    return stems.pop()
+
+
+# ------------------------------------
 # Combined SED plot
 # ------------------------------------
 def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
@@ -701,14 +723,7 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
     from .qa import plot_sed
 
     phot_dir = Path(out_dir) / "Photometry"
-    if label is None:
-        stems = {p.name.rsplit('_', 1)[0]
-                 for p in list(phot_dir.glob("*_catalog.csv"))
-                 + list(phot_dir.glob("*_measured.csv"))}
-        if len(stems) != 1:
-            raise ValueError(f"cannot infer --label in {phot_dir}: "
-                             f"found stems {sorted(stems)}")
-        label = stems.pop()
+    label = _resolve_label(label, phot_dir)
 
     frames = {}
     for kind in ("catalog", "measured"):
@@ -763,14 +778,7 @@ def run_overlay(
     from .overlay import build
 
     phot_dir = Path(out_dir) / "Photometry"
-    if label is None:
-        stems = {p.name.rsplit('_', 1)[0]
-                 for p in list(phot_dir.glob("*_catalog.csv"))
-                 + list(phot_dir.glob("*_measured.csv"))}
-        if len(stems) != 1:
-            raise ValueError(f"cannot infer --label in {phot_dir}: "
-                             f"found stems {sorted(stems)}")
-        label = stems.pop()
+    label = _resolve_label(label, phot_dir)
 
     # Both tables describe one target, so they share one panel pair --
     # the point of the figure is seeing every provider's match together.
