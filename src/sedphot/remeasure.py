@@ -163,23 +163,37 @@ def remeasure(provenance_path: str | Path,
                                        'aperture_as', 'mode', 'source'])
 
 
+def _vector(record: dict | None) -> tuple:
+    """(params, pix) out of a shapes / solve / solve_free record.
+
+    The three name their grid differently (`pix` vs `pix_ref`) because two
+    of them are a solver's own output and one is the engine's statement of
+    what it rendered. Read them uniformly.
+    """
+    params = (record or {}).get('params')
+    if not params:
+        return None, None
+    return params, (record.get('pix') if record.get('pix') is not None
+                    else record.get('pix_ref'))
+
+
 def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     """Per-band pin dict from the sidecar (owner->amp, shape, plane, mesh).
 
-    'forced' renders the target at the instrument's reference-band shape --
-    the shape the science curve was built on, and the only one stored on a
-    non-gating galaxy's transfer bands. 'fitted' prefers each band's own
-    free-target vector, falling back to forced where a band stored none.
+    'forced' rebuilds each band on the shapes it was MEASURED with -- the
+    ones the science curve came from. 'fitted' substitutes each band's own
+    free-target vector, which only a gating target has, falling back to
+    forced (loudly) where a band stored none.
 
-    Each pin carries seat_pix, the arcsec/px grid its radial parameters
-    live in, so pinned_fit can rescale onto the band it re-renders on.
+    Each pin carries seat_pix, the arcsec/px grid its radial parameters live
+    in, so pinned_fit can rescale onto the band it re-renders on.
 
-    A candidate vector whose length disagrees with its instrument's
-    reference vector cannot describe the same seat list, so it is refused
-    in favor of forced. A transfer band's `solve` record is exactly that
-    case: it covers only the NEIGHBOR seats that band re-solved (the target
-    was frozen there), so it is not a full seat vector and must never be
-    rendered as one.
+    `shapes` is the authoritative source: the whole seat list, on the band's
+    own grid. Sidecars predating it fall back to the instrument's reference
+    band `solve` record -- correct, because a transfer band's target was
+    frozen at exactly that shape. What must never be used is a transfer
+    band's OWN `solve`: it covers the free (neighbor) seats alone, so a
+    length check refuses it.
     """
     per_band = prov.get('per_band') or {}
     # per_band preserves engine.order_bands order, so the FIRST band of each
@@ -188,10 +202,10 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     # restate it, and only for instruments that happen to have an r band.
     ref: dict = {}
     for band, b in per_band.items():
-        solve = b.get('solve') or {}
+        params, pix = _vector(b.get('solve'))
         inst = band.split('_')[0]
-        if solve.get('params') and inst not in ref:
-            ref[inst] = (band, solve['params'], solve.get('pix_ref'))
+        if params and inst not in ref:
+            ref[inst] = (band, params, pix)
 
     pin: dict = {}
     demoted: list[str] = []
@@ -200,12 +214,14 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
         if not fs.get('amps') or not fs.get('bg_coefs'):
             continue
         forced = ref.get(band.split('_')[0])
-        if forced is None:
+        # The shapes this band was measured with, else the reference band's.
+        seat, seat_pix = _vector(b.get('shapes'))
+        if seat is None and forced is not None:
+            _, seat, seat_pix = forced
+        if seat is None:
             continue
-        ref_band, ref_params, ref_pix = forced
-        seat, seat_pix = ref_params, ref_pix
         if shape == 'fitted':
-            own = _fitted_vector(band, b, forced)
+            own = _fitted_vector(band, b, forced, len(seat))
             if own is None:
                 demoted.append(band)
             else:
@@ -216,28 +232,30 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
                          consumed=b.get('registry_consumed'))
     if demoted:
         print(f"  [remeasure] no per-band free-target shape stored for "
-              f"{sorted(demoted)}; those bands use the forced "
-              f"(reference-band) shape")
+              f"{sorted(demoted)}; those bands use the shapes they were "
+              f"measured with")
     return pin
 
 
-def _fitted_vector(band: str, witness: dict,
-                   forced: tuple) -> tuple | None:
+def _fitted_vector(band: str, witness: dict, forced: tuple | None,
+                   expect: int) -> tuple | None:
     """This band's own free-target shape vector, or None when it has none.
 
-    The reference band solved every seat free, so its `solve` record IS the
-    free vector. On a transfer band the science solve froze the target, so
-    only a gating target's separate free-target pass has one, recorded as
-    `solve_free`. Length must match the reference vector or the record
-    cannot cover the same seats.
+    The reference band solved every seat free, so the shapes it measured
+    with ARE the free ones. On a transfer band the science pass had the
+    target frozen, so only a gating target's separate free-target solve has
+    one, recorded as `solve_free`. Either way the vector must cover the
+    whole seat list.
     """
-    ref_band, ref_params, _ = forced
-    source = ((witness.get('solve') or {}) if band == ref_band
-              else (witness.get('solve_free') or {}))
-    params = source.get('params')
-    if not params or len(params) != len(ref_params):
+    if forced is not None and band == forced[0]:
+        params, pix = _vector(witness.get('shapes'))
+        if params is None:
+            params, pix = _vector(witness.get('solve'))
+    else:
+        params, pix = _vector(witness.get('solve_free'))
+    if not params or len(params) != expect:
         return None
-    return params, source.get('pix_ref')
+    return params, pix
 
 
 def reconstruct(provenance_path: str | Path, aperture_arcsec: float,

@@ -320,6 +320,7 @@ def witness_row(
         aperture_arcsec: float,
         solve_info: dict | None = None,
         solve_free: dict | None = None,
+        shapes: dict | None = None,
 ) -> dict:
     """Assemble every per-band witness into one dict.
 
@@ -365,6 +366,14 @@ def witness_row(
         gating target solved its own per-band shape (engine's Solve 1).
         This one IS a full seat vector, and it is the only record of that
         shape outside the cross-field registry.
+    shapes : dict, optional
+        The seat shapes the band was MEASURED with: seats (labels), params
+        (the full seat vector), pix (the grid its radial entries live in).
+        Always the whole seat list on this band's own grid, whether those
+        shapes were solved here, transferred, or frozen -- so a
+        reconstruction re-renders exactly what the flux was built from.
+        `solve` cannot serve that role: it reports only what its own solve
+        varied, which on a transfer band is a subset of the seats.
 
     Returns
     -------
@@ -423,6 +432,8 @@ def witness_row(
                                  params=solve_free['params'],
                                  pix_ref=solve_free.get('pix_ref'),
                                  at_bound=solve_free['at_bound'])
+    if shapes is not None:
+        row['shapes'] = shapes
     return row
 
 

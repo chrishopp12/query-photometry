@@ -264,6 +264,23 @@ def _fit_images(fit: dict, system: set[str],
     return scene, target
 
 
+def _used_shapes(fit: dict, seats: list[dict], stamp) -> dict | None:
+    """The seat shapes this band was MEASURED with, on this band's grid.
+
+    Always the whole seat list, however each shape got there -- solved here,
+    transferred from the reference band, or frozen from a previous solve.
+    That is what a reconstruction has to re-render, and it is NOT what
+    `solve` records: a solve reports only the parameters it varied, so on a
+    transfer band its vector covers the free (neighbor) seats alone.
+    """
+    params = fit.get('seat_params')
+    if params is None or not seats:
+        return None
+    return dict(seats=[f"{s['owner']}:{s['kind']}" for s in seats],
+                params=[float(v) for v in params],
+                pix=float(stamp.pixscale))
+
+
 def _target_gates(comps: list[dict], cat: pd.DataFrame) -> bool:
     """Whether the target's own catalog row qualifies for a shape gate.
 
@@ -640,7 +657,8 @@ def measure_band(
                           rgrid=rgrid, aperture_arcsec=aperture_arcsec,
                           solve_info=solve_info,
                           solve_free=(fit_free['solve_info']
-                                      if fit_free is not None else None))
+                                      if fit_free is not None else None),
+                          shapes=_used_shapes(fit, seats, stamp))
     witness['stars'] = star_log
     witness['n_comps'] = len(comps)
     witness['artifact_as2'] = round(artifact_as2, 1)
