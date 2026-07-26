@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
@@ -53,14 +54,37 @@ def _geom(shape=(120, 120), pixscale=0.262):
     return rr, np.ones(shape, bool), pixscale
 
 
-def test_eval_plane_roundtrips_bin_plane():
-    shape = (120, 120)
+def test_eval_plane_recovers_an_injected_gradient():
+    """bin_plane BUILDS its plane through eval_plane, so comparing the two is
+    an identity and proves nothing. Assert the real property instead: the
+    stored coefficients describe the gradient that was actually there, in the
+    units eval_plane reads them back in.
+
+    The tilts come back exact. The LEVEL carries a known, tiny offset: the
+    design places each bin at col_starts + bin_px/2, while the clipped mean
+    of a linear ramp over that bin sits at col_starts + (bin_px - 1)/2 -- a
+    half-pixel gap, so the constant absorbs tilt x 0.5/n per axis. Asserted
+    here rather than fixed: the correction is ~1e-4 of a level whose tilt is
+    itself a small term, and moving the convention would shift the background
+    of every measurement already on disk.
+    """
+    shape = (460, 460)              # a realistic 120" stamp at 0.262"/px
+    ny, nx = shape
     rr, good, pix = _geom(shape)
     yy, xx = np.indices(shape)
-    image = 0.5 + 0.001 * (xx - shape[1] / 2) - 0.002 * (yy - shape[0] / 2)
-    bg = bin_plane(image, good, rr, pix)
-    got = eval_plane(bg['coefs'], shape)
-    assert np.allclose(got, bg['img'], atol=1e-9)
+    level, tilt_x, tilt_y = 0.5, 0.12, -0.24
+    truth = (level + tilt_x * (xx - nx / 2) / nx
+             + tilt_y * (yy - ny / 2) / ny)
+    bg = bin_plane(truth, good, rr, pix)
+
+    assert bg['n_bins'] > 100        # a real fit, not a near-degenerate one
+    assert bg['coefs'][1] == pytest.approx(tilt_x, abs=1e-12)
+    assert bg['coefs'][2] == pytest.approx(tilt_y, abs=1e-12)
+    half_pixel = tilt_x * 0.5 / nx + tilt_y * 0.5 / ny
+    assert bg['const'] == pytest.approx(level - half_pixel, abs=1e-9)
+    # ... and the sidecar's coefficients alone rebuild that same surface.
+    assert np.allclose(eval_plane(bg['coefs'], shape), truth,
+                       atol=2 * abs(half_pixel))
 
 
 def test_eval_mesh_roundtrips_residual_mesh():
