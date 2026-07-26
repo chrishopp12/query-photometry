@@ -288,7 +288,8 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
               if write_qa else None)
     # The pinned pass reuses the measurement pipeline, whose progress log
     # is noise for a re-report; keep remeasure's output the table alone.
-    with contextlib.redirect_stdout(io.StringIO()):
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
         frame = run_measure(coord, label, str(galaxy_dir),
                             instruments=instruments,
                             aperture_arcsec=aperture_arcsec,
@@ -296,4 +297,17 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                             rgrid=grid, pin_by_band=pin,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
-    return {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
+    out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
+    # run_measure reports a dead band by PRINTING and moving on, so under
+    # the redirect a band could vanish from the table with no trace at all.
+    # Compare what was asked for against what came back -- that catches
+    # every drop mechanism, not just the two the pipeline has messages for
+    # -- and replay the reasons it did give.
+    missing = [band for band in pin if band not in out]
+    if missing:
+        print(f"  [remeasure] {len(missing)} band(s) dropped by the pinned "
+              f"rebuild: {sorted(missing)}")
+        for line in log.getvalue().splitlines():
+            if 'FAILED' in line or 'no_coverage' in line:
+                print(f"    {line.strip()}")
+    return out
