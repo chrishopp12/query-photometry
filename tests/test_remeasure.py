@@ -182,6 +182,51 @@ def test_reconstruct_replays_the_fetch_options(tmp_path, monkeypatch):
     assert 'sky_rmin_arcsec' in seen
 
 
+def test_beyond_grid_threshold_uses_the_shortest_stored_grid(tmp_path):
+    """A band whose grid stops earlier has no value to read past its own end;
+    reading it anyway silently returns its capped outermost point. So the
+    SHORTEST grid decides when to rebuild, not the longest."""
+    prov = {'git_rev': 'abc',
+            'target': {'ra_deg': 150.0, 'dec_deg': 2.0},
+            'per_band': {
+                'Legacy_r': {'target_model_uJy': 1.0,
+                             'fit_state': {'rgrid': [2.0, 40.0],
+                                           'enclosed_uJy': [1.0, 9.0]}},
+                'Legacy_z': {'target_model_uJy': 1.0,
+                             'fit_state': {'rgrid': [2.0, 20.0],
+                                           'enclosed_uJy': [1.0, 5.0]}}}}
+    p = tmp_path / 'g6.provenance.json'
+    p.write_text(json.dumps(prov))
+    # 30" is inside Legacy_r's grid but PAST Legacy_z's, so it must rebuild
+    # rather than hand back Legacy_z's capped r=20 value.
+    with pytest.raises(ValueError):          # no pinnable fit in this fixture
+        remeasure(p, 30.0, mode='aperture')
+    # ... and inside both grids it stays an interpolation.
+    assert 'remeasure' in remeasure(p, 15.0, mode='aperture').iloc[0]['source']
+
+
+def test_seatless_band_is_pinnable_without_a_shape_vector():
+    """A scene with NO seats needs no shape vector: the fixed components at
+    their stored amplitudes on the stored plane ARE the whole fit."""
+    from sedphot.remeasure import _build_pin_by_band
+    prov = {'per_band': {'Legacy_r': {
+        'seat_owners': [],
+        'fit_state': {'amps': [['src1', 5.0]], 'bg_coefs': [0.1, 0.0, 0.0]}}}}
+    pin = _build_pin_by_band(prov, 'forced')
+    assert 'Legacy_r' in pin
+    assert pin['Legacy_r']['seat_params'] is None
+
+
+def test_band_with_seats_but_no_vector_is_not_pinned():
+    """Seats existed and nothing covers them, so the band cannot be rebuilt.
+    It must stay out of the pin rather than be rendered from a wrong vector."""
+    from sedphot.remeasure import _build_pin_by_band
+    prov = {'per_band': {'Legacy_r': {
+        'seat_owners': ['target'],
+        'fit_state': {'amps': [['target', 5.0]], 'bg_coefs': [0.1, 0.0, 0.0]}}}}
+    assert _build_pin_by_band(prov, 'forced') == {}
+
+
 def test_aperture_mode_is_shape_independent_within_the_grid(tmp_path):
     """The empirical curve is a measurement of the pixels, so shape cannot
     change it inside the grid -- only the beyond-grid rebuild uses shape."""

@@ -112,18 +112,26 @@ def remeasure(provenance_path: str | Path,
     # Past the stored grid the empirical curve holds no value to read;
     # reconstruct the scene from the pinned fit and integrate at R.
     per_band = prov.get('per_band') or {}
-    grid_max = max((((b.get('fit_state') or {}).get('rgrid') or [0.0])[-1]
-                    for b in per_band.values()), default=0.0)
+    # The SHORTEST stored grid decides: past its end that band has no value
+    # left to read and would silently return its capped outermost point.
+    # Taking the longest instead would let short-grid bands do exactly that.
+    ends = [(b.get('fit_state') or {}).get('rgrid')[-1]
+            for b in per_band.values()
+            if (b.get('fit_state') or {}).get('rgrid')]
+    grid_max = min(ends) if ends else 0.0
     if mode == 'aperture' and not integrated and aperture_arcsec > grid_max:
+        state: dict = {}
         recon = reconstruct(provenance_path, float(aperture_arcsec),
                             shape=shape, registry_path=registry_path,
-                            write_qa=write_qa)
+                            write_qa=write_qa, status=state)
+        solved = set(state.get('solved') or ())
         return pd.DataFrame(
             [dict(band=band, flux_uJy=round(flux, 4),
                   mag_AB=(round(UJY_AB_ZP - 2.5 * np.log10(flux), 4)
                           if flux > 0 else float('nan')),
                   aperture_as=float(aperture_arcsec), mode='aperture',
-                  source=f"reconstruct_{shape}:{rev}")
+                  source=(f"solved_{shape}:{rev}" if band in solved
+                          else f"reconstruct_{shape}:{rev}"))
              for band, flux in recon.items()],
             columns=['band', 'flux_uJy', 'mag_AB', 'aperture_as',
                      'mode', 'source'])
@@ -218,9 +226,18 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
         seat, seat_pix = _vector(b.get('shapes'))
         if seat is None and forced is not None:
             _, seat, seat_pix = forced
-        if seat is None:
+        if seat is None and b.get('seat_owners') == []:
+            # A scene with NO seats needs no shape vector: pinned_fit renders
+            # the fixed components at their stored amplitudes on the stored
+            # plane, which is the whole fit. Pinnable, not a gap.
+            seat, seat_pix = None, None
+        elif seat is None:
+            # Seats existed and no vector covers them, so this band cannot be
+            # rebuilt. Leaving it out of the pin sends it down the SOLVING
+            # path, which is a fresh measurement wearing a reconstruction
+            # label -- the caller reports it instead.
             continue
-        if shape == 'fitted':
+        if shape == 'fitted' and seat is not None:
             own = _fitted_vector(band, b, forced, len(seat))
             if own is None:
                 demoted.append(band)
@@ -260,7 +277,8 @@ def _fitted_vector(band: str, witness: dict, forced: tuple | None,
 
 def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                 shape: str = 'forced', registry_path: str | None = None,
-                write_qa: bool = False) -> dict:
+                write_qa: bool = False,
+                status: dict | None = None) -> dict:
     """Empirical flux at aperture_arcsec, past the stored grid, no solve.
 
     Rebuilds the galaxy's scene from the immutable sidecar (every shape,
@@ -272,6 +290,11 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     are never touched. write_qa writes per-band scene figures to a scoped
     QA/remeasure_R<N>as/ subdir (never the science QA). Returns
     {band: flux_uJy}.
+
+    status, when given, is filled with 'solved': the bands that had no
+    pinnable fit and so were SOLVED rather than reconstructed. They are
+    still returned -- best available answer -- but a caller that labels
+    its output must not call them pinned.
     """
     import contextlib
     import io
@@ -282,6 +305,9 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
 
     prov = json.loads(Path(provenance_path).read_text())
     tgt = prov.get('target') or {}
+    if tgt.get('ra_deg') is None or tgt.get('dec_deg') is None:
+        raise ValueError(f"{provenance_path} records no target position, so "
+                         f"there is nothing to rebuild the scene around")
     coord = SkyCoord(tgt['ra_deg'], tgt['dec_deg'], unit='deg')
     galaxy_dir = Path(provenance_path).parent.parent
     label = (tgt.get('label')
@@ -334,15 +360,24 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
+    # A band with no pin took run_measure's SOLVING path -- a fresh fit, not a
+    # reconstruction. It is still the best available answer, so it is kept, but
+    # the caller must be able to label it honestly rather than call it pinned.
+    solved = sorted(band for band in out if band not in pin)
+    if status is not None:
+        status['solved'] = solved
+    if solved:
+        print(f"  [remeasure] {len(solved)} band(s) had no pinnable fit and "
+              f"were SOLVED, not reconstructed: {solved}")
     # run_measure reports a dead band by PRINTING and moving on, so under the
-    # redirect its only trace lands in the discarded buffer. Compare what was
-    # asked for against what came back -- that catches every drop mechanism,
-    # not just the two the pipeline has messages for -- and replay whatever
-    # reasons it did give.
-    missing = [band for band in pin if band not in out]
+    # redirect its only trace lands in the discarded buffer. Compare the whole
+    # sidecar against what came back -- that catches every drop mechanism, not
+    # just the two the pipeline has messages for -- and replay whatever reasons
+    # it did give.
+    missing = [band for band in (prov.get('per_band') or {}) if band not in out]
     if missing:
-        print(f"  [remeasure] {len(missing)} band(s) dropped by the pinned "
-              f"rebuild: {sorted(missing)}")
+        print(f"  [remeasure] {len(missing)} band(s) absent from the rebuild: "
+              f"{sorted(missing)}")
         for line in log.getvalue().splitlines():
             if 'FAILED' in line or 'no_coverage' in line:
                 print(f"    {line.strip()}")
