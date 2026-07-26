@@ -252,6 +252,7 @@ def run_measure(
         bands: list[str] | None = None,
         aperture_arcsec: float = 10.0,
         cutout_arcsec: float = 120.0,
+        sky_rmin_arcsec: float | None = None,
         rgrid: list[float] | None = None,
         sersic_from: str | None = None,
         sersic_params: list[float] | None = None,
@@ -295,6 +296,13 @@ def run_measure(
         Aperture radius. [default: 10.0]
     cutout_arcsec : float
         Stamp width. [default: 120]
+    sky_rmin_arcsec : float, optional
+        Target/sky boundary override (recipe.BG_RMIN_AS): the radius
+        beyond which the background is estimated, and inside which no
+        pixel votes on it. The 15" default is survey-galaxy sized; a
+        compact source on an HST mosaic needs a few arcsec instead.
+        Scoped to this call and recorded in the sidecar's recipe
+        snapshot. [default: the recipe constant]
     rgrid : list[float], optional
         Curve-of-growth radii override.
     sersic_from : str, optional
@@ -351,191 +359,194 @@ def run_measure(
             f"curve-of-growth grid [{rgrid_arr.min():g}, "
             f"{rgrid_arr.max():g}]\"; pass --radii covering it")
 
-    # Phase 1 -- fetch every provider's images.
-    fetched_products: list[tuple[str, list[ImageProduct]]] = []
-    for name in instruments:
-        print(f"=== {name} images ===")
-        cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
-        fetch = IMAGE_PROVIDERS[name]
-        options: dict = {'bands': bands, 'size_arcsec': cutout_arcsec,
-                         'cache_dir': cache_dir}
-        if name == 'legacy':
-            options.update(dr=legacy_dr, use_bricks=legacy_bricks)
-        if name == 'cfht':
-            options.update(aperture_arcsec=aperture_arcsec)
-        if name == 'hst' and hst_proposal_id:
-            options.update(proposal_id=hst_proposal_id)
-        try:
-            fetched = fetch(coord, **options)
-        except Exception as e:
-            fetched = ProviderResult(provider=name, status=STATUS_ERROR,
-                                     message=f"{type(e).__name__}: {e}")
-        if isinstance(fetched, ProviderResult):
-            results.append(fetched)
-            print(f"  {fetched.status}: {fetched.message}")
-        else:
-            fetched_products.append((name, fetched))
-            print(f"  {len(fetched)} band image(s) ready")
-    print()
-
-    # Nothing to measure: report and stop before the scene queries --
-    # a run with zero images must not spend TAP calls building a scene
-    # no band will ever consume.
-    if not fetched_products:
-        print("No images fetched from any provider; nothing to measure.")
-        print("Provider summary:")
-        print_coverage_summary(results)
-        write_coverage_report(results, phot_dir / "coverage_measure.json")
-        return rows_to_frame([])
-
-    # Phase 2 -- sersic mode with an explicit shape request: resolve the
-    # one sky shape every band pins the target to. Without a request the
-    # target shape is the standard per-instrument reference-band refit.
-    shape_sky = None
-    shape_origin = None
-    if mode == 'sersic' and (sersic_params is not None
-                             or sersic_from is not None):
-        all_products = [p for _, products in fetched_products for p in products]
-        shape_sky, shape_origin = _resolve_shape(
-            all_products, coord, sersic_from=sersic_from,
-            sersic_params=sersic_params,
-            cutout_half_arcsec=cutout_arcsec / 2.0,
-            sersic_seeing=sersic_seeing)
-        print(f"Forced shape: n={shape_sky['n']:.2f}, "
-              f"reff={shape_sky['reff_arcsec']:.2f}\", "
-              f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
-              f"({shape_origin['source']})\n")
-    elif mode == 'sersic':
-        print("Forced shape: per-instrument reference-band refit\n")
-
-    # Phase 3 -- scene inputs, once per galaxy: the survey catalog and
-    # confirmed stars (cache-first under Photometry/scene/), the optional
-    # patches file, and the cross-field registry.
-    scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
-                          aperture_arcsec=aperture_arcsec,
-                          cutout_half_arcsec=cutout_arcsec / 2.0,
-                          legacy_dr=legacy_dr, registry_path=registry_path)
-    print()
-
-    # Phase 4 -- measure every band, reference band first per instrument.
-    caches: dict = {}
-    references: dict[str, dict] = {}
-    for name, products in fetched_products:
-        cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
-        provider_rows: list[dict] = []
-        measured_bands: list[str] = []
-        demoted_bands: list[str] = []
-        for product in order_bands(products):
-            band_key = f"{product.instrument}_{product.band}"
-            pin = pin_by_band.get(band_key) if pin_by_band else None
+    # BG_RMIN_AS is module state every measure module reads at call
+    # time; scope the override so no run can leak it into the next.
+    with recipe.sky_floor(sky_rmin_arcsec):
+        # Phase 1 -- fetch every provider's images.
+        fetched_products: list[tuple[str, list[ImageProduct]]] = []
+        for name in instruments:
+            print(f"=== {name} images ===")
+            cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
+            fetch = IMAGE_PROVIDERS[name]
+            options: dict = {'bands': bands, 'size_arcsec': cutout_arcsec,
+                             'cache_dir': cache_dir}
+            if name == 'legacy':
+                options.update(dr=legacy_dr, use_bricks=legacy_bricks)
+            if name == 'cfht':
+                options.update(aperture_arcsec=aperture_arcsec)
+            if name == 'hst' and hst_proposal_id:
+                options.update(proposal_id=hst_proposal_id)
             try:
-                measurement, new_ref = measure_band(
-                    product, coord, scene,
-                    None if pin else references.get(product.instrument),
-                    caches,
-                    aperture_arcsec=aperture_arcsec,
-                    cutout_half_arcsec=cutout_arcsec / 2.0,
-                    rgrid=rgrid_arr,
-                    target_shape=shape_sky if mode == 'sersic' else None,
-                    registry_update=registry_update,
-                    pin=pin,
-                    dump_dir=cache_dir / "QA" if dump_arrays else None)
-                if new_ref is not None:
-                    references[product.instrument] = new_ref
-                row = measurement_to_row(measurement, mode=mode)
-                qa_target = (Path(qa_dir) if qa_dir is not None
-                             else (cache_dir / "QA" if write_outputs else None))
-                figure = (qa_scene_figure(measurement, qa_target)
-                          if qa_target is not None else None)
-            except ApertureCoverageError as e:
-                # The image exists but the aperture is off its footprint:
-                # honest no_coverage, not a measurement of zero.
-                print(f"  {product.instrument} {product.band}: "
-                      f"no_coverage -- {e}")
-                demoted_bands.append(f"{product.band} "
-                                     f"(coverage {e.coverage:.2f})")
-                continue
+                fetched = fetch(coord, **options)
             except Exception as e:
-                print(f"  {product.instrument} {product.band} FAILED: "
-                      f"{type(e).__name__}: {e}")
-                continue
-            measurements.append(measurement)
-            provider_rows.append(row)
-            measured_bands.append(product.band)
-            qa_note = f"; QA {figure.name}" if figure else ""
-            print(f"  {product.instrument} {product.band}: "
-                  f"{row['flux_uJy']:.1f} +/- "
-                  f"{measurement['flux_err_ujy']:.1f} uJy "
-                  f"({measurement['err_model']}{qa_note})")
-        rows.extend(provider_rows)
-        pieces = []
-        if measured_bands:
-            pieces.append(f"measured bands: {', '.join(measured_bands)}")
-        if demoted_bands:
-            pieces.append(f"aperture off footprint: {', '.join(demoted_bands)}")
-        if measured_bands:
-            status = STATUS_OK
-        elif demoted_bands:
-            status = STATUS_NO_COVERAGE
-        else:
-            status = STATUS_ERROR
-            pieces.append("fetched images but every measurement failed")
-        results.append(ProviderResult(
-            provider=name, status=status, rows=provider_rows,
-            message="; ".join(pieces)))
+                fetched = ProviderResult(provider=name, status=STATUS_ERROR,
+                                         message=f"{type(e).__name__}: {e}")
+            if isinstance(fetched, ProviderResult):
+                results.append(fetched)
+                print(f"  {fetched.status}: {fetched.message}")
+            else:
+                fetched_products.append((name, fetched))
+                print(f"  {len(fetched)} band image(s) ready")
         print()
 
-    if registry_update:
-        save_registry(scene['registry'], registry_path)
-        print(f"registry updated: {registry_path}\n")
+        # Nothing to measure: report and stop before the scene queries --
+        # a run with zero images must not spend TAP calls building a scene
+        # no band will ever consume.
+        if not fetched_products:
+            print("No images fetched from any provider; nothing to measure.")
+            print("Provider summary:")
+            print_coverage_summary(results)
+            write_coverage_report(results, phot_dir / "coverage_measure.json")
+            return rows_to_frame([])
 
-    measured_df = rows_to_frame(rows)
+        # Phase 2 -- sersic mode with an explicit shape request: resolve the
+        # one sky shape every band pins the target to. Without a request the
+        # target shape is the standard per-instrument reference-band refit.
+        shape_sky = None
+        shape_origin = None
+        if mode == 'sersic' and (sersic_params is not None
+                                 or sersic_from is not None):
+            all_products = [p for _, products in fetched_products for p in products]
+            shape_sky, shape_origin = _resolve_shape(
+                all_products, coord, sersic_from=sersic_from,
+                sersic_params=sersic_params,
+                cutout_half_arcsec=cutout_arcsec / 2.0,
+                sersic_seeing=sersic_seeing)
+            print(f"Forced shape: n={shape_sky['n']:.2f}, "
+                  f"reff={shape_sky['reff_arcsec']:.2f}\", "
+                  f"ellip={shape_sky['ellip']:.2f}, PA={shape_sky['pa_deg']:.1f} deg "
+                  f"({shape_origin['source']})\n")
+        elif mode == 'sersic':
+            print("Forced shape: per-instrument reference-band refit\n")
 
-    print("Provider summary:")
-    print_coverage_summary(results)
-    if write_outputs:
-        write_coverage_report(results, phot_dir / "coverage_measure.json")
+        # Phase 3 -- scene inputs, once per galaxy: the survey catalog and
+        # confirmed stars (cache-first under Photometry/scene/), the optional
+        # patches file, and the cross-field registry.
+        scene = prepare_scene(coord, phot_dir=phot_dir, out_dir=out_dir,
+                              aperture_arcsec=aperture_arcsec,
+                              cutout_half_arcsec=cutout_arcsec / 2.0,
+                              legacy_dr=legacy_dr, registry_path=registry_path)
+        print()
 
-    if measured_df.empty:
-        print("\nNo bands measured.")
+        # Phase 4 -- measure every band, reference band first per instrument.
+        caches: dict = {}
+        references: dict[str, dict] = {}
+        for name, products in fetched_products:
+            cache_dir = phot_dir / INSTRUMENT_DIRS.get(name, name)
+            provider_rows: list[dict] = []
+            measured_bands: list[str] = []
+            demoted_bands: list[str] = []
+            for product in order_bands(products):
+                band_key = f"{product.instrument}_{product.band}"
+                pin = pin_by_band.get(band_key) if pin_by_band else None
+                try:
+                    measurement, new_ref = measure_band(
+                        product, coord, scene,
+                        None if pin else references.get(product.instrument),
+                        caches,
+                        aperture_arcsec=aperture_arcsec,
+                        cutout_half_arcsec=cutout_arcsec / 2.0,
+                        rgrid=rgrid_arr,
+                        target_shape=shape_sky if mode == 'sersic' else None,
+                        registry_update=registry_update,
+                        pin=pin,
+                        dump_dir=cache_dir / "QA" if dump_arrays else None)
+                    if new_ref is not None:
+                        references[product.instrument] = new_ref
+                    row = measurement_to_row(measurement, mode=mode)
+                    qa_target = (Path(qa_dir) if qa_dir is not None
+                                 else (cache_dir / "QA" if write_outputs else None))
+                    figure = (qa_scene_figure(measurement, qa_target)
+                              if qa_target is not None else None)
+                except ApertureCoverageError as e:
+                    # The image exists but the aperture is off its footprint:
+                    # honest no_coverage, not a measurement of zero.
+                    print(f"  {product.instrument} {product.band}: "
+                          f"no_coverage -- {e}")
+                    demoted_bands.append(f"{product.band} "
+                                         f"(coverage {e.coverage:.2f})")
+                    continue
+                except Exception as e:
+                    print(f"  {product.instrument} {product.band} FAILED: "
+                          f"{type(e).__name__}: {e}")
+                    continue
+                measurements.append(measurement)
+                provider_rows.append(row)
+                measured_bands.append(product.band)
+                qa_note = f"; QA {figure.name}" if figure else ""
+                print(f"  {product.instrument} {product.band}: "
+                      f"{row['flux_uJy']:.1f} +/- "
+                      f"{measurement['flux_err_ujy']:.1f} uJy "
+                      f"({measurement['err_model']}{qa_note})")
+            rows.extend(provider_rows)
+            pieces = []
+            if measured_bands:
+                pieces.append(f"measured bands: {', '.join(measured_bands)}")
+            if demoted_bands:
+                pieces.append(f"aperture off footprint: {', '.join(demoted_bands)}")
+            if measured_bands:
+                status = STATUS_OK
+            elif demoted_bands:
+                status = STATUS_NO_COVERAGE
+            else:
+                status = STATUS_ERROR
+                pieces.append("fetched images but every measurement failed")
+            results.append(ProviderResult(
+                provider=name, status=status, rows=provider_rows,
+                message="; ".join(pieces)))
+            print()
+
+        if registry_update:
+            save_registry(scene['registry'], registry_path)
+            print(f"registry updated: {registry_path}\n")
+
+        measured_df = rows_to_frame(rows)
+
+        print("Provider summary:")
+        print_coverage_summary(results)
+        if write_outputs:
+            write_coverage_report(results, phot_dir / "coverage_measure.json")
+
+        if measured_df.empty:
+            print("\nNo bands measured.")
+            return measured_df
+
+        # Reconstruction (pinned) re-reports fluxes without touching the
+        # science-aperture products: no growth curves, no table, no sidecar.
+        if not write_outputs:
+            return measured_df
+
+        plot_growth_curves(measurements, phot_dir / "QA")
+        out_csv = phot_dir / f"{label}_measured.csv"
+        measured_df.to_csv(out_csv, index=False)
+        write_sidecar(out_csv, {
+            "kind": f"{mode}_photometry",
+            "target": {"name": target_name, "label": label,
+                       "ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
+            "instruments": instruments,
+            "mode": mode,
+            "aperture_arcsec": aperture_arcsec,
+            "cutout_arcsec": cutout_arcsec,
+            "sersic_shape": ({**shape_sky, **shape_origin} if shape_sky
+                             else ({'source': 'reference-band refit'}
+                                   if mode == 'sersic' else None)),
+            "scene": {
+                "n_catalog_rows": int(len(scene['cat'])),
+                "n_confirmed_stars": int(len(scene['stars'])),
+                "patches": sorted(scene['patches'].keys()),
+                "registry_path": str(registry_path) if registry_path else None,
+                "registry_updated": bool(registry_update),
+                "recipe": recipe.snapshot(),
+            },
+            "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
+                      if 'legacy' in instruments else None,
+            "per_band": {f"{m['instrument']}_{m['band']}": m['witness']
+                         for m in measurements},
+        })
+        print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
+        print(measured_df.to_string(index=False))
+
         return measured_df
-
-    # Reconstruction (pinned) re-reports fluxes without touching the
-    # science-aperture products: no growth curves, no table, no sidecar.
-    if not write_outputs:
-        return measured_df
-
-    plot_growth_curves(measurements, phot_dir / "QA")
-    out_csv = phot_dir / f"{label}_measured.csv"
-    measured_df.to_csv(out_csv, index=False)
-    write_sidecar(out_csv, {
-        "kind": f"{mode}_photometry",
-        "target": {"name": target_name, "label": label,
-                   "ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
-        "instruments": instruments,
-        "mode": mode,
-        "aperture_arcsec": aperture_arcsec,
-        "cutout_arcsec": cutout_arcsec,
-        "sersic_shape": ({**shape_sky, **shape_origin} if shape_sky
-                         else ({'source': 'reference-band refit'}
-                               if mode == 'sersic' else None)),
-        "scene": {
-            "n_catalog_rows": int(len(scene['cat'])),
-            "n_confirmed_stars": int(len(scene['stars'])),
-            "patches": sorted(scene['patches'].keys()),
-            "registry_path": str(registry_path) if registry_path else None,
-            "registry_updated": bool(registry_update),
-            "recipe": recipe.snapshot(),
-        },
-        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
-                  if 'legacy' in instruments else None,
-        "per_band": {f"{m['instrument']}_{m['band']}": m['witness']
-                     for m in measurements},
-    })
-    print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
-    print(measured_df.to_string(index=False))
-
-    return measured_df
 
 
 # ------------------------------------
@@ -704,6 +715,73 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
 
     out = plot_sed(frames, phot_dir / f"{label}_sed.png", title=label)
     print(f"  [sed] wrote {out}")
+    return out
+
+
+# ------------------------------------
+# Catalog-position overlay
+# ------------------------------------
+def run_overlay(
+        label: str | None,
+        out_dir: str | Path,
+        *,
+        zoom_arcsec: float = 5.0,
+        context_arcsec: float = 15.0,
+        wcs_from: str | None = None,
+        dpi: int = 200,
+) -> Path | None:
+    """Overlay the tables' matched positions on the HAP color composite.
+
+    The positional counterpart to run_sed: same table discovery, but it
+    plots where each provider matched rather than what it measured.
+
+    Parameters
+    ----------
+    label : str, optional
+        Output stem; inferred when exactly one table family exists.
+    out_dir : str or Path
+        Galaxy directory.
+    zoom_arcsec, context_arcsec : float
+        Panel half-widths in arcsec. [default: 5 and 15]
+    wcs_from : str, optional
+        Local FITS on the composite's drizzle grid, instead of fetching
+        the ~380 MB detection mosaic for its WCS.
+    dpi : int
+        Figure resolution. [default: 200]
+
+    Returns
+    -------
+    figure_path : Path or None
+        The written PNG, or None when no tables or no HAP composite.
+    """
+    from .overlay import build
+
+    phot_dir = Path(out_dir) / "Photometry"
+    if label is None:
+        stems = {p.name.rsplit('_', 1)[0]
+                 for p in list(phot_dir.glob("*_catalog.csv"))
+                 + list(phot_dir.glob("*_measured.csv"))}
+        if len(stems) != 1:
+            raise ValueError(f"cannot infer --label in {phot_dir}: "
+                             f"found stems {sorted(stems)}")
+        label = stems.pop()
+
+    # Both tables describe one target, so they share one panel pair --
+    # the point of the figure is seeing every provider's match together.
+    found = [pd.read_csv(phot_dir / f"{label}_{kind}.csv")
+             for kind in ("catalog", "measured")
+             if (phot_dir / f"{label}_{kind}.csv").exists()]
+    if not found:
+        print(f"  [overlay] no tables for {label!r} in {phot_dir}")
+        return None
+    tables = {label: pd.concat(found, ignore_index=True)}
+
+    out = build(tables, phot_dir / f"{label}_overlay.png",
+                phot_dir / INSTRUMENT_DIRS.get('hst', 'HST'),
+                zoom_arcsec=zoom_arcsec, context_arcsec=context_arcsec,
+                wcs_from=wcs_from, dpi=dpi)
+    if out is not None:
+        print(f"  [overlay] wrote {out}")
     return out
 
 

@@ -158,8 +158,9 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
 
     Rebuilds the galaxy's scene from the immutable sidecar (every shape,
     amplitude, and plane coefficient pinned; consumed neighbors from the
-    sidecar's own snapshot, catalog neighbors from the cached catalog),
-    re-renders, and integrates the aperture at R. Reuses the measurement
+    sidecar's own snapshot, catalog neighbors from the cached catalog, the
+    target/sky boundary from its recipe snapshot), re-renders, and
+    integrates the aperture at R. Reuses the measurement
     pipeline in its pinned, no-write mode, so the science-aperture products
     are never touched. write_qa writes per-band scene figures to a scoped
     QA/remeasure_R<N>as/ subdir (never the science QA). Returns
@@ -179,6 +180,9 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
              or Path(provenance_path).name.split('_measured')[0])
     instruments = [i.lower() for i in (prov.get('instruments') or [])]
     cutout = float(prov.get('cutout_arcsec', 120.0))
+    # A run that moved the target/sky boundary must be rebuilt on the same
+    # one -- it decides which pixels the plane and mesh ever saw.
+    sky_rmin = ((prov.get('scene') or {}).get('recipe') or {}).get('BG_RMIN_AS')
     if aperture_arcsec > cutout / 2.0:
         raise ValueError(
             f"aperture {aperture_arcsec:g}\" exceeds the stamp half-width "
@@ -199,7 +203,8 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
         frame = run_measure(coord, label, str(galaxy_dir),
                             instruments=instruments,
                             aperture_arcsec=aperture_arcsec,
-                            cutout_arcsec=cutout, rgrid=grid, pin_by_band=pin,
+                            cutout_arcsec=cutout, sky_rmin_arcsec=sky_rmin,
+                            rgrid=grid, pin_by_band=pin,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     return {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
