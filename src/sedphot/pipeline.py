@@ -318,6 +318,18 @@ def run_measure(
         frozen components).
     registry_update : bool
         Also write this galaxy's solved seats back to the registry.
+    pin_by_band : dict, optional
+        Reconstruction hook: {band_key: pin} rebuilds each band from a
+        stored fit instead of solving (see measure.solve.pinned_fit). A
+        pinned band is treated as self-contained, so no reference/transfer
+        state is threaded through it.
+    write_outputs : bool
+        False suppresses every product -- no table, no sidecar, no growth
+        curves -- so a re-report cannot touch the science-aperture files.
+        The frame is still returned. [default: True]
+    qa_dir : str or Path, optional
+        Send QA figures here instead of <Inst>/QA/, so a reconstruction's
+        figures land in their own scoped directory.
     dump_arrays : bool
         Write per-band array bundles under <Inst>/QA/ (debug).
     legacy_dr : str

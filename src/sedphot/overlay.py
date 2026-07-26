@@ -74,7 +74,10 @@ PROVIDER_STYLES = {
     'sdss':      dict(marker='p', s=80, edgecolors='tab:cyan',    label='SDSS'),
     'panstarrs': dict(marker='^', s=80, edgecolors='tab:blue',    label='Pan-STARRS'),
     'jplus':     dict(marker='*', s=110, edgecolors='tab:pink',   label='J-PLUS'),
-    'hst':       dict(marker='o', s=70, edgecolors='tab:green',   label='HST HAP'),
+    # Fallback for a HAP catalog type not listed above. Deliberately NOT the
+    # segment style: an unrecognized type drawn as segment would be
+    # indistinguishable from the real thing on the figure.
+    'hst':       dict(marker='8', s=70, edgecolors='tab:gray',    label='HST HAP (other)'),
     'aperture':  dict(marker='D', s=55, edgecolors='white',       label='sedphot aperture'),
     'sersic':    dict(marker='h', s=60, edgecolors='0.8',         label='sedphot sersic'),
 }

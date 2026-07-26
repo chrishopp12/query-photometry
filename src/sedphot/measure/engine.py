@@ -333,6 +333,12 @@ def measure_band(
         (forced-photometry mode).
     registry_update : bool
         Harvest this band's solved seats into scene['registry'].
+    pin : dict, optional
+        Rebuild a stored fit instead of solving: seat shapes, amplitudes,
+        plane coefficients, mesh, and the consumed-registry snapshot all
+        come from the sidecar (see solve.pinned_fit). A pinned band neither
+        solves nor harvests, and `ref` must be None -- the band is treated
+        as self-contained.
     dump_dir : str or Path, optional
         Write the per-band array bundle here (debug).
 

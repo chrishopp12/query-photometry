@@ -51,13 +51,13 @@ def test_nan_blank_cutout_fails():
 def test_truncated_strip_fails():
     # A stack-boundary cutout arrives as a thin strip: the target sits on
     # real data but closer than pad_arcsec to the array edge, so the
-    # aperture cannot fit (the c35 failure).
+    # aperture cannot fit.
     assert not _covers_target(_fits_bytes(np.ones((60, 400), np.float32)), TARGET)
 
 
 def test_partial_edge_through_aperture_fails():
     # Blank edge slicing through the pad box but not the target pixel
-    # itself (the ~30x-low c12 failure).
+    # itself -- the failure mode that reported fluxes ~30x low.
     data = np.ones((400, 400), np.float32)
     data[:, 230:] = 0.0  # target at x=200, pad box reaches x=280
     assert not _covers_target(_fits_bytes(data), TARGET)
