@@ -511,6 +511,14 @@ def measure_band(
         if comps:
             seats, drops = build_seats(comps, patches, stamp, image,
                                        tag=tag)
+            # Mark which seats are the target's OWN light. A declared
+            # target_system member is attributed to the target and never
+            # subtracted, so its shape belongs to the measurement definition
+            # and transfer bands freeze it with the target (solve._target_side).
+            # Only the engine knows the system, so it tags the seats here and
+            # the tag rides ref['seats'] to every sibling band.
+            for seat in seats:
+                seat['system'] = seat['owner'] in system
     elif ref.get('seats'):
         seats, drops = ref['seats'], set(ref['drops'])
 

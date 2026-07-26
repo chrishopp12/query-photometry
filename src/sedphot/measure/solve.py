@@ -12,12 +12,12 @@ exactly at every trial of the shape parameters -- with the Gram block
 of the constant fixed columns precomputed and shared across the
 alternation's warm re-solves.
 
-Reference bands solve seat shapes; transfer bands freeze the TARGET
-seat at the reference shape (the measurement definition never
-re-negotiates per band) and re-solve NEIGHBOR seat shapes warm, with
-seat fluxes leashed to color-scaled reference values (subtraction wants
-per-band fidelity: chromatic morphology is real, especially for large
-envelopes).
+Reference bands solve seat shapes; transfer bands freeze every
+TARGET-SYSTEM seat at the reference shape (the measurement definition
+never re-negotiates per band, and a declared member's light is the
+target's own) and re-solve NEIGHBOR seat shapes warm, with seat fluxes
+leashed to color-scaled reference values (subtraction wants per-band
+fidelity: chromatic morphology is real, especially for large envelopes).
 
 Requirements:
     numpy, scipy, astropy
@@ -360,6 +360,22 @@ def solve_shapes(
 # ------------------------------------
 # Transfer-band plumbing
 # ------------------------------------
+def _target_side(seat: dict) -> bool:
+    """Whether a seat's light belongs to the target system.
+
+    A declared target_system member -- a dumbbell's second nucleus, a bound
+    companion -- is the target's OWN light: integrated into the aperture,
+    never subtracted, never masked. Its shape is therefore part of the
+    measurement definition, so a transfer band freezes it exactly as it
+    freezes the target, and the system's total shape is not re-negotiated
+    band by band through one of its components.
+
+    Seats built without the tag fall back to the name, which is the same
+    answer wherever no member was declared.
+    """
+    if 'system' in seat:
+        return bool(seat['system'])
+    return seat['owner'] == 'target'
 def _transfer_setup(seats, ref, stamp, psf, free_target=False,
                     freeze_neighbors=None):
     """Band-local seat machinery for a transfer band.
@@ -385,7 +401,7 @@ def _transfer_setup(seats, ref, stamp, psf, free_target=False,
     if freeze_neighbors is not None:
         adopted = np.asarray(freeze_neighbors, float)
         for i, seat in enumerate(seats):
-            if seat['owner'] != 'target':
+            if not _target_side(seat):
                 p_local[slices[i]] = adopted[slices[i]]
         free_idx = []
         frozen_idx = list(range(len(seats)))
@@ -393,8 +409,8 @@ def _transfer_setup(seats, ref, stamp, psf, free_target=False,
         free_idx = list(range(len(seats)))
         frozen_idx = []
     else:
-        free_idx = [i for i, s in enumerate(seats) if s['owner'] != 'target']
-        frozen_idx = [i for i, s in enumerate(seats) if s['owner'] == 'target']
+        free_idx = [i for i, s in enumerate(seats) if not _target_side(s)]
+        frozen_idx = [i for i, s in enumerate(seats) if _target_side(s)]
     frozen_cols = (render_seats(
         [seats_local[i] for i in frozen_idx],
         np.concatenate([p_local[slices[i]] for i in frozen_idx]),

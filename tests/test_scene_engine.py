@@ -860,6 +860,41 @@ def test_freeze_neighbors_adopts_the_free_solves_shapes():
         assert np.allclose(zp[sl], pp[sl])        # target: still transferred
 
 
+def test_declared_system_members_freeze_with_the_target():
+    """A target_system member is the target's OWN light -- integrated, never
+    subtracted -- so a transfer band freezes its shape as it freezes the
+    target's. Otherwise the system's total shape is re-negotiated band by
+    band through one of its components, which is exactly what freezing the
+    target is meant to prevent."""
+    (rstamp, rpsf, rimg, rcomps, rseats, rdrops), tr = _gradient_bands()
+    ref_fit = joint_fit(rimg, np.ones(rimg.shape, bool), rstamp, rpsf,
+                        rcomps, rseats, rdrops)
+    n_fixed = len(ref_fit['fixed'])
+    ref = dict(seats=rseats, drops=sorted(rdrops),
+               p=ref_fit['solve_info']['p'], pix=rstamp.pixscale,
+               col_flux=[max(float(a), 0.0)
+                         for a in ref_fit['amps'][n_fixed:]])
+    stamp, psf, image, comps, seats, drops = tr
+    args = (image, np.ones(image.shape, bool), stamp, psf, comps, seats, drops)
+
+    # Untagged: the non-target seat is a neighbour and re-solves per band.
+    for s in seats:
+        s.pop('system', None)
+    loose = joint_fit(*args, ref=ref)
+    assert loose['solve_info'] is not None
+
+    # Declared a system member: nothing is left free, so no shape solve runs
+    # and every seat holds its transferred reference shape.
+    for s in seats:
+        s['system'] = True
+    tight = joint_fit(*args, ref=ref)
+    for s in seats:
+        s.pop('system', None)
+    assert tight['solve_info'] is None
+    assert len(tight['seat_params']) == len(seats) * recipe.SEAT_NPARAMS
+    assert not np.allclose(tight['seat_params'], loose['seat_params'])
+
+
 def test_free_solve_first_recovers_the_neighbor_shape_better():
     """A neighbor solved against a target held at the WRONG shape is biased.
 
