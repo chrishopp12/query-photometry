@@ -796,7 +796,7 @@ def test_joint_fit_blind_scene_converges():
 # ------------------------------------
 def _gradient_bands():
     """A reference band with an EXTENDED target and a transfer band with a
-    compact one -- a real colour gradient, so the free-target solve has
+    compact one -- a real color gradient, so the free-target solve has
     something to find and the transferred shape is genuinely wrong."""
     shape_2d = (240, 240)
     psf = moffat_kernel(1.3, PIX)
@@ -877,7 +877,7 @@ def test_declared_system_members_freeze_with_the_target():
     stamp, psf, image, comps, seats, drops = tr
     args = (image, np.ones(image.shape, bool), stamp, psf, comps, seats, drops)
 
-    # Untagged: the non-target seat is a neighbour and re-solves per band.
+    # Untagged: the non-target seat is a neighbor and re-solves per band.
     for s in seats:
         s.pop('system', None)
     loose = joint_fit(*args, ref=ref)
