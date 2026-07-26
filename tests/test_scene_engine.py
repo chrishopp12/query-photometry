@@ -23,8 +23,8 @@ from sedphot.measure.render import (ampl_from_total, render_sersic,
                                     sersic_profile)
 from sedphot.measure.seats import (apply_registry, build_seats,
                                    harvest_seats, load_registry,
-                                   registry_name, save_registry,
-                                   seat_slices)
+                                   registry_name, resolve_registry_key,
+                                   save_registry, seat_slices)
 from sedphot.measure.solve import joint_fit, pinned_fit
 from sedphot.measure.stamp import Stamp, radii_arcsec
 
@@ -693,6 +693,59 @@ def test_registry_save_is_atomic_and_round_trips(tmp_path):
 def test_registry_name_deterministic():
     assert registry_name(150.0, 2.0) == registry_name(150.0, 2.0)
     assert registry_name(150.0, 2.0) != registry_name(150.1, 2.0)
+
+
+def _entry(ra, dec):
+    return {'ra': ra, 'dec': dec, 'components': {}}
+
+
+def test_registry_key_coalesces_a_drifted_anchor():
+    """A seat anchor drifts across bands, so keying each band on its own
+    rounded position splits one physical source across two keys -- and the
+    split invites the same-band double subtraction the registry prevents.
+    Anything inside the tolerance must land on the existing key."""
+    # 0.5" of declination, inside the 1" tolerance -- but it crosses the
+    # arcsec rounding boundary the key is built on, which is exactly how a
+    # coarse-pixel solve ends up under a second name.
+    drifted = 2.0 + 0.5 / 3600.0
+    existing = registry_name(150.0, 2.0)
+    registry = {existing: _entry(150.0, 2.0)}
+    # A fresh name would differ; the coalesce keeps one source on one key.
+    assert registry_name(150.0, drifted) != existing
+    assert resolve_registry_key(registry, 150.0, drifted) == existing
+
+
+def test_registry_key_keeps_distinct_sources_apart():
+    existing = registry_name(150.0, 2.0)
+    registry = {existing: _entry(150.0, 2.0)}
+    far = 5.0 / 3600.0                          # 5" is a different source
+    got = resolve_registry_key(registry, 150.0 + far, 2.0)
+    assert got == registry_name(150.0 + far, 2.0) != existing
+
+
+def test_registry_key_takes_the_nearest_candidate():
+    near, far = registry_name(150.0, 2.0), registry_name(150.0, 2.0002)
+    registry = {far: _entry(150.0, 2.0002),     # 0.72" away
+                near: _entry(150.0, 2.00002)}   # 0.07" away
+    assert resolve_registry_key(registry, 150.0, 2.0) == near
+
+
+def test_registry_key_survives_a_malformed_entry():
+    """A hand-edited or partially-written entry must not break a harvest."""
+    good = registry_name(150.0, 2.0)
+    registry = {'no-position': {'components': {}},
+                'bad-position': {'ra': 'nonsense', 'dec': None},
+                good: _entry(150.0, 2.0)}
+    assert resolve_registry_key(registry, 150.0, 2.0) == good
+
+
+def test_registry_key_tolerance_is_overridable():
+    existing = registry_name(150.0, 2.0)
+    registry = {existing: _entry(150.0, 2.0)}
+    drift = 3.0 / 3600.0
+    assert resolve_registry_key(registry, 150.0 + drift, 2.0) != existing
+    assert resolve_registry_key(registry, 150.0 + drift, 2.0,
+                                tol_arcsec=5.0) == existing
 
 
 # ------------------------------------
