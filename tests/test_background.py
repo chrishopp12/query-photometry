@@ -134,3 +134,49 @@ def test_ambient_surface_excludes_masked_pixels():
     _, _, _, medians = bin_grid(work, usable, PIX)
     assert np.isfinite(medians[3, 4])
     assert abs(medians[3, 4]) < 0.05
+
+
+# ------------------------------------
+# Sky-floor override (recipe.sky_floor)
+# ------------------------------------
+def test_sky_floor_scopes_the_override_and_restores_it():
+    default = recipe.BG_RMIN_AS
+    with recipe.sky_floor(4.0):
+        assert recipe.BG_RMIN_AS == 4.0
+    assert recipe.BG_RMIN_AS == default
+    # None is the no-op the pipeline passes when the flag is absent
+    with recipe.sky_floor(None):
+        assert recipe.BG_RMIN_AS == default
+    assert recipe.BG_RMIN_AS == default
+
+
+def test_sky_floor_restores_on_exception():
+    default = recipe.BG_RMIN_AS
+    with pytest.raises(RuntimeError):
+        with recipe.sky_floor(3.0):
+            raise RuntimeError("boom")
+    assert recipe.BG_RMIN_AS == default
+
+
+def test_sky_floor_moves_the_pixels_that_vote_on_the_plane():
+    """The boundary decides which pixels the background ever sees."""
+    rr = center_radii()
+    good = np.ones(SHAPE, bool)
+    work = noise_image(101)
+    default = bin_plane(work, good, rr, PIX)
+    with recipe.sky_floor(4.0):
+        lowered = bin_plane(work, good, rr, PIX)
+    # The annulus freed between 4" and the 15" default is ~26 bins at
+    # BIN_AS; every one of them is a bin the default never counted.
+    assert lowered['n_bins'] > default['n_bins'] + 15
+    # the extra bins are sky, not source, so the level must not move
+    assert lowered['const'] == pytest.approx(default['const'], abs=0.005)
+
+
+def test_sky_floor_reaches_the_recipe_snapshot():
+    """The sidecar must record the boundary the run actually used --
+    reconstruct reads it back to rebuild the same scene."""
+    default = recipe.snapshot()['BG_RMIN_AS']
+    with recipe.sky_floor(4.0):
+        assert recipe.snapshot()['BG_RMIN_AS'] == 4.0
+    assert recipe.snapshot()['BG_RMIN_AS'] == default
