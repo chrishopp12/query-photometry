@@ -162,6 +162,41 @@ def test_pinned_fit_rescales_shapes_onto_the_bands_own_grid():
     assert not np.allclose(unscaled, by_hand, atol=1e-6)
 
 
+def test_pinned_fit_keeps_two_seats_of_one_owner_apart():
+    """A target_halo target owns TWO seats -- core Sersic and Nuker halo -- so
+    the stored amps carry the same owner twice. Keyed by name they collapse and
+    the core renders at the halo's amplitude."""
+    stamp = _stamp()
+    psf = moffat_kernel(0.9, stamp.pixscale)
+    ra, dec = float(stamp.wcs.wcs.crval[0]), float(stamp.wcs.wcs.crval[1])
+    seats = [dict(kind='sersic', owner='target', ra=ra, dec=dec),
+             dict(kind='nuker', owner='target', ra=ra, dec=dec)]
+    pin = dict(seat_params=[4.0, 2.0, 0.1, 0.0, 0.0, 0.0,
+                           20.0, 3.0, 0.1, 0.0, 0.0, 0.0],
+               seat_pix=None, bg_coefs=[0.0, 0.0, 0.0],
+               amps=[['target', 100.0], ['target', 900.0]])
+    fit = pinned_fit(np.zeros(stamp.data.shape),
+                     np.ones(stamp.data.shape, bool), stamp, psf, [],
+                     seats, set(), pin=pin)
+    assert list(fit['amps']) == [100.0, 900.0]      # order preserved, not 900/900
+    assert fit['seat_amps'] == [100.0, 900.0]
+
+
+def test_pinned_fit_falls_back_for_an_owner_with_no_stored_amp():
+    """An owner the stored fit never carried keeps its own catalog flux."""
+    stamp = _stamp()
+    psf = moffat_kernel(0.9, stamp.pixscale)
+    seat = [dict(kind='sersic', owner='n1',
+                 ra=float(stamp.wcs.wcs.crval[0]),
+                 dec=float(stamp.wcs.wcs.crval[1]))]
+    pin = dict(seat_params=[4.0, 2.0, 0.1, 0.0, 0.0, 0.0], seat_pix=None,
+               bg_coefs=[0.0, 0.0, 0.0], amps=[['somebody_else', 5.0]])
+    fit = pinned_fit(np.zeros(stamp.data.shape),
+                     np.ones(stamp.data.shape, bool), stamp, psf, [],
+                     seat, set(), pin=pin)
+    assert fit['amps'][0] == pytest.approx(fit['col_flux'][0])
+
+
 def test_pinned_fit_without_a_stored_grid_assumes_the_bands_own():
     """A sidecar predating pix_ref renders on this band's grid unchanged."""
     stamp = _stamp()

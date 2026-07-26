@@ -31,6 +31,7 @@ Notes:
 from __future__ import annotations
 
 import time
+from collections import defaultdict, deque
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -696,9 +697,17 @@ def pinned_fit(
     col_flux = [max(float(c.sum()) * cf, 1e-9) for c in cols]
     bases = fixed_bases + cols
     base_owner = [c['name'] for c in fixed] + owners
-    name_amp = {o: float(a) for o, a in pin['amps']}
+    # One owner can hold SEVERAL columns: a target_halo target owns both a
+    # core Sersic and a Nuker halo seat. Keying the stored amplitudes by name
+    # collapses those into one, so the core would render at the halo's
+    # amplitude. Queue per owner and consume in the recorded order, which is
+    # the order base_owner is built in on both sides.
+    queued: dict = defaultdict(deque)
+    for owner, amp in pin['amps']:
+        queued[owner].append(float(amp))
     flux = np.asarray(fixed_flux + col_flux) if bases else np.zeros(0)
-    amps = np.array([name_amp.get(o, f) for o, f in zip(base_owner, flux)])
+    amps = np.array([queued[o].popleft() if queued[o] else f
+                     for o, f in zip(base_owner, flux)])
     mults = amps / flux if flux.size else amps
     coefs = [float(v) for v in pin['bg_coefs']]
     bg = dict(img=eval_plane(coefs, image.shape), const=coefs[0],
