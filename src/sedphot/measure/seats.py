@@ -472,24 +472,35 @@ def apply_registry(
                 SkyCoord(rc['ra'], rc['dec'], unit='deg'))]
             t0, slope = pa_map(wcs, x, y)
             theta = t0 + slope * rc['pa']
-            # The geometry the component is rendered from is also the geometry
-            # its MASK must be sized on (aperture.build_mask caps the mask at
-            # GEO_REFF_FACTOR x reff, falling back to a seeing-sized disc when
-            # a component carries no shape). Leaving it None here masks a
-            # resolved galaxy as a point source -- and makes the mask depend on
-            # whether the source happens to be registered rather than on the
-            # data. `gate` stays False, so carrying a shape adds no seat.
+            # A SERSIC record carries the geometry its mask must be sized on.
+            # aperture.build_mask caps a neighbor's mask at GEO_REFF_FACTOR x
+            # reff and falls back to a seeing-sized disc for a shapeless
+            # component, so leaving it None masks a resolved galaxy as a point
+            # source -- and makes the mask depend on whether the source happens
+            # to be registered rather than on the data. `gate` stays False, so
+            # carrying a shape adds no seat.
+            #
+            # A NUKER halo gets none, deliberately. Masking is for compact
+            # neighbor light the model may have got locally wrong; a cD
+            # envelope is smooth, is already subtracted, and leaves a
+            # background-scale residual the mesh owns. Nothing masks a halo
+            # anywhere else either -- GATED_HALO is False, so the Nuker family
+            # belongs to the TARGET, and build_mask skips the target outright.
+            # Sized on rb it would cap at 2.5 x tens of arcsec, larger than the
+            # stamp, and swallow the aperture of any galaxy embedded in an
+            # envelope.
+            shape = None
             if rc['kind'] == 'sersic':
                 scale_px = rc['reff_as'] / pix
                 base = render_sersic_boxed(scale_px, rc['n'], rc['ellip'],
                                            theta, x, y, shape_2d, psf)
+                shape = dict(kind='sersic', reff_px=float(scale_px),
+                             n=float(rc['n']), ellip=float(rc['ellip']),
+                             theta=float(theta), pa=float(rc['pa']))
             else:
-                scale_px = rc['rb_as'] / pix
-                base = render_nuker(scale_px, rc['beta'], rc['ellip'], theta,
-                                    x, y, shape_2d, psf, pix)
-            shape = dict(kind=rc['kind'], reff_px=float(scale_px),
-                         ellip=float(rc['ellip']), theta=float(theta),
-                         pa=float(rc['pa']))
+                base = render_nuker(rc['rb_as'] / pix, rc['beta'],
+                                    rc['ellip'], theta, x, y, shape_2d,
+                                    psf, pix)
             unit_sum = float(base.sum())          # fixed-norm shape integral
             unit_in_stamp = unit_sum * cf
             flux_ref = float(rc['flux_ref'])

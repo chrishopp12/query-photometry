@@ -888,6 +888,34 @@ def test_consumed_registry_component_carries_its_shape():
             > recipe.GEO_SEEING_FLOOR * 1.3 / PIX)
 
 
+def test_consumed_nuker_halo_carries_no_shape():
+    """A cD envelope is smooth, already subtracted, and its residual is the
+    mesh's. Nothing masks a halo anywhere else -- GATED_HALO is False, so the
+    Nuker family belongs to the target and build_mask skips the target. Sized
+    on rb it would cap at 2.5 x tens of arcsec, wider than the stamp, and
+    swallow the aperture of any galaxy embedded in an envelope."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    sky = stamp.wcs.pixel_to_world(stamp.cx + 40, stamp.cy)
+    entry = {'J1': dict(ra=float(sky.ra.deg), dec=float(sky.dec.deg),
+                        components={'Legacy_r': [
+                            dict(kind='sersic', ra=float(sky.ra.deg),
+                                 dec=float(sky.dec.deg), reff_as=2.0, n=2.0,
+                                 ellip=0.1, pa=0.0, flux_ref=400.0,
+                                 flux_home=None, vantage='target'),
+                            dict(kind='nuker', ra=float(sky.ra.deg),
+                                 dec=float(sky.dec.deg), rb_as=43.0,
+                                 beta=2.5, ellip=0.1, pa=0.0,
+                                 flux_ref=5000.0, flux_home=None,
+                                 vantage='target')]})}
+    out, _ = apply_registry([], entry, stamp, psf, 'Legacy_r', 'Legacy')
+    by_kind = {(c['shape'] or {}).get('kind'): c for c in out}
+    assert by_kind['sersic']['shape']['reff_px'] == pytest.approx(2.0 / PIX)
+    assert by_kind[None]['shape'] is None          # the halo, unmaskable
+    # and the halo IS still rendered and subtracted -- it just is not masked
+    assert by_kind[None]['base'].sum() > 0
+
+
 def test_declared_system_members_freeze_with_the_target():
     """A target_system member is the target's OWN light -- integrated, never
     subtracted -- so a transfer band freezes its shape as it freezes the
