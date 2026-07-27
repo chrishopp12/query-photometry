@@ -860,6 +860,34 @@ def test_freeze_neighbors_adopts_the_free_solves_shapes():
         assert np.allclose(zp[sl], pp[sl])        # target: still transferred
 
 
+def test_consumed_registry_component_carries_its_shape():
+    """build_mask sizes a neighbor's mask at GEO_REFF_FACTOR x reff, and falls
+    back to a seeing-sized disc for a component with no shape. A consumed
+    registry entry knows its reff, so leaving the shape off masks a resolved
+    galaxy as a point source -- and makes the mask depend on whether the
+    source is registered rather than on the data."""
+    stamp = make_stamp(np.zeros((240, 240)))
+    psf = moffat_kernel(1.3, PIX)
+    sky = stamp.wcs.pixel_to_world(stamp.cx + 40, stamp.cy)
+    entry = {'J1': dict(ra=float(sky.ra.deg), dec=float(sky.dec.deg),
+                        components={'Legacy_r': [dict(
+                            kind='sersic', ra=float(sky.ra.deg),
+                            dec=float(sky.dec.deg), reff_as=4.0, n=1.5,
+                            ellip=0.3, pa=20.0, flux_ref=500.0,
+                            flux_home=None, vantage='neighbor')]})}
+    out, consumed = apply_registry([], entry, stamp, psf, 'Legacy_r', 'Legacy')
+    assert [c['name'] for c in consumed] == ['J1']
+    comp = out[0]
+    assert comp['reg'] is True and comp['gate'] is False   # still no seat
+    sh = comp['shape']
+    assert sh is not None
+    assert sh['reff_px'] == pytest.approx(4.0 / PIX)       # its OWN scale...
+    assert sh['ellip'] == pytest.approx(0.3)
+    # ... which is far larger than the seeing disc the None branch would use
+    assert (recipe.GEO_REFF_FACTOR * sh['reff_px']
+            > recipe.GEO_SEEING_FLOOR * 1.3 / PIX)
+
+
 def test_declared_system_members_freeze_with_the_target():
     """A target_system member is the target's OWN light -- integrated, never
     subtracted -- so a transfer band freezes its shape as it freezes the
