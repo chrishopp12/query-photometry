@@ -228,8 +228,6 @@ def _resolve_brick(coord: SkyCoord, dr: str,
       AND 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
                                  {60.0 / 3600.0:.8f})
     """
-    from ..retry import retry_transient
-
     def _run():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

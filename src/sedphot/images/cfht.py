@@ -210,7 +210,6 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     products or result : list[ImageProduct] | ProviderResult
         Image products on success; a no_coverage/error result otherwise.
     """
-    import astropy.units as u
     from astroquery.cadc import Cadc
 
     cache_dir = Path(cache_dir)
