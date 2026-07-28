@@ -636,7 +636,7 @@ def _matching_existing_table(spherex_dir: Path, payload: dict,
     sidecar_path = pretag.with_suffix(".provenance.json")
     if pretag.exists() and sidecar_path.exists():
         try:
-            recorded = json.loads(sidecar_path.read_text())
+            recorded = json.loads(sidecar_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             return None
         if _sidecar_payload(recorded) == payload:
@@ -657,7 +657,7 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
     manifest = {"kind": "spherex_extractions", "entries": {}}
     if manifest_path.exists():
         try:
-            manifest = json.loads(manifest_path.read_text())
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             print(f"  [spherex] unreadable {MANIFEST_NAME}; rebuilding it")
         manifest.setdefault("entries", {})
@@ -670,7 +670,7 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
             timespec="seconds"),
     }
     tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n", encoding='utf-8')
     tmp.replace(manifest_path)
 
 
@@ -749,14 +749,15 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
         sidecar_path = existing.with_suffix(".provenance.json")
         if sidecar_path.exists():
             try:
-                recorded = json.loads(sidecar_path.read_text())
+                recorded = json.loads(sidecar_path.read_text(encoding='utf-8'))
             except (OSError, json.JSONDecodeError):
                 pass
         manifest_path = spherex_dir / MANIFEST_NAME
         known = {}
         if manifest_path.exists():
             try:
-                known = json.loads(manifest_path.read_text()).get("entries", {})
+                known = json.loads(
+                    manifest_path.read_text(encoding='utf-8')).get("entries", {})
             except (OSError, json.JSONDecodeError):
                 pass
         if tag not in known:

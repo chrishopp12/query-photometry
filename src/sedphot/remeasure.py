@@ -140,7 +140,7 @@ def remeasure(provenance_path: str | Path,
     """
     if mode not in _COG_FIELD:
         raise ValueError(f"mode must be one of {sorted(_COG_FIELD)}, got {mode!r}")
-    prov = json.loads(Path(provenance_path).read_text())
+    prov = json.loads(Path(provenance_path).read_text(encoding='utf-8'))
     rev = prov.get('git_rev', '?')
     integrated = aperture_arcsec is None or aperture_arcsec <= 0
     # Past the stored grid the empirical curve holds no value to read;
@@ -336,7 +336,7 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     from .catalogs.legacy import LEGACY_DR_DEFAULT
     from .pipeline import run_measure
 
-    prov = json.loads(Path(provenance_path).read_text())
+    prov = json.loads(Path(provenance_path).read_text(encoding='utf-8'))
     tgt = prov.get('target') or {}
     if tgt.get('ra_deg') is None or tgt.get('dec_deg') is None:
         raise ValueError(f"{provenance_path} records no target position, so "

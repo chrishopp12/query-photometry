@@ -759,7 +759,7 @@ def load_registry(path: str | Path | None) -> dict:
     if not Path(path).exists():
         print(f"  registry: {path} does not exist; starting empty")
         return {}
-    with open(path) as handle:
+    with open(path, encoding='utf-8') as handle:
         return json.load(handle)
 
 
@@ -773,6 +773,6 @@ def save_registry(registry: dict, path: str | Path) -> None:
     """
     path = Path(path)
     tmp = path.with_suffix(path.suffix + '.tmp')
-    with open(tmp, 'w') as handle:
+    with open(tmp, 'w', encoding='utf-8') as handle:
         json.dump(registry, handle, indent=1, sort_keys=True)
     tmp.replace(path)

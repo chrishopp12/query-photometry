@@ -129,7 +129,7 @@ def prepare_scene(
     patch_path = Path(out_dir) / recipe.PATCH_FILENAME
     if patch_path.exists():
         try:
-            with open(patch_path) as handle:
+            with open(patch_path, encoding='utf-8') as handle:
                 patches = json.load(handle)
         except json.JSONDecodeError as e:
             raise ValueError(f"{patch_path} is not valid JSON: {e}") from e

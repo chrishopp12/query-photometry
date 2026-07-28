@@ -109,7 +109,7 @@ def write_coverage_report(results: list[ProviderResult], path: str | Path) -> Pa
         for r in results
     }
     path = Path(path)
-    path.write_text(json.dumps(report, indent=2) + "\n")
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding='utf-8')
     return path
 
 

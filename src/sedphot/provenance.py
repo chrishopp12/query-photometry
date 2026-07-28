@@ -88,5 +88,6 @@ def write_sidecar(product_path: str | Path, meta: dict) -> Path:
         **meta,
     }
     sidecar_path = product_path.with_suffix(".provenance.json")
-    sidecar_path.write_text(json.dumps(record, indent=2, default=str) + "\n")
+    sidecar_path.write_text(json.dumps(record, indent=2, default=str) + "\n",
+                            encoding='utf-8')
     return sidecar_path
