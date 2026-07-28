@@ -37,9 +37,10 @@ Notes:
     across fetch dates (server-side calibration evolves), and existing
     filenames are baked into roster/run provenance. Re-requesting a
     configuration that is already on disk -- under its tagged name, or as
-    a pre-tag bare table_photometry.csv whose sidecar records the same
-    config -- reuses it; move a table aside deliberately to force a
-    re-fetch. When the service fails, fetch() prints the manual Data
+    a pre-tag bare table_photometry.csv -- reuses it, provided the table's
+    own sidecar records that same config; a table no sidecar vouches for is
+    neither reused nor overwritten. Move a table aside deliberately to
+    force a re-fetch. When the service fails, fetch() prints the manual Data
     Explorer recipe -- "save as CSV" -- instead of writing a partial file.
     Epochs with broken file metadata kill jobs server-side; the
     IRSA-documented workaround is restricting to a known-good MJD window
@@ -620,27 +621,37 @@ def _sidecar_payload(sidecar: dict) -> dict | None:
         return None
 
 
+def _records_config(table_path: Path, payload: dict) -> bool:
+    """True when the table's own sidecar records exactly this configuration.
+
+    The sidecar is written AFTER the CSV, so a table without a readable one
+    was never verified and never reached the manifest -- the filename alone,
+    tag included, is not evidence of what was extracted.
+    """
+    sidecar_path = table_path.with_suffix(".provenance.json")
+    if not sidecar_path.exists():
+        return False
+    try:
+        recorded = json.loads(sidecar_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return _sidecar_payload(recorded) == payload
+
+
 def _matching_existing_table(spherex_dir: Path, payload: dict,
                              tag: str) -> Path | None:
     """An already-fetched table for this configuration, if any.
 
-    The tagged filename is checked first, then the untagged name whose
-    sidecar records the same configuration. Untagged tables are recognized
-    in place and never renamed: their names are baked into roster entries
-    and run provenance.
+    The tagged filename is checked first, then the untagged name. Either
+    way the table's own provenance sidecar must exist and record this exact
+    configuration -- a name is a claim, a sidecar is the evidence. Untagged
+    tables are recognized in place and never renamed: their names are baked
+    into roster entries and run provenance.
     """
-    tagged = spherex_dir / f"table_photometry.{tag}.csv"
-    if tagged.exists():
-        return tagged
-    pretag = spherex_dir / PRETAG_TABLE_NAME
-    sidecar_path = pretag.with_suffix(".provenance.json")
-    if pretag.exists() and sidecar_path.exists():
-        try:
-            recorded = json.loads(sidecar_path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return None
-        if _sidecar_payload(recorded) == payload:
-            return pretag
+    for candidate in (spherex_dir / f"table_photometry.{tag}.csv",
+                      spherex_dir / PRETAG_TABLE_NAME):
+        if candidate.exists() and _records_config(candidate, payload):
+            return candidate
     return None
 
 
@@ -689,10 +700,12 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
     window) owns a tagged table under Photometry/SPHEREx/, so PSF and
     Sersic extractions -- or different Sersic shapes -- coexist without
     manual renames. Re-requesting an existing configuration reuses its
-    table (status ok, nothing fetched); move a table aside deliberately to
-    force a re-fetch. Nothing on disk is ever overwritten or renamed (raw
-    tables can be irreplaceable manual downloads, and existing names are
-    baked into run provenance).
+    table (status ok, nothing fetched) when the table's own sidecar records
+    that configuration; a table no sidecar vouches for is an error, not a
+    reuse and not a fetch target. Move a table aside deliberately to force
+    a re-fetch. Nothing on disk is ever overwritten or renamed (raw tables
+    can be irreplaceable manual downloads, and existing names are baked
+    into run provenance).
 
     Parameters
     ----------
@@ -775,6 +788,16 @@ def fetch(coord, *, out_dir, model: Sersic | None = None,
                                     'reused': True})
 
     out_csv = spherex_dir / f"table_photometry.{tag}.csv"
+    if out_csv.exists():
+        # The reuse check above already refused it, so its sidecar is
+        # missing or records something else. Nothing on disk is ever
+        # overwritten, and an unverified raw table is not a fetch target.
+        message = (f"{out_csv.name} exists but no sidecar vouches for this "
+                   f"configuration; move it aside deliberately to re-fetch")
+        print(f"  [spherex] {message}")
+        print(f"  [spherex] {MANUAL_RECIPE}")
+        return ProviderResult(provider='spherex', status=STATUS_ERROR,
+                              message=f"{message}; {MANUAL_RECIPE}")
     try:
         df = fetch_spectrophotometry(
             float(coord.ra.deg), float(coord.dec.deg), model=model,

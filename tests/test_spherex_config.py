@@ -7,7 +7,7 @@ from astropy.coordinates import SkyCoord
 import sedphot.spherex as spherex_mod
 from sedphot.spherex import (PRETAG_TABLE_NAME, Sersic, config_payload,
                              extraction_tag, fetch)
-from sedphot.results import STATUS_OK
+from sedphot.results import STATUS_ERROR, STATUS_OK
 
 COORD = SkyCoord(217.0, 56.9, unit='deg')
 SHAPE = Sersic(n=4.48, axis_ratio=1.31, pa_deg=16.7, reff_arcsec=1.15)
@@ -58,17 +58,63 @@ def _fake_network(monkeypatch, n_rows=5):
     monkeypatch.setattr(spherex_mod, 'fetch_spectrophotometry', fake)
 
 
+def _write_tagged(spherex_dir, tag, sidecar=True):
+    """A tagged table and, by default, the sidecar that vouches for it."""
+    table = spherex_dir / f"table_photometry.{tag}.csv"
+    table.write_text("flux\n1\n")
+    if sidecar:
+        table.with_suffix(".provenance.json").write_text(json.dumps({
+            "model": {"type": "sersic", "n": 4.48, "axis_ratio": 1.31,
+                      "pa_deg": 16.7, "reff_arcsec": 1.15},
+            "bkg_region_size_px": 15, "mjd_range": list(MJD)}))
+    return table
+
+
 def test_existing_tag_is_reused_without_network(monkeypatch, tmp_path):
     tag = extraction_tag(SHAPE, 15, MJD)
     spherex_dir = tmp_path / "Photometry" / "SPHEREx"
     spherex_dir.mkdir(parents=True)
-    (spherex_dir / f"table_photometry.{tag}.csv").write_text("flux\n1\n")
+    _write_tagged(spherex_dir, tag)
     _no_network(monkeypatch)
 
     result = fetch(COORD, out_dir=tmp_path, model=SHAPE, mjd_range=MJD)
     assert result.status == STATUS_OK
     assert result.meta['reused'] is True
     assert result.meta['tag'] == tag
+
+
+def test_tagged_table_without_a_sidecar_is_not_reused(monkeypatch, tmp_path):
+    """write_sidecar runs after the CSV, so a tagged table missing one was
+    never verified and never reached the manifest. Reusing it on the
+    strength of its filename would make that permanent -- and the raw table
+    must not be overwritten to fix it either."""
+    tag = extraction_tag(SHAPE, 15, MJD)
+    spherex_dir = tmp_path / "Photometry" / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    table = _write_tagged(spherex_dir, tag, sidecar=False)
+    _no_network(monkeypatch)          # nothing may be fetched over it either
+
+    result = fetch(COORD, out_dir=tmp_path, model=SHAPE, mjd_range=MJD)
+    assert result.status == STATUS_ERROR
+    assert table.read_text() == "flux\n1\n"
+    assert not (spherex_dir / "extractions.json").exists()
+
+
+def test_tagged_table_whose_sidecar_disagrees_is_not_reused(monkeypatch,
+                                                            tmp_path):
+    """A sidecar recording a different configuration is evidence AGAINST
+    the filename, so the table cannot stand in for this extraction."""
+    tag = extraction_tag(SHAPE, 15, MJD)
+    spherex_dir = tmp_path / "Photometry" / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    table = _write_tagged(spherex_dir, tag)
+    table.with_suffix(".provenance.json").write_text(json.dumps({
+        "model": "point", "bkg_region_size_px": 15, "mjd_range": list(MJD)}))
+    _no_network(monkeypatch)
+
+    result = fetch(COORD, out_dir=tmp_path, model=SHAPE, mjd_range=MJD)
+    assert result.status == STATUS_ERROR
+    assert table.read_text() == "flux\n1\n"
 
 
 def test_pretag_table_with_matching_sidecar_is_reused(monkeypatch, tmp_path):
