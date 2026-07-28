@@ -74,8 +74,9 @@ def phot_table(sources, offsets_arcsec=None):
 # Style resolution
 # ------------------------------------
 def test_every_schema_source_prefix_has_a_style():
-    """A provider the schema knows must never fall through to 'other' --
-    that was the drift the standalone script carried."""
+    """A provider the schema knows must never fall through to 'other':
+    the style table and the SOURCE_PREFIXES vocabulary are one contract,
+    and a token with no entry draws as an unrecognized provider."""
     for token, prefix in SOURCE_PREFIXES.items():
         style = overlay.style_for(f"{prefix}SOMETHING")
         assert style is not overlay.DEFAULT_STYLE, f"{token} unstyled"
@@ -163,8 +164,9 @@ def test_discover_hap_total_does_not_depend_on_mast_row_order(monkeypatch):
 
 
 def test_discover_hap_total_skips_a_masked_calib_level(monkeypatch):
-    """int() on a masked cell raises, and that exception used to escape the
-    generator and take the whole verb down with a traceback."""
+    """int() on a masked cell raises, so a masked calib_level is skipped:
+    such a row cannot be identified as the level-3 total product, and
+    letting the exception escape the generator kills the whole verb."""
     coord = SkyCoord(TARGET_RA, TARGET_DEC, unit='deg')
     # The masked row sorts FIRST, so it would win if it were not skipped.
     table = _obs_table([('hst_a_total', 'detection', 3, 11),
