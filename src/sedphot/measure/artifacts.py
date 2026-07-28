@@ -40,7 +40,7 @@ def find_artifacts(
         sigma: float,
         pixscale: float,
         sb: float = 0.0,
-) -> tuple[np.ndarray, float]:
+) -> tuple[np.ndarray, float, float]:
     """Mask of catastrophic unclaimed-bright pixels.
 
     A pixel is an artifact candidate when it sits above the brightness
