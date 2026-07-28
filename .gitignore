@@ -46,5 +46,8 @@ config.*
 build/
 dist/
 
-# Per-project Claude context, local only
-CLAUDE.md
+# Per-project working notes, local only. The glob also covers the
+# "CLAUDE 2.md" conflict copies a syncing filesystem leaves behind, which
+# carry the same private context as the original but match no bare filename.
+CLAUDE*.md
+session_log*.md
