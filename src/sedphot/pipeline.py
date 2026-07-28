@@ -252,7 +252,7 @@ def run_measure(
         instruments: list[str],
         mode: str = 'aperture',
         bands: list[str] | None = None,
-        aperture_arcsec: float = 10.0,
+        aperture_arcsec: float = 12.0,
         cutout_arcsec: float = 120.0,
         scene_aperture_arcsec: float | None = None,
         sky_rmin_arcsec: float | None = None,
@@ -296,7 +296,7 @@ def run_measure(
     bands : list[str], optional
         Band subset applied to every provider. [default: provider defaults]
     aperture_arcsec : float
-        Aperture radius. [default: 10.0]
+        Aperture radius. [default: 12.0]
     cutout_arcsec : float
         Stamp width. [default: 120]
     scene_aperture_arcsec : float, optional
@@ -852,7 +852,7 @@ def run_all(
         dered: bool = False,
         mode: str = 'aperture',
         bands: list[str] | None = None,
-        aperture_arcsec: float = 10.0,
+        aperture_arcsec: float = 12.0,
         cutout_arcsec: float = 120.0,
         sky_rmin_arcsec: float | None = None,
         rgrid: list[float] | None = None,

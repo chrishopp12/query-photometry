@@ -120,6 +120,18 @@ def test_run_forwards_every_measure_option(monkeypatch):
     assert seen['hst_proposal_id'] == '12345'
 
 
+def test_measure_and_remeasure_share_an_aperture_default():
+    """A bare remeasure must re-report at the radius measure used.
+
+    Two defaults would re-report a stored fit at a radius the measurement
+    never ran, and the flux would look entirely ordinary.
+    """
+    measure = cli.build_parser().parse_args(['measure'] + TARGET + ['--all'])
+    remeasure = cli.build_parser().parse_args(
+        ['remeasure', 'x.provenance.json'])
+    assert measure.aperture == remeasure.aperture
+
+
 @pytest.mark.parametrize('verb', ['measure', 'run'])
 @pytest.mark.parametrize('flag', [['--sersic-from', 'z'],
                                   ['--sersic-seeing', '0.9'],

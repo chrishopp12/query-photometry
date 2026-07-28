@@ -117,8 +117,8 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument('--bands', nargs='+', default=None,
                        help="Band subset for every provider "
                             "[default: provider defaults]")
-    group.add_argument('--aperture', type=float, default=10.0,
-                       help="Aperture radius in arcsec [default: 10.0]")
+    group.add_argument('--aperture', type=float, default=12.0,
+                       help="Aperture radius in arcsec [default: 12.0]")
     group.add_argument('--radii', nargs='+', type=float, default=None,
                        help="Curve-of-growth radii override, arcsec "
                             "[default: 2-40 in 1\" steps]")
@@ -453,11 +453,10 @@ def build_parser() -> argparse.ArgumentParser:
                                   "empirical neighbor-subtracted flux "
                                   "[default: sersic]")
     p_remeasure.add_argument('--aperture', type=float, default=12.0,
-                             help="Circular aperture radius, arcsec. Note "
-                                  "this differs from `measure --aperture` "
-                                  "(10); pass the aperture the sidecar "
-                                  "records to reproduce the original "
-                                  "measurement [default: 12]")
+                             help="Circular aperture radius, arcsec; matches "
+                                  "the measure default, so a bare remeasure "
+                                  "re-reports at the radius the measurement "
+                                  "used [default: 12]")
     p_remeasure.add_argument('--shape', choices=['forced', 'fitted'],
                              default='forced',
                              help="Target shape the report is built on. "

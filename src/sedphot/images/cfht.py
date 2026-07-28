@@ -116,7 +116,7 @@ def _soda_nodata(data: np.ndarray) -> np.ndarray:
 
 
 def _covers_target(content: bytes, coord: SkyCoord,
-                   aperture_arcsec: float = 10.0) -> bool:
+                   aperture_arcsec: float = 12.0) -> bool:
     """Does the cutout cover the science aperture with real data?
 
     Aligned with the measurement coverage gate (COVERAGE_MIN): at least 95% of
@@ -186,7 +186,7 @@ def _mosaic_clipping_stacks(cutouts: list[bytes], coord: SkyCoord,
 # ------------------------------------
 def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 120.0,
           cache_dir: str | Path,
-          aperture_arcsec: float = 10.0) -> list[ImageProduct] | ProviderResult:
+          aperture_arcsec: float = 12.0) -> list[ImageProduct] | ProviderResult:
     """Fetch MegaPipe stack cutouts at the target via CADC SODA.
 
     Parameters
@@ -203,7 +203,7 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
         Science aperture the stack coverage is judged against; a stack that
         clips inside it fails and drives the tile-edge mosaic, matching the
         measurement coverage gate at the same aperture. The pipeline passes
-        the run's own value; the default matches the CLI's. [default: 10]
+        the run's own value; the default matches the CLI's. [default: 12]
 
     Returns
     -------
