@@ -117,9 +117,30 @@ def _token_of(source: str) -> str:
 # ------------------------------------
 # HAP composite discovery and download
 # ------------------------------------
+def _calib_level(row) -> int | None:
+    """calib_level as an int, or None when the cell carries no usable one.
+
+    MAST returns a masked table, and int() on a masked cell raises. Such a
+    row simply cannot be identified as the level-3 total product; skipping
+    it is the answer, not aborting the whole verb.
+    """
+    value = row['calib_level']
+    if value is None or np.ma.is_masked(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def discover_hap_total(coord: SkyCoord,
                        radius_arcsec: float = 60.0) -> dict | None:
     """Locate the HAP total (detection) product covering the position.
+
+    Overlapping HAP visits can each cover one position, and MAST does not
+    specify the order it returns them in, so the candidates are ranked by
+    obs_id and the lowest wins: the same field yields the same composite on
+    every run. A row whose calib_level is masked is skipped.
 
     Returns {'color_uri', 'color_file', 'fits_uri', 'fits_file'}, or None
     when no HAP total product covers the position.
@@ -136,12 +157,16 @@ def discover_hap_total(coord: SkyCoord,
     if len(hst_obs) == 0:
         return None
 
-    total = next((row for row in hst_obs
+    candidates = [row for row in hst_obs
                   if str(row['filters']).lower() == 'detection'
-                  and int(row['calib_level']) == 3), None)
-    if total is None:
+                  and _calib_level(row) == 3]
+    if not candidates:
         print("  [overlay] no HAP total/detection product at this position")
         return None
+    total = min(candidates, key=lambda row: str(row['obs_id']))
+    if len(candidates) > 1:
+        print(f"  [overlay] {len(candidates)} HAP total products cover this "
+              f"position; taking the lowest obs_id")
     print(f"  [overlay] HAP total product: {total['obs_id']}")
 
     try:

@@ -112,6 +112,81 @@ def test_source_prefixes_stay_prefix_free():
 
 
 # ------------------------------------
+# Product discovery
+# ------------------------------------
+HAP_PRODUCTS = [{'productFilename': 'x_drc_color.jpg', 'dataURI': 'mast:c'},
+                {'productFilename': 'x_total_drc.fits', 'dataURI': 'mast:f'}]
+
+
+def _obs_table(rows, masked_calib=()):
+    """A MAST-shaped observations table from (obs_id, filters, level, obsid)."""
+    from astropy.table import Table
+
+    table = Table(rows=[(*row, 'HST') for row in rows],
+                  names=('obs_id', 'filters', 'calib_level', 'obsid',
+                         'obs_collection'),
+                  masked=True)
+    if masked_calib:
+        table['calib_level'].mask = [i in masked_calib
+                                     for i in range(len(table))]
+    return table
+
+
+def _patch_mast(monkeypatch, table, seen):
+    """Patch the two MAST calls discover_hap_total makes. No network."""
+    from astroquery.mast import Observations
+
+    def fake_region(coordinates, radius=None, **kw):
+        return table
+
+    def fake_products(obsid):
+        seen.append(str(obsid))
+        return list(HAP_PRODUCTS)
+
+    monkeypatch.setattr(Observations, 'query_region', staticmethod(fake_region))
+    monkeypatch.setattr(Observations, 'get_product_list',
+                        staticmethod(fake_products))
+
+
+def test_discover_hap_total_does_not_depend_on_mast_row_order(monkeypatch):
+    """Overlapping HAP visits both cover the position; whichever row MAST
+    happened to return first must not decide which composite is used."""
+    coord = SkyCoord(TARGET_RA, TARGET_DEC, unit='deg')
+    rows = [('hst_p1234_total', 'detection', 3, 11),
+            ('hst_p0001_total', 'detection', 3, 22)]
+    for order in ([0, 1], [1, 0]):
+        seen = []
+        _patch_mast(monkeypatch, _obs_table([rows[i] for i in order]), seen)
+        found = overlay.discover_hap_total(coord)
+        assert found['fits_uri'] == 'mast:f'
+        assert seen == ['22'], f"row order {order} changed the choice"
+
+
+def test_discover_hap_total_skips_a_masked_calib_level(monkeypatch):
+    """int() on a masked cell raises, and that exception used to escape the
+    generator and take the whole verb down with a traceback."""
+    coord = SkyCoord(TARGET_RA, TARGET_DEC, unit='deg')
+    # The masked row sorts FIRST, so it would win if it were not skipped.
+    table = _obs_table([('hst_a_total', 'detection', 3, 11),
+                        ('hst_b_total', 'detection', 3, 22)],
+                       masked_calib=(0,))
+    seen = []
+    _patch_mast(monkeypatch, table, seen)
+    found = overlay.discover_hap_total(coord)
+    assert found['color_uri'] == 'mast:c'
+    assert seen == ['22']
+
+
+def test_discover_hap_total_reports_when_nothing_qualifies(monkeypatch,
+                                                           capsys):
+    coord = SkyCoord(TARGET_RA, TARGET_DEC, unit='deg')
+    table = _obs_table([('hst_a', 'f814w', 3, 11)])
+    _patch_mast(monkeypatch, table, [])
+    assert overlay.discover_hap_total(coord) is None
+    assert "no HAP total" in capsys.readouterr().out
+
+
+# ------------------------------------
 # Composite loading
 # ------------------------------------
 def test_load_color_image_and_wcs_round_trip(tmp_path):
