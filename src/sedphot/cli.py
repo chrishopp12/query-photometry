@@ -306,6 +306,18 @@ def _cmd_measure(args: argparse.Namespace) -> None:
     _check_measure_args(args, 'measure')
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
+    try:
+        _run_measure_from_args(args, coord, label, instruments)
+    except ValueError as e:
+        # An actionable refusal -- an aperture outside the curve-of-growth
+        # grid, an unknown provider -- reads as a crash when it arrives as a
+        # traceback. Same treatment the other verbs give their own refusals.
+        sys.exit(f"sedphot measure: {e}")
+
+
+def _run_measure_from_args(args: argparse.Namespace, coord, label,
+                           instruments: list[str]) -> None:
+    """Forward the parsed measurement options to the driver."""
     run_measure(
         coord, label, args.out_dir,
         instruments=instruments,
