@@ -17,6 +17,9 @@ Notes:
     level 3, detection products skipped). The closest catalog source is
     culled if it lies beyond the search radius -- unlike the cone-search
     providers, HAP catalogs cover the whole visit footprint.
+    A MAST outage returns no catalogs and therefore reports no_match; a
+    filter whose catalog fails to download or parse is dropped from an
+    otherwise ok result.
 """
 from __future__ import annotations
 
@@ -127,7 +130,8 @@ def _discover_hst_catalogs(coord: SkyCoord, radius_arcsec: float) -> dict[str, d
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
-    """Discover HAP catalogs, download per filter, return closest-match rows."""
+    """Discover HAP catalogs, download per filter, return closest-match rows.
+    [] on no result or service failure."""
     filter_cats = _discover_hst_catalogs(coord, radius_arcsec)
     if not filter_cats:
         print("  [HST] No HAP catalogs found at this position.")
@@ -213,7 +217,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        One row per filter with a match on success.
+        One row per filter with a match on success; a no_match result
+        otherwise.
     """
     rows = with_expanding_radius(_query_once, coord, radius_arcsec, "HST HAP")
     if rows:

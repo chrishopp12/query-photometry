@@ -8,10 +8,9 @@ Closest-source W1-W4 photometry from the AllWISE source catalog
 converted from the catalog's Vega system to AB before the common uJy
 conversion.
 
-Band labels are WISE_Wn -- the same filters as the unWISE forced photometry
-the Legacy provider returns -- with 'AllWISE' in the source column carrying
-the provenance: band identity is the filter, measurement provenance lives
-in the source column.
+WISE rows are labeled WISE_Wn; the source column separates this AllWISE
+photometry from the Legacy provider's unWISE-forced values (band identity
+is the filter, provenance is the source column).
 
 Requirements:
     numpy, astropy, astroquery
@@ -19,11 +18,15 @@ Requirements:
 Notes:
     AllWISE profile-fit photometry treats sources as point-like; for faint
     or extended galaxies it UNDER-COUNTS relative to unWISE forced
-    photometry, sometimes severalfold. Prefer the Legacy provider's unWISE
-    values for galaxies inside the Legacy footprint; this provider covers
-    everything else (all-sky).
+    photometry, sometimes severalfold. Compare against another provider
+    before trusting a bright-galaxy total: prefer the Legacy provider's
+    unWISE values for galaxies inside the Legacy footprint; this provider
+    covers everything else (all-sky).
     A null w*sigmpro marks an upper limit, not a measurement; such bands
     are skipped.
+    The IRSA call carries no transport retry, unlike the other catalog
+    providers; a single service blip costs the whole provider and reports
+    no_match.
 """
 from __future__ import annotations
 
@@ -58,7 +61,8 @@ ALLWISE_BANDS = {
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
-    """One IRSA cone query; closest source; one row per measured band."""
+    """One IRSA cone query; closest source; one row per detected band.
+    [] on no result or service failure."""
     mag_cols = [c for pair in ALLWISE_BANDS.values() for c in pair]
     try:
         result = Irsa.query_region(
@@ -126,7 +130,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        One row per measured WISE band on success (AB magnitudes).
+        One row per detected WISE band on success (AB magnitudes); a
+        no_match result otherwise.
     """
     rows = with_expanding_radius(_query_once, coord, radius_arcsec, "AllWISE")
     meta = {'catalog': ALLWISE_CAT, 'service': 'IRSA', 'mag_type': 'w*mpro (Vega->AB)'}

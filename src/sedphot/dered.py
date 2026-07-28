@@ -20,10 +20,16 @@ Requirements:
     numpy, pandas, astropy; astroquery (IRSA dust, tier 2 only)
 
 Notes:
+    Only the catalog table is dereddened. run_measure never calls this module,
+    so every <label>_measured.csv row keeps dered_applied = False -- combining
+    the two tables in one fit mixes corrected and uncorrected fluxes. CFHT
+    bands only ever come from run_measure, which is why they have no
+    EXT_COEFF entry.
+
     Coefficients are Schlafly & Finkbeiner 2011 (R_V = 3.1) for the optical
     sets, WISE per Fitzpatrick-based IR values, GALEX per Bianchi+2017.
-    J-PLUS, CFHT, and HST bands currently have no entries and fall to
-    tier 3 -- add coefficients here when a dereddened fit needs them.
+    J-PLUS and HST bands have no entries and fall to tier 3 -- add
+    coefficients here when a dereddened fit needs them.
 """
 from __future__ import annotations
 
@@ -117,6 +123,8 @@ def apply_dereddening(df: pd.DataFrame, coord: SkyCoord) -> tuple[pd.DataFrame, 
         out.at[i, 'flux_err_uJy'] = round(float(out.at[i, 'flux_err_uJy'] / trans), 6)
         flux = out.at[i, 'flux_uJy']
         out.at[i, 'mag_AB'] = round(ujy_to_mag(flux), 4) if flux > 0 else np.nan
+        # Dereddening is a multiplicative rescale, so mag_err and the
+        # fractional flux error are unchanged.
         out.at[i, 'dered_applied'] = True
 
     if skipped:

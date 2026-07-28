@@ -17,8 +17,8 @@ Requirements:
 Notes:
     SDSS photometry deblends aggressively; bright extended galaxies can be
     shredded into pieces, in which case the catalog magnitude is a fragment,
-    not a galaxy total. Inspect sep_arcsec and compare against another
-    catalog before trusting a bright-galaxy total.
+    not a galaxy total. Compare against another provider before trusting a
+    bright-galaxy total.
     Sentinel magnitudes (-9999) are skipped per band.
 """
 from __future__ import annotations
@@ -54,7 +54,8 @@ _PHOTOOBJ_FIELDS = (
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
-    """One SDSS region query; closest primary source; one row per band."""
+    """One SDSS region query; closest primary source; one row per detected
+    band. [] on no result or service failure."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -126,7 +127,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        One row per measured ugriz band on success.
+        One row per detected ugriz band on success; a no_match result
+        otherwise.
     """
     rows = with_expanding_radius(_query_once, coord, radius_arcsec, "SDSS")
     meta = {'service': 'astroquery.sdss', 'data_release': DATA_RELEASE,

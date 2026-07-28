@@ -3,16 +3,18 @@ pipeline.py
 
 Retrieval and Measurement Drivers
 ---------------------------------------------------------
-
-Orchestration only: resolve the target once, run the requested providers,
-assemble the schema table, and write products + provenance. No science lives
-here -- providers and the measurement engine own their own behavior.
+Orchestration: resolve the target once, run the requested providers,
+assemble the schema table, and write products + provenance. The one exception
+is _resolve_shape, which fits the sky-frame Sersic shape an explicit
+--sersic-from request needs; all other science lives in the providers and the
+measurement engine.
 
 Data products (under <out_dir>/Photometry/):
     <label>_catalog.csv               combined catalog photometry
     <label>_measured.csv              image measurements (scene-fit aperture
                                       or forced-model flux)
     <label>_sed.png                   combined SED figure
+    <label>_overlay.png               catalog positions on the HAP composite
     <label>_*.provenance.json         provenance sidecars
     coverage_catalogs.json            per-provider status, catalog run
     coverage_measure.json             per-provider status, measurement run
@@ -297,6 +299,10 @@ def run_measure(
         Aperture radius. [default: 10.0]
     cutout_arcsec : float
         Stamp width. [default: 120]
+    scene_aperture_arcsec : float, optional
+        Aperture the SCENE is built at -- the target-shred rule and the
+        star zone scope to it -- while aperture_arcsec only integrates.
+        [default: aperture_arcsec]
     sky_rmin_arcsec : float, optional
         Target/sky boundary override (recipe.BG_RMIN_AS): the radius
         beyond which the background is estimated, and inside which no
@@ -325,9 +331,10 @@ def run_measure(
         pinned band is treated as self-contained, so no reference/transfer
         state is threaded through it.
     write_outputs : bool
-        False suppresses every product -- no table, no sidecar, no growth
-        curves -- so a re-report cannot touch the science-aperture files.
-        The frame is still returned. [default: True]
+        False suppresses every product -- no table, no sidecar, no coverage
+        report, no growth curves -- so a re-report cannot touch the
+        science-aperture files. QA figures are still written when qa_dir is
+        given. The frame is still returned. [default: True]
     qa_dir : str or Path, optional
         Send QA figures here instead of <Inst>/QA/, so a reconstruction's
         figures land in their own scoped directory.
@@ -372,11 +379,11 @@ def run_measure(
             f"curve-of-growth grid [{rgrid_arr.min():g}, "
             f"{rgrid_arr.max():g}]\"; pass --radii covering it")
 
-    # BG_RMIN_AS is module state every measure module reads at call
-    # time; scope the override so no run can leak it into the next.
     scene_ap = (aperture_arcsec if scene_aperture_arcsec is None
                 else scene_aperture_arcsec)
 
+    # Every measure module reads recipe.BG_RMIN_AS at call time; scope the
+    # override to this call so it cannot leak into the next run.
     with recipe.sky_floor(sky_rmin_arcsec):
         # Phase 1 -- fetch every provider's images.
         fetched_products: list[tuple[str, list[ImageProduct]]] = []
@@ -590,6 +597,12 @@ def run_spherex(
 
     Parameters
     ----------
+    coord : SkyCoord
+        Resolved target position; the IRSA request carries this only.
+    label : str
+        Output stem, recorded in the table's sidecar.
+    out_dir : str or Path
+        Galaxy directory; the table lands in <out_dir>/Photometry/SPHEREx/.
     model : str
         'sersic' (elliptical forced model) or 'psf' (point source; carries
         a chromatic bias for extended sources).
@@ -604,12 +617,20 @@ def run_spherex(
     sersic_seeing : float, optional
         PSF FWHM of the shape-fit band (see run_measure).
     bkg_size : float
-        Tool BKG_REGION_SIZE in pixels. [default: 15]
+        The IRSA forced-photometry tool's BKG_REGION_SIZE, in pixels.
+        [default: 15]
     mjd_range : [float, float], optional
         Restrict to visits in this MJD window (the IRSA workaround for
         broken-metadata epochs).
-    label : str
-        Output stem, recorded in the table's sidecar.
+    poll : float
+        Job poll interval in seconds. [default: 5.0]
+    timeout : float
+        Job timeout in seconds. [default: 3600.0]
+    cutout_arcsec : float
+        Stamp width for a --sersic-from shape fit. [default: 120]
+    legacy_dr : str
+        Legacy Surveys data release for the Tractor shape lookup and any
+        shape-fit image. [default: LEGACY_DR_DEFAULT]
     target_name : str, optional
         Original name string, recorded in the table's sidecar. The IRSA
         request carries a position only, so no name reaches the query.
@@ -817,7 +838,7 @@ def run_overlay(
 
 
 # ------------------------------------
-# The flagship: galaxy in, SED photometry out
+# Full run: catalogs -> measurement -> optional SPHEREx -> SED plot
 # ------------------------------------
 def run_all(
         coord: SkyCoord,
@@ -844,8 +865,10 @@ def run_all(
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> dict[str, str]:
-    """Everything: catalogs -> images + scene measurement -> SPHEREx
-    (opt-in) -> combined SED plot, with per-provider graceful fallback.
+    """Run every stage for one galaxy.
+
+    Catalogs -> images + scene measurement -> SPHEREx (opt-in) -> combined
+    SED plot, with per-provider graceful fallback.
 
     Stages are isolated: a stage that dies (a scene-catalog outage, a
     SPHEREx shape abort) is recorded and the remaining stages still
@@ -867,10 +890,10 @@ def run_all(
         Left unset, each stage keeps its OWN default: the measurement
         refits the target on its reference band, SPHEREx looks the shape up
         in the Tractor catalog.
-    Other parameters as in run_catalogs / run_measure. Every measurement
-    option run_measure accepts is forwarded, because a flag the flagship
-    silently drops is a flag whose absence has to be discovered from a
-    wrong answer.
+    Other parameters as in run_catalogs / run_measure. Every flag the measure
+    verb exposes is forwarded; run_measure's reconstruction hooks
+    (scene_aperture_arcsec, pin_by_band, write_outputs, qa_dir, dump_arrays)
+    are not exposed here.
 
     Returns
     -------

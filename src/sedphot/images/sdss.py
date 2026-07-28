@@ -18,6 +18,8 @@ Requirements:
 Notes:
     SDSS frames are shallow relative to the other imaging this package
     fetches; expect larger sky-limited errors, especially in u and z.
+    A band that fails after the frame is resolved is dropped and the others
+    are kept; error is reported only when no band survives.
 """
 from __future__ import annotations
 
@@ -69,12 +71,10 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve the frame covering the target ONCE via a region query, then
-    # fetch each band from it by (run, rerun, camcol, field). Fetching by
-    # coordinates -- SDSS.get_images(coordinates=...) -- is unreliable: its
-    # internal field lookup can return a malformed or short table for some
-    # positions, surfacing as InconsistentTableError or KeyError 'run' and
-    # failing EVERY band even where imaging plainly exists (query_region at
-    # the same spot returns objects fine). query_region hands back the frame
+    # fetch each band from it by (run, rerun, camcol, field).
+    # SDSS.get_images(coordinates=...) is unreliable: its internal field
+    # lookup returns a malformed table for some positions and fails EVERY
+    # band where imaging plainly exists. query_region hands back the frame
     # identifiers directly, and matches= fetches from them without that
     # lookup. Retry the transport itself for genuine service flaps.
     frame = None

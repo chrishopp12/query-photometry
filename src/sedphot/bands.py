@@ -68,9 +68,9 @@ def wave_um(band: str) -> float:
     """
     if band in WAVE_UM:
         return WAVE_UM[band]
-    # HST flight-filter names encode the wavelength: 3 digits are nm/10
-    # (F475W -> 0.475 um) except the IR channel where <200 means um/100
-    # (F160W -> 1.60 um); 4 digits are nm (WFPC2 F1042M -> 1.042 um).
+    # HST flight-filter names encode the wavelength in nm (F475W -> 0.475 um),
+    # except the IR channel, where a value below 200 is in units of 10 nm
+    # (F160W -> 1.60 um). Four digits are always nm (WFPC2 F1042M -> 1.042 um).
     match = _HST_FILTER.search(band.rsplit("_", 1)[-1])
     if match:
         number = int(match.group(1))

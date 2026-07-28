@@ -34,7 +34,7 @@ AB_ZP_UJY = 23.9
 # Conversions
 # ------------------------------------
 def nanomaggy_to_ujy(flux_nm: float) -> float:
-    """Convert Legacy Survey nanomaggies to microjanskys."""
+    """Convert Legacy Surveys nanomaggies to microjanskys."""
     return flux_nm * NANOMAGGY_TO_UJY
 
 

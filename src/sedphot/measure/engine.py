@@ -3,13 +3,16 @@ engine.py
 
 Stage 8: Per-Galaxy Scene Measurement Driver
 ---------------------------------------------------------
-One galaxy, all bands: fetch the scene inputs once (survey catalog,
-confirmed stars, optional patches and registry), then measure every
-band through the same chain --
+One galaxy: fetch the scene inputs once (survey catalog, confirmed
+stars, optional patches and registry), then measure one band at a time
+through the same sequence of operations --
 
-    stamp -> PSF -> components -> registry -> stars -> seats ->
-    joint fit -> mask -> residual mesh -> twin fill ->
+    stamp -> PSF -> components -> registry -> artifacts -> stars ->
+    seats -> joint fit -> mask -> residual mesh -> twin fill ->
     curve of growth -> witnesses
+
+The per-band loop belongs to pipeline.run_measure; order_bands sets
+its order.
 
 Bands are measured per instrument: the first band in preference order
 is the REFERENCE -- it solves seat shapes -- and its siblings transfer
@@ -169,8 +172,11 @@ def prepare_scene(
 
 
 def order_bands(products: list) -> list:
-    """Reference band first: sort an instrument's products so the first
-    filter in recipe.REFERENCE_PREFERENCE leads and solves the seats."""
+    """Sort an instrument's products so the reference band leads.
+
+    The first filter present in recipe.REFERENCE_PREFERENCE leads and
+    solves the seats; every other band transfers its shapes.
+    """
     def rank(product):
         band = product.band.lower()
         if band in recipe.REFERENCE_PREFERENCE:
@@ -208,8 +214,9 @@ def _system_names(comps: list[dict], patches: dict, stamp) -> set[str]:
 
 
 def _band_colors(cat: pd.DataFrame, band: str) -> dict[int, float]:
-    """Catalog row index -> this band's flux over the reference flux
-    (nearest listed catalog band); clamped, neutral when unknown."""
+    """Catalog row index -> the row's flux in the nearest listed band to
+    this one, over its catalog flux_r; clamped, neutral (1.0) when
+    unknown."""
     col = recipe.BAND_COLOR_COL.get(band.lower(), 'flux_r')
     out = {}
     for irow in range(len(cat)):
@@ -224,9 +231,9 @@ def _band_colors(cat: pd.DataFrame, band: str) -> dict[int, float]:
 
 def _seat_colors(seats: list[dict], cat: pd.DataFrame,
                  comps: list[dict], band: str) -> list[float]:
-    """Color factor per transferred seat column: this band's catalog
-    flux over the reference-band flux for the seat's owner (nearest
-    catalog band). Keeps transfer flux leashes physical across colors;
+    """Color factor per transferred seat column: the owner's catalog
+    flux in the nearest listed band to this one, over its catalog
+    flux_r. Keeps transfer flux leashes physical across colors;
     clamped, and neutral (1.0) when the catalog cannot say."""
     col = recipe.BAND_COLOR_COL.get(band.lower(), 'flux_r')
     irow_by_name = {c['name']: c['irow'] for c in comps}
@@ -432,11 +439,11 @@ def measure_band(
 
     # Artifacts: mask, never fit. Pixels far beyond both the sky and
     # the catalog scene's own claim (bleed trails, satellite streaks)
-    # leave the usable map exactly like nodata. A catalog wreck
-    # (rchisq_r past the gate ceiling) is the catalog's echo of the
-    # artifact itself and may not claim pixels here; a component whose
-    # claim the mask mostly OWNS leaves the scene with it, and the
-    # coverage gate re-judges the aperture.
+    # leave the usable map exactly like nodata. A catalog wreck (any
+    # rchisq column past recipe.GATE_RCHISQ_MAX) is the catalog's echo
+    # of the artifact itself and may not claim pixels here. Masking can
+    # also void a component outright (the ownership rule below), after
+    # which the coverage gate re-judges the aperture.
     artifact_as2, artifact_ujy = 0.0, 0.0
     artifact_mask = None
     if comps:
@@ -514,8 +521,8 @@ def measure_band(
               f"masked star(s) {sorted(masked_mode)}")
 
     # Seats: the reference band builds them and re-solves shapes inside
-    # the alternation; transfer bands reuse them by name with fluxes
-    # leashed to the reference band's solution.
+    # the alternation; transfer bands reuse that seat list verbatim,
+    # each seat's flux leashed to its reference-band solution.
     seats, drops = [], set()
     if ref is None:
         if comps:
@@ -547,14 +554,14 @@ def measure_band(
     else:
         # The science flux always comes from `fit`: forced-target on transfer
         # bands, so colors stay shape-consistent. A GATING target's transfer
-        # band also needs its own free per-band shape (Solve 1) -- the
-        # data-driven envelope every neighbor's forced photometry consumes
-        # must come from this object's own centered best view, not the
-        # frozen reference shape. For a real color gradient that differs from
-        # the transferred shape and fits the halo better (a genuinely compact
-        # z-envelope under an extended r, say). The plane background cannot
-        # absorb a radial halo, so the free solve cannot cheaply collapse
-        # when the envelope is truly extended.
+        # band also needs its own free per-band shape -- the one the registry
+        # harvests -- because the data-driven envelope every neighbor's
+        # forced photometry consumes must come from this object's own
+        # centered best view, not the frozen reference shape. That free shape
+        # departs from the transferred one wherever a real color gradient
+        # does: a compact z envelope under an extended r, say. The plane
+        # background cannot absorb a radial halo, so the free solve cannot
+        # cheaply collapse when the envelope is truly extended.
         #
         # The reference band solved the target free already, so it harvests
         # itself and needs no second pass.
@@ -562,12 +569,10 @@ def measure_band(
         two_solve = ref is not None and target_gates and bool(seats)
         fit_free = None
         if two_solve and recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE:
-            # Free first, then freeze: the free solve settles every seat, and
-            # the science pass adopts its NEIGHBOR shapes and re-freezes the
-            # target, leaving only amplitudes and background to solve. One
-            # nonlinear solve, one neighbor shape per band -- stored and used
-            # -- and the same treatment a neighbor gets when its shape came
-            # from the registry instead.
+            # Free first, then freeze: the free solve settles every seat, the
+            # science pass adopts its NEIGHBOR shapes and re-freezes the
+            # target, and only amplitudes and background are left to solve
+            # (recipe.NEIGHBOR_SHAPE_FROM_FREE_SOLVE).
             fit_free = joint_fit(image, good_fit, stamp, psf, comps, seats,
                                  drops, ref=fit_ref, free_target=True)
             fit = joint_fit(image, good_fit, stamp, psf, comps, seats, drops,
@@ -781,9 +786,8 @@ def measure_band(
 
     if dump_dir is not None:
         Path(dump_dir).mkdir(parents=True, exist_ok=True)
-        # The RAW free-target solve (fit_free), engine-rendered, so QA
-        # sees the free shape even when the guard rejected it; falls back
-        # to the harvested fit where there was no free pass.
+        # The free-target solve's arrays for QA; falls back to the
+        # harvested fit on bands that had no free pass.
         src = fit_free if fit_free is not None else harvest_fit
         if free_target is None:
             free_scene, free_target = _fit_images(src, system, image.shape)

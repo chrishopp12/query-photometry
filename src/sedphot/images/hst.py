@@ -134,7 +134,11 @@ def _band_of(filename: str) -> str | None:
 
 
 def _split_mosaic(mosaic_path: Path, sci_path: Path, wht_path: Path) -> bool:
-    """Split a drizzled MEF into plain sci/wht files (EXTNAME-based)."""
+    """Split a drizzled MEF into plain sci/wht files (EXTNAME-based).
+
+    False when the mosaic has no SCI extension; wht is written only when a
+    WHT extension exists.
+    """
     with fits.open(mosaic_path) as hdul:
         sci = next((h for h in hdul
                     if str(h.header.get("EXTNAME", "")).upper() == "SCI"), None)

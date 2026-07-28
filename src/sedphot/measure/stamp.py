@@ -199,9 +199,10 @@ def check_coverage(
     Missing data inside the aperture is fill-corrected downstream, but
     only up to a point: past COVERAGE_MIN there is no honest profile to
     fill from, and the band demotes rather than ship a silently biased
-    flux. The seeing-scale core is held tighter (CORE_MASKFRAC_MAX), and
-    the peak (PEAK_PROTECT_AS) is inviolable -- its twin reflection is the
-    peak itself, so no fill reconstructs a dead central pixel.
+    flux. The core -- twice the seeing FWHM, floored at 3" -- is held
+    tighter (CORE_MASKFRAC_MAX), and the peak (PEAK_PROTECT_AS) is
+    inviolable: its twin reflection is the peak itself, so no fill
+    reconstructs a dead central pixel.
 
     Parameters
     ----------
@@ -241,8 +242,9 @@ def check_coverage(
             f"blank pixels inside the {recipe.PEAK_PROTECT_AS:g}\" peak "
             f"(aperture coverage {coverage:.2f}) -- no fill reconstructs a "
             f"clipped peak", coverage)
-    # Past the peak the twin/model fill can carry a modest gap; hold the
-    # seeing-scale core to a mask-fraction ceiling, not zero tolerance.
+    # Past the peak the twin/model fill can carry a modest gap. The core
+    # is twice the seeing FWHM with a 3" floor, held to a mask-fraction
+    # ceiling rather than zero tolerance.
     core = stamp.rr < max(3.0, 2.0 * seeing_arcsec)
     core_maskfrac = float((bad & core).sum()) / max(int(core.sum()), 1)
     if core_maskfrac > recipe.CORE_MASKFRAC_MAX:

@@ -7,7 +7,12 @@ Every science knob of the scene measurement engine in one place. The
 measurement recipe is: build a scene from the survey catalog, subtract
 measured stars, jointly solve component amplitudes (and shapes, where the
 catalog declares misfit) against a bin-level-plane background, then mask,
-fill, and integrate a curve of growth to the aperture flux.
+fill, and integrate a curve of growth to the aperture flux. Stage-local
+implementation constants (the PSF ring schedule, for example) stay in
+their own module and are labeled there.
+
+Requirements:
+    numpy
 
 Notes:
     Distances are arcsec, fluxes microjansky (uJy), surface brightness
@@ -77,19 +82,25 @@ PEAK_PROTECT_AS = 0.5      # a dead pixel within this radius refuses the band
 # the cone, and the pad keeps some just-off-stamp margin sources in reach.
 QUERY_RADIUS_AS = 100.0
 QUERY_PAD_AS = 15.0
-TRACTOR_MIN_NMGY = 0.5     # r-band flux floor of the Tractor scene query
-TARGET_MATCH_AS = 1.5      # catalog row within this of the request = target
+# flux floor of the Tractor scene query, on the row's BRIGHTEST optical band
+TRACTOR_MIN_NMGY = 0.5
+# Identity radius: the closest catalog row within this of the request is
+# the target. Also matches Gaia stars and registry/patch positions to
+# components.
+TARGET_MATCH_AS = 1.5
 
-# The halo gate. A gated source receives a shape solve (Sersic core +
-# Nuker halo) instead of a fixed catalog profile. The second profile
-# exists to fix MISFIT, and the catalog's own reduced chi-square is its
-# misfit statement -- the necessary condition. Point sources, the
-# target itself, and rows beyond the stamp half-width never gate: a
-# shape solve needs its source's pixels on the stamp, a distant halo
-# seat with center freedom degenerates into a flat sheet across the
-# field, and a RADIAL reach keeps the gate census identical on every
-# instrument (a square-stamp test would admit corner sources on a
-# rotated grid that an aligned grid excludes).
+# The halo gate. A gated source receives a shape solve instead of a
+# fixed catalog profile: a Sersic core, plus a Nuker halo only where the
+# halo family is granted (see GATED_HALO). The second profile exists to
+# fix MISFIT, and the catalog's own reduced chi-square is its misfit
+# statement -- the necessary condition. Point sources, the target
+# itself, and rows beyond the gate reach (the stamp half-width less
+# GATE_EDGE_MARGIN_AS) never gate: a shape solve needs its source's
+# pixels on the stamp, a distant halo seat with center freedom
+# degenerates into a flat sheet across the field, and a RADIAL reach
+# keeps the gate census identical on every instrument (a square-stamp
+# test would admit corner sources on a rotated grid that an aligned grid
+# excludes).
 #
 # The ceiling: far past the gate threshold, reduced chi-square flips
 # meaning from "this galaxy needs an envelope" to "these pixels are not
@@ -157,14 +168,14 @@ STAR_PROF_MAX_AS = 45.0   # measured stellar-profile terminus
 STAR_RING_MIN_PX = 40     # a profile ring votes only with this many pixels
 
 # A measured profile recovering less than MIN_FRAC of the (color-
-# scaled) catalog flux is a FAILED measurement (rings starved by the
-# target-region and bright-neighbor exclusions -- or the "star" is a
-# galaxy with spurious Gaia astrometry). One recovering more than
-# MAX_FRAC is a CONTAMINATED measurement (rings sitting in another
+# scaled) in-stamp render flux (flux0) is a FAILED measurement (rings
+# starved by the target-region and bright-neighbor exclusions -- or the
+# "star" is a galaxy with spurious Gaia astrometry). One recovering more
+# than MAX_FRAC is a CONTAMINATED measurement (rings sitting in another
 # source's light; subtracting it would excavate). Either way the
 # source reverts: light must never leave the scene without something
-# accounting for it. Thresholds are judged against the catalog flux
-# scaled to the band through BAND_COLOR_COL, so a red star's honest
+# accounting for it. Thresholds are judged against the render's in-stamp
+# flux scaled to the band through BAND_COLOR_COL, so a red star's honest
 # faintness in g cannot read as failure.
 STAR_PROFILE_MIN_FRAC = 0.8
 STAR_PROFILE_MAX_FRAC = 1.3
@@ -188,7 +199,9 @@ STAR_REVERT_AMP_BAND = (0.5, 2.0)
 # alternating with the amplitude solve until its constant converges. It
 # never sits in a design matrix next to component amplitudes.
 BIN_AS = 5.0            # bin-grid bin size
-BG_RMIN_AS = 15.0       # bins inside this target radius are excluded
+# BG_RMIN_AS is the one target/sky boundary; six stages read it (see
+# sky_floor). Background bins inside it are excluded.
+BG_RMIN_AS = 15.0
 BIN_MIN_FRAC = 0.5      # a bin votes only if half its pixels are usable
 
 # Bin-level MAD rejection: bins coherently elevated beyond this many
@@ -215,6 +228,8 @@ ALT_TOL_SIGMA = 0.02    # converged: plane constant moves < this x sigma
 # (size, profile, ellipticity, position angle, dx, dy).
 SEAT_NPARAMS = 6
 
+# Sersic index bounds for every seat. render.sersic_extent_px clamps to
+# the same range when it sizes a render box.
 SERSIC_N_RANGE = (0.4, 6.0)
 
 # Sersic-seat ellipticity ceiling: a lower ceiling clips true edge-on
@@ -235,8 +250,9 @@ NUKER_RB0_AS = 15.0         # break-radius seed
 
 # Nuker outer-slope bounds. The floor matters: a slope at the floor with
 # the break radius at its ceiling is a flat sheet, not an envelope --
-# measured cD envelopes fall like r^-1.6..-2.4, so a rail at the floor
-# is the witness that a profile wants flatter than any physical halo.
+# measured cD envelopes fall like r^-1.6..-2.4, so the floor sits at the
+# flat end of that range and a rail there is the witness that a profile
+# wants flatter than an envelope.
 NUKER_BETA = (1.8, 8.0)
 
 # Center freedom. Halo centers move in a wide box under the ownership
@@ -259,8 +275,8 @@ FREE_SEAT_REFF_MAX_AS = 6.0   # patch free seats (companion nuclei)
 # envelope model and belongs to the TARGET, granted through the patches'
 # "target_halo". On an ordinary bright galaxy the neighbor halo fits to a
 # few percent of the light with a railed beta -- a degenerate seat that
-# wanders the solve and buys nothing. Flip to True to restore the old
-# blanket core+halo on every gated seat.
+# wanders the solve and buys nothing. True gives every gated seat a
+# core+halo pair.
 GATED_HALO = False
 REFIT_REFF_MAX_AS = 10.0      # the standard target-refit seat
 
@@ -268,7 +284,8 @@ PA_BOX_DEG = 95.0       # position-angle freedom about the catalog value
 SNAP_BOX_AS = 2.0       # snap-to-peak search box (nearest local maximum)
 
 SOLVE_NFEV = 450        # optimizer budget per COLD shape solve stage
-SOLVE_FSCALE = 3.0      # soft-L1 scale, in units of the pixel scale
+SOLVE_FSCALE = 3.0      # soft-L1 transition, in units of the per-pixel
+                        # loss scale below
 
 # Warm re-solves (alternation iterates, transfer-band neighbor seats)
 # start at a converged neighborhood and finish in tens of evaluations;
@@ -285,8 +302,8 @@ SOLVE_NFEV_WARM = 150
 # few percent of its own flux.
 SOLVE_MODEL_ERR_FRAC = 0.02
 
-# Amplitude ceiling for fixed components and reference-band seats, as a
-# multiple of the catalog expectation. Pure safety: an unbounded
+# Amplitude ceiling, as a multiple of a seat's catalog flux or of a
+# fixed component's in-stamp render flux. Pure safety: an unbounded
 # degenerate column can solve to astronomically large amplitude on a
 # near-zero render, harmless in-band but poisonous to every sibling
 # band that leashes against it.
@@ -321,7 +338,7 @@ REFERENCE_PREFERENCE = ('r', 'i', 'z', 'g', 'y', 'u')
 #         neighbor shape per band, stored and used. It is also the treatment a
 #         neighbor gets when its shape comes from the registry, so a field's
 #         science flux does not depend on whether that neighbor was solved by
-#         some earlier field in the campaign.
+#         an earlier field.
 # False   each solve fits the neighbors itself. Two nonlinear solves, and the
 #         neighbor shapes STORED (from the free pass) are not the ones USED
 #         (from the frozen pass).
@@ -330,12 +347,12 @@ REFERENCE_PREFERENCE = ('r', 'i', 'z', 'g', 'y', 'u')
 # science pass is the only place a gated neighbor's shape can come from, and
 # it solves it either way.
 #
-# Measured on a gated target with a seated neighbor at 13% aperture
-# contamination and a real color gradient: the science flux moves 0.02 sigma,
-# no amplitude leash binds, and the pass is slightly cheaper. The gain is in
-# the HARVESTED shape other fields consume -- on a synthetic gradient the free
-# solve recovers an injected neighbor's r_eff to 3.98 px against a truth of
-# 4.0, where fitting it against a frozen, over-extended target gives 3.35.
+# The science flux costs ~0.02 sigma (a gated target whose seated neighbor
+# holds 13% of the aperture, across a real color gradient), no amplitude leash
+# binds, and the pass is slightly cheaper. The gain is the HARVESTED shape
+# other fields consume: on an injected neighbor of r_eff 4.0 px the free solve
+# recovers 3.98, against 3.35 when the neighbor is fit around a frozen,
+# over-extended target.
 NEIGHBOR_SHAPE_FROM_FREE_SOLVE = True
 
 
@@ -371,8 +388,8 @@ FLOOD_MAX_AS = 6.0      # maximum growth of the flood channel
 # trusts the twin fill over a neighbor model's core subtraction:
 # reconstructing the core from the mirror side of the galaxy stays
 # data-true, while exposing the core keeps whatever over- or
-# under-subtraction the neighbor model committed there. Set > 0 to
-# restore a mask-free core.
+# under-subtraction the neighbor model committed there. Set > 0 to keep
+# every mask channel off the target inside that radius.
 TARGET_MASK_FREE_AS = 0.0
 
 
@@ -412,23 +429,24 @@ PSF_GRAFT_FORCE_AS = 2.5
 # ------------------------------------
 # Artifacts: mask, never fit
 # ------------------------------------
-# Catastrophic-pixel gate. A pixel is artifact when it sits
-# ARTIFACT_SIG x sigma above the outer level AND ARTIFACT_RATIO x the
-# catalog scene's own claim there AND the scene is QUIET there (claim
-# below the same ARTIFACT_SIG floor): an under-predicted real source
-# fails the ratio test, a bright real core -- a cD cusp above its
+# Catastrophic-pixel gate. A pixel is artifact when it clears the
+# brightness floor (the LARGER of ARTIFACT_SIG x sigma above the outer
+# level and the absolute ARTIFACT_SB_MIN below) AND exceeds
+# ARTIFACT_RATIO x the catalog scene's own claim there AND the scene is
+# QUIET there (claim below that same floor): an under-predicted real
+# source fails the ratio test, a bright real core -- a cD cusp above its
 # smooth model, a saturated star above its clipped catalog flux --
 # fails the quiet test, and a bleed trail on quiet sky is orders of
 # magnitude past all three. Damage beyond the ratio on quiet parts of
 # the core is masked and the coverage gate demotes the band. Regions
-# below ARTIFACT_AREA_MIN are left to the flood channel. A soft-edged artifact's sub-threshold skirt is taken by a
-# seeded flood (K_ISO departure from the ambient surface, unclaimed
-# pixels only, FLOOD_MAX_AS growth -- the neighbor-flood constants),
-# so the boundary follows the artifact's own light and stops at real
-# sources' claims. Masked artifact holes twin-fill exactly like
-# neighbor masks, at every radius. Broad structure at the noise scale
-# is background machinery, not artifact -- a per-pixel threshold
-# cannot see it and must not try.
+# below ARTIFACT_AREA_MIN are left to the flood channel. A soft-edged
+# artifact's sub-threshold skirt is taken by a seeded flood (K_ISO
+# departure from the ambient surface, unclaimed pixels only,
+# FLOOD_MAX_AS growth -- the neighbor-flood constants), so the boundary
+# follows the artifact's own light and stops at real sources' claims.
+# Masked artifact holes twin-fill exactly like neighbor masks, at every
+# radius. Broad structure at the noise scale is background machinery,
+# not artifact -- a per-pixel threshold cannot see it and must not try.
 ARTIFACT_SIG = 20.0
 ARTIFACT_RATIO = 5.0
 ARTIFACT_AREA_MIN = 15.0     # arcsec^2

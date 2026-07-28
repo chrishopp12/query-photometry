@@ -4,11 +4,13 @@ cli.py
 
 sedphot Command-Line Interface
 ---------------------------------------------------------
-
-Galaxy in, SED photometry out. Every subcommand writes into the galaxy
-directory given by --out-dir (default '.'); all but sed take the same
+Galaxy in, SED photometry out. resolve and remeasure only print; the
+other subcommands write into the galaxy directory given by --out-dir
+(default '.', so products land in ./Photometry/ of the current
+directory). resolve, catalogs, measure, spherex and run take the same
 target spec: a resolvable name (--name) or an explicit position
-(--ra --dec).
+(--ra --dec). sed and overlay work from tables already on disk, and
+remeasure from a provenance sidecar path.
 
 Usage:
     sedphot resolve  (--name NAME | --ra DEG --dec DEG)
@@ -24,10 +26,15 @@ Usage:
     sedphot sed      [--out-dir DIR] [--label STEM]
     sedphot overlay  [--out-dir DIR] [--label STEM] [--zoom-size 5.0]
                      [--context-size 15.0] [--wcs-from FITS]
+    sedphot remeasure PROVENANCE.json [--mode {sersic,aperture}]
+                     [--aperture 12.0 | --integrated]
+                     [--shape {forced,fitted}] [--registry FILE]
+                     [--write-qa] [--out CSV]
     sedphot run      (--name NAME | --ra DEG --dec DEG) [--skip ...]
                      [--spherex {off,psf,sersic}]
-                     [every measure option: --mode, --bands, --aperture,
-                      --radii, --sky-rmin, --sersic-*, --hst-proposal-id]
+                     [every flag in the measurement group -- see
+                      `sedphot measure --help`; --dump-arrays is
+                      measure-only]
 
 Examples:
     Resolve a name to coordinates and the default output label:
@@ -90,9 +97,8 @@ def _resolve_from_args(args: argparse.Namespace):
 def _add_measure_args(parser: argparse.ArgumentParser) -> None:
     """Every measurement option, shared by the measure and run verbs.
 
-    One definition, so the flagship cannot accept a smaller set than the
-    verb it drives -- a flag `run` lacks is a flag whose absence shows up
-    only as a wrong answer.
+    Defined once so run always accepts the same set as measure; a flag run
+    silently lacked would show up only as a wrong flux.
     """
     group = parser.add_argument_group("measurement")
     group.add_argument('--mode', type=str, default='aperture',
@@ -104,15 +110,17 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument('--aperture', type=float, default=10.0,
                        help="Aperture radius in arcsec [default: 10.0]")
     group.add_argument('--radii', nargs='+', type=float, default=None,
-                       help="Curve-of-growth radii override (arcsec)")
+                       help="Curve-of-growth radii override, arcsec "
+                            "[default: 2-40 in 1\" steps]")
     group.add_argument('--cutout-size', type=float, default=120.0,
                        help="Stamp width in arcsec [default: 120]")
     group.add_argument('--sky-rmin', type=float, default=None,
                        help="Target/sky boundary in arcsec: sky is "
                             "estimated only beyond it, and no pixel inside "
-                            "it votes on the background. The 15\" default is "
-                            "survey-galaxy sized; compact HST targets want a "
-                            "few arcsec [default: the recipe constant]")
+                            "it votes on the background. The default is "
+                            "sized for survey galaxies; a compact HST target "
+                            "wants a few arcsec "
+                            "[default: recipe.BG_RMIN_AS = 15]")
     group.add_argument('--registry', type=str, default=None,
                        help="Cross-field registry JSON to consume (solved "
                             "shared sources enter as frozen components)")
@@ -134,11 +142,12 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                             "shape fit; fitted n and r_eff are PSF-sensitive")
     group.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                        choices=('dr10', 'dr9'),
-                       help="Legacy release for images and the scene catalog "
-                            f"[default: {LEGACY_DR_DEFAULT}]")
+                       help="Legacy Surveys data release for images and the "
+                            f"scene catalog [default: {LEGACY_DR_DEFAULT}]")
     group.add_argument('--legacy-bricks', action='store_true',
-                       help="Fetch NERSC brick coadds (image + invvar; real "
-                            "per-pixel errors, ~40 MB/file)")
+                       help="Fetch NERSC brick coadds instead of viewer "
+                            "cutouts: adds the inverse-variance map "
+                            "(per-pixel errors), ~40 MB/file")
     group.add_argument('--hst-proposal-id', type=str, default=None,
                        help="Restrict the HST provider to one program")
 
@@ -216,9 +225,8 @@ def _cmd_remeasure(args: argparse.Namespace) -> None:
                           shape=args.shape, registry_path=args.registry,
                           write_qa=args.write_qa)
     except ValueError as e:
-        # A refusal the caller can act on -- an aperture past the stamp, a
-        # sidecar with nothing pinnable -- reads as a bug when it arrives as a
-        # traceback. Same treatment the other verbs give their own refusals.
+        # Turn an actionable refusal (aperture past the stamp, a sidecar with
+        # nothing pinnable) into a clean exit, as the other verbs do.
         sys.exit(f"sedphot remeasure: {e}")
     if table.empty:
         sys.exit(f"sedphot remeasure: no band has a stored model in "
@@ -389,8 +397,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Job timeout, seconds [default: 3600]")
     p_spherex.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                            choices=('dr10', 'dr9'),
-                           help="Legacy release for a shape-fit image "
-                                f"[default: {LEGACY_DR_DEFAULT}]")
+                           help="Legacy Surveys data release for a shape-fit "
+                                f"image [default: {LEGACY_DR_DEFAULT}]")
     p_spherex.set_defaults(func=_cmd_spherex)
 
     p_sed = subparsers.add_parser(
@@ -434,19 +442,21 @@ def build_parser() -> argparse.ArgumentParser:
                                   "empirical neighbor-subtracted flux "
                                   "[default: sersic]")
     p_remeasure.add_argument('--aperture', type=float, default=12.0,
-                             help="Circular aperture radius, arcsec [default: 12]")
+                             help="Circular aperture radius, arcsec. Note "
+                                  "this differs from `measure --aperture` "
+                                  "(10); pass the aperture the sidecar "
+                                  "records to reproduce the original "
+                                  "measurement [default: 12]")
     p_remeasure.add_argument('--shape', choices=['forced', 'fitted'],
                              default='forced',
-                             help="Target shape the report is built on: "
-                                  "forced (the instrument's reference-band "
-                                  "shape) or fitted (each band's own "
-                                  "free-target shape, which only a gating "
-                                  "target has; other bands fall back to "
-                                  "forced and say so). Applies to sersic "
-                                  "mode, and to aperture mode only past the "
-                                  "stored grid -- within the grid the "
-                                  "empirical curve is a measurement, not a "
-                                  "rendering of a shape [default: forced]")
+                             help="Target shape the report is built on. "
+                                  "forced: the instrument's reference-band "
+                                  "shape. fitted: each band's own free-target "
+                                  "shape, stored only for a gating target; a "
+                                  "band without one falls back to forced and "
+                                  "says so in `source`. Applies to sersic "
+                                  "mode always, to aperture mode only past "
+                                  "the stored grid [default: forced]")
     p_remeasure.add_argument('--registry', type=str, default=None,
                              help="Cross-field registry fallback for beyond-"
                                   "grid reconstruction [default: sibling of "
@@ -456,7 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Write per-band scene figures for a beyond-"
                                   "grid reconstruction to a scoped QA subdir")
     p_remeasure.add_argument('--integrated', action='store_true',
-                             help="Integrated model total (ignores --aperture)")
+                             help="Report the total instead of an aperture "
+                                  "(ignores --aperture): the integrated model "
+                                  "in sersic mode, the outermost stored "
+                                  "curve-of-growth value in aperture mode")
     p_remeasure.add_argument('--out', type=str, default=None,
                              help="Output CSV path [default: print to stdout]")
     p_remeasure.set_defaults(func=_cmd_remeasure)

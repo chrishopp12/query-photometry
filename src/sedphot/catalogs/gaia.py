@@ -23,6 +23,8 @@ Notes:
     from disk and the network is never touched. Gaia membership alone does
     not confirm a star -- compact galaxy nuclei appear in Gaia -- so star
     confirmation thresholds are applied by the caller, not here.
+    Unlike the ProviderResult providers, a TAP failure here raises after
+    retries rather than being reported as a status.
 """
 from __future__ import annotations
 

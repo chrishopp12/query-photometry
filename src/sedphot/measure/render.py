@@ -150,7 +150,9 @@ def render_sersic_boxed(
     """
     ih, iw = shape_2d
     # n is clamped to the seat index range for the extent estimate
-    # only; the profile itself renders at the requested n.
+    # only; the profile itself renders at the requested n. The literal
+    # bounds are a deliberate copy of recipe.SERSIC_N_RANGE and must be
+    # kept in step with it.
     half = (sersic_extent_px(reff_px, min(max(n, 0.4), 6.0), frac=0.999)
             + max(psf.shape))
     if half >= 0.45 * max(ih, iw):
@@ -261,8 +263,10 @@ def ampl_from_total(
         n: float,
         ellip: float,
 ) -> float:
-    """Sersic amplitude (counts/px at the effective radius) whose total
-    flux is `counts` -- the inverse of sersic_total at cf=1."""
+    """Sersic amplitude (counts/px at r_eff) whose total flux is `counts`.
+
+    The inverse of sersic_total at cf=1.
+    """
     bn = gammaincinv(2 * n, 0.5)
     return counts / (2 * np.pi * n * np.exp(bn) * bn ** (-2 * n)
                      * gamma(2 * n) * reff_px ** 2 * (1 - ellip))

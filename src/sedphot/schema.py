@@ -4,10 +4,9 @@ schema.py
 Output Table Schema and Row Builder
 ---------------------------------------------------------
 The one table contract every catalog provider and measurement writes. The
-first twelve columns are the original retrieval-script column set, kept in
-order so existing consumers (overlay.py's position figures, analysis
-notebooks) read new tables unchanged; the appended columns carry retrieval
-provenance.
+first twelve columns are a frozen contract: order and names do not change,
+because downstream consumers (overlay.py's position figures, analysis
+notebooks) select on them. The appended columns carry retrieval provenance.
 
 Column conventions:
     band            <Instrument>_<filter>  (Legacy_g, PS1_g, GALEX_FUV, HST_F475W)
@@ -41,7 +40,7 @@ import pandas as pd
 # ------------------------------------
 # Column schema
 # ------------------------------------
-# Legacy retrieval-script column set -- order is a compatibility contract,
+# Frozen column set -- order and names are a compatibility contract,
 # do not reorder.
 BASE_COLS = [
     'band',
@@ -73,11 +72,10 @@ ALL_COLS = BASE_COLS + EXTRA_COLS
 # ------------------------------------
 # Leading prefixes of the `source` strings each measurement kind emits -- the
 # machine half of the stable-API promise above. Downstream consumers select
-# rows by these prefixes (downstream roster provider tokens key on
-# them), so the set is a frozen contract: append new kinds, never rename an
-# existing prefix. The set must stay prefix-free -- no entry may be a prefix
-# of another -- so startswith matching is unambiguous ('Legacy_' must never
-# match 'unWISE_Legacy_*' rows).
+# rows by these prefixes, so the set is a frozen contract: append new kinds,
+# never rename an existing one. The set must stay prefix-free -- no entry may
+# be a prefix of another -- so startswith matching is unambiguous ('Legacy_'
+# must never match 'unWISE_Legacy_*' rows).
 SOURCE_PREFIXES = {
     'legacy':    'Legacy_',            # Tractor optical (Legacy_DR9 / Legacy_DR10)
     'unwise':    'unWISE_Legacy_',     # Tractor-forced unWISE (legacy provider)

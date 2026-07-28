@@ -3,12 +3,16 @@ retry.py
 
 Query Retry Helpers
 ---------------------------------------------------------
-Three retry policies used by the providers:
+Four retry policies used by the providers:
 
     with_expanding_radius   no-match handling -- re-run a cone search with a
                             doubled radius
     retry_transient         transport handling -- exponential backoff around a
-                            flaky HTTP/TAP call (CADC, IRSA)
+                            flaky HTTP/TAP call (CADC, the NOIRLab and Gaia
+                            TAP endpoints, SDSS, Pan-STARRS, J-PLUS)
+    try_services            service rotation -- try alternate endpoints in
+                            order, skipping one that errors, and back off only
+                            between whole rounds
     query_vizier_mirrors    VizieR-specific: fall back across mirror servers,
                             because a VizieR outage can present as empty
                             results rather than errors
@@ -18,7 +22,7 @@ service is known to flap, wrap the transport call itself in retry_transient.
 The policies compose without knowing about each other.
 
 Requirements:
-    astropy; astroquery for query_vizier_mirrors
+    astropy (SkyCoord type hints only)
 """
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ from astropy.coordinates import SkyCoord
 # Constants
 # ------------------------------------
 EXPAND_FACTOR = 2.0    # multiply the search radius by this on each retry
-MAX_RETRIES = 5        # max radius expansions before giving up on a catalog
+MAX_RETRIES = 5        # cone-search attempts before giving up on a catalog
 
 TRANSIENT_ATTEMPTS = 3     # transport retries
 TRANSIENT_BASE_DELAY = 2.0  # seconds; doubles each attempt
@@ -164,9 +168,10 @@ def try_services(
     label : str
         Log prefix.
     rounds : int
-        Full rotations before giving up when every service errors. [2]
+        Full rotations before giving up when every service errors.
+        [default: 2]
     base_delay : float
-        Backoff before the second round, doubling thereafter. [2.0]
+        Backoff before the second round, doubling thereafter. [default: 2.0]
 
     Returns
     -------

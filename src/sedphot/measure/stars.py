@@ -3,11 +3,14 @@ stars.py
 
 Stage 4: The Measured-Star Stage
 ---------------------------------------------------------
-Confirmed stars leave the component list entirely: each is replaced by
-its own measured circular clipped-median radial profile, subtracted
-from the data before any fitting. The measurement is the model -- a
-measured profile cannot absorb light it does not see, so its mask
-needs no geometric cap.
+Confirmed stars leave the component list when their profile measures
+cleanly: each is replaced by its own measured circular clipped-median
+radial profile, subtracted from the data before any fitting. The
+measurement is the model -- a measured profile cannot absorb light it
+does not see, so its mask needs no geometric cap. A profile that
+measures starved or contaminated is not subtracted: inside the aperture
+zone the star is masked and filled, outside it the catalog component
+stays with a leashed amplitude.
 
 Confirmation is astrometric, not positional: a Gaia row counts as a
 star only with a 5-parameter solution at parallax or proper-motion

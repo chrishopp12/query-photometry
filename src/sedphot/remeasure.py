@@ -4,17 +4,28 @@ remeasure.py
 Re-report band fluxes from a stored fit
 ---------------------------------------------------------
 Recompute a galaxy's band fluxes from the IMMUTABLE per-galaxy provenance
-sidecar, with no re-fetch and no re-fit. The fit already stored the target
-model's curve of growth (PSF-convolved, circular apertures, arcsec radii), so
-a different aperture -- or the integrated model total -- is an interpolation on
-values already on disk. The provenance is git_rev-pinned, so a re-report is
-reproducible even after other galaxies rewrite the registry.
+sidecar. The fit stored the target model's curve of growth (PSF-convolved,
+circular apertures, arcsec radii) and the empirical neighbor-subtracted one,
+so inside the stored radius grid a different aperture -- or the integrated
+model total -- is an interpolation on values already on disk: no fetch, no
+scene, no solve.
 
-Both --remeasure modes live here and neither rebuilds the scene, because the fit
-stored both curves of growth: 'sersic' reads the fitted model's COG (the model
-IS the deblended target), 'aperture' the empirical neighbor-subtracted one
-(already sky-subtracted and corrected -- it equals the science f_ap at the
-measured aperture).
+One request leaves that path. Aperture mode past the end of the stored grid
+has no value left to interpolate, so `reconstruct` rebuilds the scene from
+the pinned fit and integrates at R. That path re-reads the cached images
+(fetching any that are missing), rebuilds the scene, and falls back to
+SOLVING any band the sidecar cannot pin; such bands come back labeled
+`solved_*` rather than `reconstruct_*`.
+
+Re-reporting is stable against a registry that other galaxies keep
+rewriting, because the sidecar carries its own registry_consumed snapshot
+and that is read before the live registry. git_rev records which source tree
+wrote the sidecar; it is a label, not a lock.
+
+Both --mode values live here: 'sersic' reads the fitted model's COG (the
+model IS the deblended target), 'aperture' the empirical neighbor-subtracted
+one (already sky-subtracted and corrected -- it equals the science f_ap at
+the measured aperture).
 """
 from __future__ import annotations
 
@@ -50,7 +61,8 @@ def model_flux_within(aperture_arcsec: float | None, rgrid, cog,
     return float(np.interp(aperture_arcsec, xs, ys))
 
 
-# Which stored curve of growth each mode reads (arcsec radii, uJy enclosed).
+# Valid --mode values. _cog_source picks the exact field per band; this dict
+# only whitelists the mode names.
 _COG_FIELD = {'sersic': 'model_cog_uJy', 'aperture': 'enclosed_uJy'}
 
 
@@ -82,11 +94,26 @@ def remeasure(provenance_path: str | Path,
               write_qa: bool = False) -> pd.DataFrame:
     """Per-band fluxes at aperture_arcsec (None/<=0 = integrated), from a fit.
 
-    mode 'sersic' reads the fitted model's curve of growth and extrapolates past
-    the grid to the model total; mode 'aperture' reads the empirical, neighbor-
-    subtracted curve of growth whose outermost measured value is the total.
-    Returns a DataFrame (band, flux_uJy, mag_AB, aperture_as, mode, source);
-    bands whose provenance lacks the curve (demoted/unmeasured) are skipped.
+    Reads the stored curves of growth and reports one row per band. What you
+    get depends on the mode and on whether the aperture is inside the stored
+    radius grid:
+
+      sersic,   inside grid   interpolate the fitted model's COG.
+      sersic,   past grid     the model total -- the model has converged, so
+                              every radius past the grid returns the same
+                              number while aperture_as records what was asked.
+      sersic,   integrated    the model total.
+      aperture, inside grid   interpolate the empirical neighbor-subtracted COG.
+      aperture, past grid     no stored value to read: `reconstruct` rebuilds
+                              the scene from the pinned fit and integrates at
+                              R. That re-reads the cached images (fetching any
+                              that are missing) and SOLVES any band the sidecar
+                              cannot pin.
+      aperture, integrated    the outermost stored point, reported with
+                              aperture_as = inf. There is no empirical total.
+
+    'past grid' is judged against the SHORTEST grid in the sidecar, so it is a
+    property of the galaxy, not of one band.
 
     shape selects which target shape the report is built on. 'forced' is the
     instrument's reference-band shape -- the one the science curve was built
@@ -96,13 +123,20 @@ def remeasure(provenance_path: str | Path,
     Bands with no free-target record fall back to forced, name themselves in
     the log, and say so in their `source`.
 
-    Where shape applies:
-      sersic            reads the free-target model curve directly
-                        (model_cog_free_uJy) -- pure interpolation.
-      aperture          within the grid, shape is inert: the empirical curve
-                        is a measurement, not a rendering of a shape. PAST
-                        the grid, reconstruct rebuilds the scene and the
-                        shape decides what is subtracted.
+    shape acts on sersic mode, and on aperture mode ONLY past the grid, where
+    the target shape decides what gets subtracted from the aperture. Inside
+    the grid under aperture mode it is accepted and IGNORED WITHOUT WARNING:
+    the empirical curve is a measurement of the pixels, not a rendering of a
+    shape.
+
+    Returns
+    -------
+    report : pd.DataFrame
+        (band, flux_uJy, mag_AB, aperture_as, mode, source). `source` records
+        the shape actually used and distinguishes an interpolation
+        (`*_remeasure`) from a rebuild (`reconstruct_*`) or a fresh fit
+        (`solved_*`). Inside the grid a band whose provenance lacks the curve
+        is skipped; past the grid it is solved and returned instead.
     """
     if mode not in _COG_FIELD:
         raise ValueError(f"mode must be one of {sorted(_COG_FIELD)}, got {mode!r}")
@@ -112,9 +146,10 @@ def remeasure(provenance_path: str | Path,
     # Past the stored grid the empirical curve holds no value to read;
     # reconstruct the scene from the pinned fit and integrate at R.
     per_band = prov.get('per_band') or {}
-    # The SHORTEST stored grid decides: past its end that band has no value
-    # left to read and would silently return its capped outermost point.
-    # Taking the longest instead would let short-grid bands do exactly that.
+    # The SHORTEST stored grid decides for the whole galaxy: past its end a
+    # band has no value left to read and would silently return its capped
+    # outermost point. One band whose grid stopped early therefore sends
+    # every band down the reconstruction path.
     ends = [(b.get('fit_state') or {}).get('rgrid')[-1]
             for b in per_band.values()
             if (b.get('fit_state') or {}).get('rgrid')]
@@ -172,11 +207,10 @@ def remeasure(provenance_path: str | Path,
 
 
 def _vector(record: dict | None) -> tuple:
-    """(params, pix) out of a shapes / solve / solve_free record.
+    """(params, pix) out of a `shapes`, `solve`, or `solve_free` record.
 
-    The three name their grid differently (`pix` vs `pix_ref`) because two
-    of them are a solver's own output and one is the engine's statement of
-    what it rendered. Read them uniformly.
+    The grid is named `pix` on `shapes` and `pix_ref` on `solve`; either is
+    accepted. Returns (None, None) when the record has no params.
     """
     params = (record or {}).get('params')
     if not params:
@@ -206,8 +240,7 @@ def _build_pin_by_band(prov: dict, shape: str = 'forced') -> dict:
     per_band = prov.get('per_band') or {}
     # per_band preserves engine.order_bands order, so the FIRST band of each
     # instrument is its reference -- the one band that solved every seat
-    # free. Position in the record IS the rule: a band-name test would only
-    # restate it, and only for instruments that happen to have an r band.
+    # free. Position in the record is the rule; there is no band-name test.
     ref: dict = {}
     for band, b in per_band.items():
         params, pix = _vector(b.get('solve'))
@@ -328,7 +361,7 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     # The SCENE belongs to the aperture the fit was built for: the
     # target-substructure rule and the star zone are both scoped to it,
     # so asking for a larger radius here would delete catalog rows as
-    # 'target shreds' that the fit had modelled and subtracted.
+    # 'target shreds' that the fit had modeled and subtracted.
     science_ap = float(prov.get('aperture_arcsec') or aperture_arcsec)
     if aperture_arcsec > cutout / 2.0:
         raise ValueError(
@@ -360,20 +393,19 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
                             registry_path=registry_path, write_outputs=False,
                             qa_dir=qa_dir)
     out = {row['band']: float(row['flux_uJy']) for _, row in frame.iterrows()}
-    # A band with no pin took run_measure's SOLVING path -- a fresh fit, not a
-    # reconstruction. It is still the best available answer, so it is kept, but
-    # the caller must be able to label it honestly rather than call it pinned.
+    # A band with no pin took run_measure's SOLVING path, so it is a fresh
+    # fit. Kept as the best available answer, but labeled separately.
     solved = sorted(band for band in out if band not in pin)
     if status is not None:
         status['solved'] = solved
     if solved:
         print(f"  [remeasure] {len(solved)} band(s) had no pinnable fit and "
               f"were SOLVED, not reconstructed: {solved}")
-    # run_measure reports a dead band by PRINTING and moving on, so under the
-    # redirect its only trace lands in the discarded buffer. Compare the whole
-    # sidecar against what came back -- that catches every drop mechanism, not
-    # just the two the pipeline has messages for -- and replay whatever reasons
-    # it did give.
+    # Compare the sidecar's band list against what came back: run_measure
+    # reports a dead band by PRINTING and moving on, so under the redirect its
+    # message is in the discarded buffer. The comparison catches every drop
+    # mechanism, not only the ones the pipeline prints for; the replay below
+    # recovers whatever reasons it did give.
     missing = [band for band in (prov.get('per_band') or {}) if band not in out]
     if missing:
         print(f"  [remeasure] {len(missing)} band(s) absent from the rebuild: "

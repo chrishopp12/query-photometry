@@ -16,8 +16,8 @@ Requirements:
 
 Notes:
     resolve_target is the single entry point; providers never take raw names.
-    Names go to the services as-is -- no cluster-alias rewriting
-    (ACO/redMaPPer); this package resolves galaxies.
+    Names go to the services as-is: resolution is whatever Sesame, NED, or
+    SIMBAD return for the string given.
 """
 from __future__ import annotations
 

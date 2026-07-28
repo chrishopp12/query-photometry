@@ -46,11 +46,14 @@ def find_artifacts(
     A pixel is an artifact candidate when it sits above the brightness
     floor -- the LARGER of ARTIFACT_SIG sigma and the absolute
     ARTIFACT_SB_MIN (uJy/arcsec^2) -- AND ARTIFACT_RATIO times above
-    the catalog scene's claim there. An under-predicted real source
-    fails the ratio test; a galaxy outskirt or cD envelope rim fails
-    the absolute floor (bright against the noise on a deep stack, but
-    far below the sky); a bleed trail is orders of magnitude past all
-    of them. Candidates must form a connected region of at least
+    the catalog scene's claim there AND the scene is QUIET there (claim
+    below that same floor). An under-predicted real source fails the
+    ratio test; a bright real core -- a cD cusp above its smooth model,
+    a saturated star above its clipped catalog flux -- fails the quiet
+    test; a galaxy outskirt or cD envelope rim fails the absolute floor
+    (bright against the noise on a deep stack, but far below the sky);
+    a bleed trail is orders of magnitude past all of them. Candidates
+    must form a connected region of at least
     ARTIFACT_AREA_MIN arcsec^2 -- smaller leftovers stay with the flood
     channel. The target protects its own pixels the same way every
     source does, through its claim in pred: light beyond the ratio on

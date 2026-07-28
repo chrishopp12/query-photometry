@@ -5,12 +5,14 @@ Stage 5: Seats and the Cross-Field Registry
 ---------------------------------------------------------
 A "seat" is a component whose shape parameters enter the nonlinear
 solve. Standard, catalog-driven seats: every gated component gets a
-Sersic core (small center box) plus a Nuker halo (wide center box under
-an ownership penalty), and the target always gets a refit seat -- the
+Sersic core (small center box), and the target gets a refit seat -- the
 catalog informs the photometry only through the neighbors, never
-through the target itself. Custom, per-galaxy seats (all optional, via
-the patches file): free single-Sersic seats for companion nuclei or
-retyped rows, center snapping, disabling the target refit.
+through the target itself. recipe.GATED_HALO adds a Nuker halo (wide
+center box under an ownership penalty) to every gated seat; by default
+the halo belongs to the target alone, granted through the patches
+file's "target_halo". Custom, per-galaxy seats (all optional, via the
+patches file): free single-Sersic seats for companion nuclei or retyped
+rows, center snapping, disabling the target refit.
 
 Seat dict:
     kind       'sersic' or 'nuker'
@@ -21,6 +23,10 @@ Seat dict:
                nuker  (rb_px, beta, ellip, pa_deg, dx_px, dy_px)
                radial and offset entries are reference-band pixels; pa
                is sky-frame degrees.
+
+The registry has two sides: harvest_seats WRITES a solved seat's shape,
+center, and per-band flux into it; apply_registry READS an entry back
+into a later field as fixed components (consuming it).
 
 The registry lets a source solved once be reused by every later field
 that contains it: every stored record is consumed FROZEN -- fixed,
@@ -51,12 +57,24 @@ Entries transport the full per-band decomposition: per-band shapes
 (arcsec, sky PA), solved centers as sky coordinates, and per-band
 solved fluxes as the amplitude anchor.
 
+Data products:
+    <registry>.json   the cross-field registry, rewritten whole by
+                      save_registry when the caller asks for it
+
 Requirements:
     numpy, scipy, astropy
 
 Notes:
     Registry entries are keyed by a position-derived name, so re-solving
     the same physical source from any field updates the same entry.
+    The registry is mutable state shared by every galaxy measured
+    against it. harvest_seats updates the loaded dict in memory as each
+    band solves; the file is rewritten once, at the end of the run, and
+    only when the caller passes registry_update (CLI --registry-update).
+    Two consequences: measuring galaxy B after galaxy A can change B's
+    flux, because a shared neighbor A registered is frozen into B's
+    scene instead of solved there; and updates are last-writer-wins with
+    no locking, so sweeps must run one galaxy at a time.
 """
 from __future__ import annotations
 
@@ -358,6 +376,13 @@ def apply_registry(
         looked up by it, falling back to the instrument-level list.
     instrument : str
         Instrument label, the fallback lookup key.
+    protect_px : list of (x, y), optional
+        Extra stamp-pixel positions that are never consumed, on top of
+        the target's own (declared target-system members).
+    snapshot : list, optional
+        A sidecar's registry_consumed record. When given it replaces the
+        live registry entirely, so a pinned reconstruction consumes the
+        shapes its fit actually used. [default: use `registry`]
     tag : str
         Run-log prefix.
 
@@ -567,10 +592,10 @@ def resolve_registry_key(registry: dict, ra_deg: float, dec_deg: float,
     across bands: a coarse-pixel PS1 solve can land ~0.3" off the deep-
     band anchor and round to a different JHHMMSS+DDMMSS, so the source's
     bands split across two near-identical keys. Coalescing to the nearest
-    existing entry within tol keeps one physical source on one key -- and
-    since consumption already places every entry by position, an entry
-    that is never split is never a candidate for the same-band double
-    subtraction two drifted keys could invite.
+    existing entry within tol keeps one physical source on one key. Two
+    keys for one source would both be consumed, and consumption places
+    entries by position, so the same light would be subtracted twice in
+    the same band.
     """
     tol = recipe.REGISTRY_KEY_COALESCE_AS if tol_arcsec is None else tol_arcsec
     fresh = registry_name(ra_deg, dec_deg)
@@ -627,6 +652,10 @@ def harvest_seats(
         pixels.
     seat_amps : list of float
         Solved per-seat fluxes (uJy), aligned with seats.
+    seat_col_flux : list of float, optional
+        Per-seat unit-column in-stamp flux (uJy), aligned with seats.
+        Stored divided by cf as `flux_home`, the shape integral consumers
+        use to recover the physical amplitude. None stores no anchor.
     stamp : Stamp
         This band's stamp (WCS and pixel scale).
     band_key : str
@@ -678,7 +707,7 @@ def harvest_seats(
         # amplitude as flux_ref / (flux_home * their own cf), so an
         # off-stamp neighbor gets only the wing that reaches -- never
         # the whole source crammed into its edge -- and per-stack
-        # zeropoints stay local (the smooth-walk fix).
+        # zeropoints stay local.
         record = dict(kind=seat['kind'], ra=float(center.ra.deg),
                       dec=float(center.dec.deg), ellip=float(q[2]),
                       pa=float(q[3]), flux_ref=max(float(amp), 0.0),

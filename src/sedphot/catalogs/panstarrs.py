@@ -11,14 +11,13 @@ Requirements:
 
 Notes:
     These are PSF magnitudes; for extended sources the Kron magnitudes
-    (gKmag etc.) may be more appropriate -- inspect before trusting bright
-    galaxy totals. Bands with NaN magnitudes (non-detections) are skipped
-    rather than propagated.
+    (gKmag etc.) may be more appropriate. Compare against another provider
+    before trusting a bright-galaxy total. Bands with NaN magnitudes
+    (non-detections) are skipped rather than propagated.
 
-    VizieR outages can present as EMPTY results rather than errors, on the
-    mirrors as well as the primary host (so the mirror fallback does not
-    catch them). A no_match during such an outage is indistinguishable from
-    a true no-match -- if a PS1-covered target reports no_match
+    VizieR outages can present as empty results rather than errors -- see
+    retry.query_vizier_mirrors. A no_match during one is indistinguishable
+    from a true no-match; if a PS1-covered target reports no_match
     unexpectedly, re-run later.
 """
 from __future__ import annotations
@@ -53,7 +52,8 @@ PANSTARRS_BANDS = {
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
-    """One VizieR cone query; closest source; one row per detected band."""
+    """One VizieR cone query; closest source; one row per detected band.
+    [] on no result or service failure."""
     mag_cols = [c for pair in PANSTARRS_BANDS.values() for c in pair]
     # The Vizier instance is built per mirror attempt: vizier_server is the
     # only reliable way to point it (see retry.query_vizier_mirrors).
@@ -123,7 +123,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        One row per detected grizy band on success.
+        One row per detected grizy band on success; a no_match result
+        otherwise.
     """
     rows = with_expanding_radius(_query_once, coord, radius_arcsec, "Pan-STARRS")
     if rows:

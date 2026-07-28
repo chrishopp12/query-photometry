@@ -11,9 +11,7 @@ Two routes to Legacy Surveys pixels:
     bricks            the NERSC brick coadds -- full 0.25 deg bricks,
                       image + invvar per band, tens of MB per file. The
                       brick is resolved from the Tractor catalog at the
-                      target position. Because the cutout service serves
-                      no inverse variance, bricks are the only route to
-                      real per-pixel noise.
+                      target position.
 
 Data products (cached in cache_dir, the target's Photometry/Legacy/):
     legacy_<layer>_<band>.fits                   viewer cutout plane (nmgy)
@@ -21,7 +19,7 @@ Data products (cached in cache_dir, the target's Photometry/Legacy/):
     legacysurvey-<brick>-invvar-<band>.fits.fz   brick inverse variance
 
 Requirements:
-    requests, astropy; astroquery (brick route only)
+    requests, numpy, astropy, astroquery
 
 Notes:
     The viewer layer and coadd hemisphere follow the data release and the
@@ -142,12 +140,12 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
 # ------------------------------------
 def _fetch_noirlab(coord: SkyCoord, bands: tuple, size_arcsec: float,
                    cache_dir: Path, dr: str) -> list[ImageProduct]:
-    """NOIRLab Data Lab cutouts: the SAME DR coadd pixels as the viewer,
-    served from datalab.noirlab.edu, so a drop-in fallback when NERSC is down.
+    """NOIRLab Data Lab cutouts: the same DR coadd pixels as the viewer.
 
+    Served from datalab.noirlab.edu, so a drop-in fallback when NERSC is down.
     Same nanomaggy calibration and 0.262"/pixel scale, no inverse variance
     (errors fall back to sky rms, exactly as the viewer route). Files take the
-    viewer-route name so sedfit's filename provenance stays uniform; the real
+    viewer-route name so downstream filename provenance stays uniform; the real
     source is stamped in the header (FETCHSRC = noirlab-cutout).
 
     The brick is resolved from the Data Lab TAP catalog (strict, so a TAP
@@ -257,8 +255,8 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
                   dr: str) -> list[ImageProduct]:
     """NERSC brick coadds: image + invvar per band, cached, hemisphere fallback."""
     # Cache-first brick identity: the brickname is already encoded in
-    # any cached coadd's filename, so a re-measure never needs the TAP
-    # resolution (nor survives its outages) once the files exist.
+    # any cached coadd's filename, so once the files exist a re-measure
+    # skips the TAP resolution entirely and is unaffected by its outages.
     cached = sorted(cache_dir.glob(f'legacysurvey-{dr}-*-image-*.fits.fz')) \
         or sorted(cache_dir.glob('legacysurvey-*-image-*.fits.fz'))
     if cached:

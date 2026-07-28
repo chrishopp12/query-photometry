@@ -36,7 +36,7 @@ STATUS_ERROR = "error"              # service or parse failure (message has deta
 # ------------------------------------
 @dataclass
 class ProviderResult:
-    """Outcome of one catalog provider query.
+    """Outcome of one provider call -- a catalog query or an image fetch.
 
     Attributes
     ----------

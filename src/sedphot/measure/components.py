@@ -11,7 +11,8 @@ Optional per-galaxy patches edit the catalog before any of this
 (replacing a blended row with a known decomposition, for example).
 
 Component dict (the currency of the whole engine):
-    name       'target' or 'src<catalog row index>'
+    name       'target', 'src<catalog row index>', or
+               '<registry entry>.<n>' for a registry-consumed component
     irow       catalog row index (int; -1 for synthetic components)
     cat        catalog flux through the scene band (uJy)
     x, y       stamp-pixel position
@@ -24,9 +25,11 @@ Requirements:
     numpy, pandas, astropy
 
 Notes:
-    Registry consumption (seats.apply_registry) may append frozen
-    components carrying two extra keys: reg=True and amp_lohi (a flux
-    leash in uJy).
+    Registry consumption (seats.apply_registry) appends frozen
+    components carrying reg=True, a flux leash amp_lohi (uJy), and the
+    frozen shape. A star whose measured profile is rejected outside the
+    aperture zone keeps its component with star_reverted=True and its
+    own amp_lohi (stars.py).
 """
 from __future__ import annotations
 
@@ -59,6 +62,12 @@ def gated_row(row: pd.Series, dist_arcsec: float) -> bool:
     chi-square in ANY band vetoes the row outright (artifact echoes
     fire across several bands). Point-source rows and the target
     itself never gate.
+
+    Notes
+    -----
+    The distance argument is what excludes the target: a caller asking
+    whether the target's own row would qualify (engine._target_gates,
+    for the harvest pass) passes a non-self distance deliberately.
     """
     if dist_arcsec < recipe.TARGET_MATCH_AS:
         return False
@@ -364,9 +373,7 @@ def build_components(
                                     shape_2d)
             if profile_cache is not None:
                 profile_cache[name] = unconv
-        # The margin rule, no exemptions: an off-stamp source must
-        # actually REACH the stamp at catalog shape and amplitude or it
-        # does not exist for this field. An off-stamp giant whose light
+        # The margin rule, no exemptions. An off-stamp giant whose light
         # truly reaches is patches territory -- components enter blind
         # scenes on data-supported presence only.
         if not inside and float(unconv.sum()) * cf < recipe.MARGIN_MIN_UJY:

@@ -12,8 +12,9 @@ to the broadband schema.
 The tool is a GUI over an IVOA UWS 1.1 async service. Direct UWS job
 creation is token-gated (403 for guests), so submission goes the way the
 public GUI does: through Firefly's command server (guest session), then the
-open UWS endpoint is polled by job id. The direct-UWS path is kept for the
-day IRSA documents the credential.
+open UWS endpoint is polled by job id. The direct-UWS path is unusable
+without a credential IRSA does not currently issue to guests;
+submit_uws_direct takes a token for when one is available.
 
 Source model: POINT, or ELLIPTICAL with a frozen Sersic shape. UNIT TRAP:
 Firefly's ServerRequest carries effectiveRadius in DEGREES; the UWS
@@ -43,6 +44,10 @@ Notes:
     Epochs with broken file metadata kill jobs server-side; the
     IRSA-documented workaround is restricting to a known-good MJD window
     (mjd_range).
+
+    Because a written table is never overwritten, a wrong source model is
+    permanent: an extraction runs only on a shape that was asked for
+    explicitly or looked up successfully, never on a substituted one.
 """
 from __future__ import annotations
 
@@ -91,8 +96,7 @@ SPHEREX_N_MAX = 6.0    # the tool rejects Sersic indices above 6
 
 # The tool treats any source with reff below this as a POINT SOURCE: a
 # sub-threshold Sersic request returns photometry bit-identical to a psf
-# request (verified on a control target: two independently fetched jobs,
-# 300/300 identical rows). The Sersic parameters are then cosmetic.
+# request of the same window, so the Sersic parameters are cosmetic.
 SPHEREX_POINT_SOURCE_REFF = 1.0    # arcsec
 
 MANUAL_RECIPE = (
@@ -326,9 +330,9 @@ def _votable_to_flat(content):
 
     The tool returns ONE row per source with per-visit measurements packed
     as array-valued columns; this explodes them to one row per visit (what
-    the GUI's "save as CSV" produces). Two IRSA quirks are handled: the
-    non-spec arraysize="54x*" on obs_publisher_did (captured, rewritten,
-    re-split fixed-width) and array-valued columns generally.
+    the GUI's "save as CSV" produces). Two IRSA quirks are handled: a
+    non-spec fixed-width char column (arraysize="Nx*", rewritten to "*" and
+    re-split at width N) and array-valued columns generally.
     """
     from astropy.io.votable import parse_single_table
 
@@ -398,8 +402,7 @@ def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None,
     Transient poll failures are tolerated up to max_poll_failures in a
     row: a long job is polled hundreds of times, and one dropped HTTP
     read must not abandon an extraction that is still running
-    server-side (observed as ReadTimeouts killing whole submissions
-    during an IRSA slow spell).
+    server-side.
     """
     t0 = time.time()
     failures = 0
@@ -520,8 +523,8 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
                       mjd_range=None, token=None):
     """Create a job straight on the UWS service. Returns the job URL.
 
-    Gated: a direct POST returns 403 for guests; supply token once IRSA
-    documents the credential and this becomes the clean path (no Firefly).
+    Gated: a direct POST returns 403 for guests. With a token this is the
+    one-hop path, skipping Firefly entirely.
     """
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     data = {"BKG_REGION_SIZE": str(int(round(float(bkg_region_size))))}
@@ -542,7 +545,7 @@ def submit_uws_direct(session, ra, dec, model=None, bkg_region_size=15,
 # Extraction configurations
 # ------------------------------------
 MANIFEST_NAME = "extractions.json"
-PRETAG_TABLE_NAME = "table_photometry.csv"   # fetched before tags existed
+PRETAG_TABLE_NAME = "table_photometry.csv"   # untagged; never renamed
 
 
 def _canon(value: float) -> float:
@@ -621,10 +624,10 @@ def _matching_existing_table(spherex_dir: Path, payload: dict,
                              tag: str) -> Path | None:
     """An already-fetched table for this configuration, if any.
 
-    The tagged filename is checked first, then the pre-tagging bare name
-    whose sidecar records the same configuration. Pre-tag tables are
-    recognized in place and never renamed: their names are baked into
-    roster entries and run provenance.
+    The tagged filename is checked first, then the untagged name whose
+    sidecar records the same configuration. Untagged tables are recognized
+    in place and never renamed: their names are baked into roster entries
+    and run provenance.
     """
     tagged = spherex_dir / f"table_photometry.{tag}.csv"
     if tagged.exists():

@@ -1,7 +1,7 @@
 """
 background.py
 
-Scene Background: One Owner, One Estimator
+Scene Background: One Owner per Spatial Scale
 ---------------------------------------------------------
 The scene engine's background is estimated here and nowhere else: a
 plane through sigma-clipped bin MEANS with bin-level MAD rejection.
@@ -14,6 +14,15 @@ there, never because a fit found it convenient to call it background.
 The plane never sits in a design matrix next to component amplitudes
 -- it alternates with the amplitude solve, each estimated on the
 other's residual.
+
+Three estimators own three scales and none may take another's. The
+plane owns level and tilt across the cutout. residual_mesh owns smooth
+structure below that, built on the post-fit residual, zeroed of DC over
+the plane's own accepted bins, subtracted only inside the curve of
+growth and never fed back into a fit. The fitted source model owns
+compact light. eval_plane and eval_mesh rebuild either surface from the
+provenance sidecar's stored record, so a reconstruction reproduces the
+background without re-binning.
 
 The bin statistic is a clipped mean, not a median, because photometry
 SUMS pixels: the background must estimate the mean sky under the
@@ -33,10 +42,10 @@ Requirements:
     numpy, scipy, astropy
 
 Notes:
-    work is in native image counts, so the plane and the ambient
-    surface are in counts too. rr is the stamp's radius map about the
-    target (arcsec). The bin size derives from recipe.BIN_AS at the
-    band's pixel scale, floored at 4 px.
+    work is in native image counts, so the plane, the mesh, and the
+    ambient surface are in counts too. rr is the stamp's radius map
+    about the target (arcsec). The bin size derives from recipe.BIN_AS
+    at the band's pixel scale, floored at 4 px.
 """
 from __future__ import annotations
 
@@ -271,14 +280,14 @@ def residual_mesh(
     Built on light no model claimed -- image minus fitted scene minus
     the plane -- and subtracted only inside the curve of growth, never
     fed back into any fit. The construction bounds its resolution to
-    background scales: 5-arcsec bin levels, one-bin Gaussian smoothing
-    (NaN-interpolating, so non-voting bins fill from neighbors), and a
-    bilinear return to pixels with queries CLAMPED to the bin-center
-    hull (no extrapolation growth at the stamp edge). Structure sharper
-    than about two bins -- cores, PSF residuals, fit dipoles -- is
-    invisible to it by construction, so the mesh can only ever own
-    background-scale light, and a well-fit source leaves it nothing
-    to take.
+    background scales: recipe.BIN_AS bin levels, one-bin Gaussian
+    smoothing (NaN-interpolating, so non-voting bins fill from
+    neighbors), and a bilinear return to pixels with queries CLAMPED to
+    the bin-center hull (no extrapolation growth at the stamp edge).
+    Structure sharper than about two bins -- cores, PSF residuals, fit
+    dipoles -- is invisible to it by construction, so the mesh can only
+    ever own background-scale light, and a well-fit source leaves it
+    nothing to take.
 
     The mesh carries STRUCTURE, never level: it is zeroed over the
     plane's own accepted-bin territory (level_px), so the level keeps

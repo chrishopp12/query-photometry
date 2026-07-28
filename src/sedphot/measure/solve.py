@@ -12,12 +12,21 @@ exactly at every trial of the shape parameters -- with the Gram block
 of the constant fixed columns precomputed and shared across the
 alternation's warm re-solves.
 
-Reference bands solve seat shapes; transfer bands freeze every
-TARGET-SYSTEM seat at the reference shape (the measurement definition
-never re-negotiates per band, and a declared member's light is the
-target's own) and re-solve NEIGHBOR seat shapes warm, with seat fluxes
-leashed to color-scaled reference values (subtraction wants per-band
-fidelity: chromatic morphology is real, especially for large envelopes).
+Reference bands solve their seats' shapes. A transfer band takes those
+shapes and solves in one of three modes:
+
+    default            every TARGET-SYSTEM seat frozen at the reference
+                       shape, neighbor seats re-solved warm
+    free_target        every seat free -- the per-band shape a gating
+                       target harvests to the registry
+    freeze_neighbors   every seat frozen: the target at the reference
+                       shape, the neighbors at a vector from an earlier
+                       free solve, so no shape solve runs at all
+
+The target system freezes because its shape is part of the measurement
+definition and its light is the target's own. Neighbor shapes re-solve
+per band because subtraction wants per-band fidelity: chromatic
+morphology is real, especially for large envelopes.
 
 Requirements:
     numpy, scipy, astropy
@@ -27,6 +36,12 @@ Notes:
     unit in-stamp flux, so a fitted amplitude IS that component's
     in-stamp flux through the band -- one unit system for catalog
     components and seat columns on every instrument.
+
+    An amplitude is LEASHED when its solve is bounded to a window around
+    an expected flux rather than left free to the sanity ceiling: the
+    catalog value for a star or fixed component, a color-scaled
+    reference-band solution for a transfer-band seat, a registry entry's
+    stored per-band flux for a consumed component.
 """
 from __future__ import annotations
 
@@ -52,8 +67,9 @@ def _design(bases, good, fluxes, bounds=None):
 
     Every column is divided by its in-stamp flux (uJy), so every fitted
     amplitude IS that component's in-stamp flux in uJy through this
-    band. Default bounds: (0, AMP_MAX_X_CAT x the column's reference
-    flux); explicit bounds (uJy) are honored verbatim.
+    band. Default bounds: (0, recipe.AMP_MAX_X_CAT x the column's own
+    in-stamp flux -- the value it is normalized by); explicit bounds
+    (uJy) are honored verbatim.
     """
     G = np.column_stack([b[good] / f for b, f in zip(bases, fluxes)])
     lb = np.zeros(G.shape[1])
@@ -79,7 +95,8 @@ def _amp_solve(Gn, norms, lb, ub, rhs):
 # ------------------------------------
 # Seat rescaling across grids
 # ------------------------------------
-# Pixel-valued entries of each seat kind: (size, dx, dy).
+# Parameter indices whose values are in pixels, per seat kind:
+# (size, dx, dy).
 _KIND_RADIAL = {'sersic': (0, 4, 5), 'nuker': (0, 4, 5)}
 
 
@@ -152,9 +169,11 @@ def render_seats(
 ) -> tuple[list[np.ndarray], list[str]]:
     """All seat columns on this band's grid.
 
-    Radial parameters are in reference-band pixels, rescaled
-    arcsec-invariantly by s_px; centers resolve from sky coordinates
-    through this band's WCS (precomputed anchors when given).
+    Radial parameters are in the pixels of whatever grid p was solved
+    on; s_px rescales them arcsec-invariantly onto this band's grid
+    (1.0 when p is already band-local). Centers resolve from sky
+    coordinates through this band's WCS (precomputed anchors when
+    given).
     """
     if anchors is None:
         anchors = seat_anchors(seats, stamp)
@@ -284,10 +303,10 @@ def solve_shapes(
                     idx = sl.start + k_par
                     h = sqrt_eps * max(1.0, abs(p[idx]))
                     # Step inward from whichever bound the parameter sits
-                    # on. Flipping only at the ceiling leaves the floor
-                    # unguarded: on a box narrower than the step -- the
-                    # staged center freeze is 2e-6 wide -- the flip would
-                    # itself leave the box and render an out-of-bounds trial.
+                    # on. Both bounds need the check: the staged center
+                    # freeze is a 2e-6-wide box, narrower than the step
+                    # itself, so a one-sided flip would still render an
+                    # out-of-bounds trial.
                     if p[idx] + h > hi[idx]:
                         h = -h
                     if p[idx] + h < lo[idx]:
@@ -315,10 +334,10 @@ def solve_shapes(
     # geometry organizes. Stage 1 freezes the Sersic centers; stage 2
     # releases them from that basin. Applied to COLD solves and to
     # CROSS-BAND warm re-solves (stage_warm): a seed scaled from another
-    # band lands off-center on a bright envelope and crawls without it (a
-    # companion that converges in ~10 evals in the reference band burned
-    # the full cap in z before staging). A same-band warm re-solve inside
-    # the alternation already sits in its basin and skips the staging.
+    # band lands off-center on a bright envelope and can burn the whole
+    # evaluation budget crawling back to center. A same-band warm re-solve
+    # inside the alternation already sits in its basin and skips the
+    # staging.
     lo1, hi1 = lo.copy(), hi.copy()
     staged = False
     for seat, sl in zip(seats, slices):
@@ -377,6 +396,8 @@ def _target_side(seat: dict) -> bool:
     if 'system' in seat:
         return bool(seat['system'])
     return seat['owner'] == 'target'
+
+
 def _transfer_setup(seats, ref, stamp, psf, free_target=False,
                     freeze_neighbors=None):
     """Band-local seat machinery for a transfer band.
@@ -385,8 +406,8 @@ def _transfer_setup(seats, ref, stamp, psf, free_target=False,
     grid, renders the frozen target columns once, and splits the seat
     indices into frozen (target) and free (neighbor) sets. When
     free_target, the target seats join the free set too: the per-band
-    free shape a gating target harvests for the registry (Solve 1),
-    versus the forced-shape science pass that freezes it (Solve 2).
+    free shape a gating target harvests for the registry, versus the
+    science pass that freezes it at the reference shape.
 
     freeze_neighbors adopts a full band-local vector's NEIGHBOR slices and
     freezes every seat, so no shape solve runs at all: the target holds the
@@ -520,8 +541,10 @@ def joint_fit(
         amps and mults (aligned with fixed components then seat
         columns), bg (the converged background), track (the constant's
         path), solve_info, cols and owners (seat columns), fixed (the
-        fixed component list), col_flux, and -- for the registry --
-        seats_local, seat_params (band-local solved vector), seat_amps.
+        fixed component list), col_flux, amp_bounds (per-column
+        (lo, hi) in uJy, aligned with amps; absent from pinned_fit's
+        result), and -- for the registry -- seats_local, seat_params
+        (band-local solved vector), seat_amps.
     """
     rr, pix, sigma = stamp.rr, stamp.pixscale, stamp.sigma
     cf = stamp.cf
@@ -660,18 +683,44 @@ def pinned_fit(
 
     The pinned reconstruction: seats render at the stored shape vector
     (pin['seat_params'], whose radial entries live in pin['seat_pix']
-    arcsec/px and are rescaled onto this band's grid), amplitudes are
-    taken from the sidecar by owner name (pin['amps']), and the plane is
-    re-evaluated from its stored coefficients (pin['bg_coefs']). Nothing
-    is optimized, so the expensive shape solve, the amplitude solve, and
-    the background fit are all skipped. The band is treated as self-
-    contained -- its own stored shape, its own grid -- so no reference/
-    transfer state is threaded. Returns the same dict joint_fit does, so
-    the measurement flow downstream is identical.
+    arcsec/px and are rescaled onto this band's grid), amplitudes come
+    from the sidecar in the order it recorded them, one queue per owner
+    (pin['amps']), and the plane is re-evaluated from its stored
+    coefficients (pin['bg_coefs']). Nothing is optimized, so the
+    expensive shape solve, the amplitude solve, and the background fit
+    are all skipped. The band is treated as self-contained -- its own
+    stored shape, its own grid -- so no reference/transfer state is
+    threaded.
 
     An owner absent from pin['amps'] (a catalog source the stored fit did
     not carry) falls back to its own catalog flux -- amplitude one, the
     scene's default prediction -- rather than vanishing from the scene.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Star-subtracted image (counts, finite everywhere).
+    good : np.ndarray
+        Usable-pixel map.
+    stamp : Stamp
+        This band's stamp.
+    psf : np.ndarray
+        This band's PSF kernel.
+    comps : list of dict
+        Scene components.
+    seats, drops : list of dict, set of str
+        Seat definitions and the component names they replace, as the
+        stored fit carried them.
+    pin : dict
+        The stored fit: seat_params, seat_pix, amps ([[owner, uJy], ...]
+        in the order the fit recorded them), bg_coefs.
+
+    Returns
+    -------
+    fit : dict
+        What joint_fit returns, so the measurement flow downstream is
+        identical -- minus amp_bounds, and with solve_info None and a
+        one-element track (nothing was solved or alternated).
     """
     from .background import eval_plane
 
@@ -684,9 +733,9 @@ def pinned_fit(
     # Radial parameters are grid-relative, so a vector solved on one band
     # renders at the wrong physical size on a band with a different pixel
     # scale. Rescale arcsec-invariantly, exactly as the live transfer path
-    # does (_transfer_setup). A sidecar written before pix_ref was recorded
-    # leaves seat_pix None: assume this band's own grid -- right for every
-    # instrument with a single pixel scale, and all such a record supports.
+    # does (_transfer_setup). A record with no seat_pix falls back to this
+    # band's own grid -- right for every single-pixel-scale instrument, and
+    # all such a record supports.
     seat_pix = pin.get('seat_pix')
     s_px = float(seat_pix) / stamp.pixscale if seat_pix else 1.0
     if seats and p is not None:

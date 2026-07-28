@@ -7,7 +7,10 @@ Closest-source 12-band photometry from the J-PLUS DR3 dual-mode catalog via
 the CEFCA TAP service, using the PSF-corrected magnitudes (MAG_PSFCOR) --
 the catalog's PSF-homogenized magnitude set.
 
-Service facts:
+Requirements:
+    numpy, pandas, requests, astropy
+
+Notes:
   - TAP sync endpoint: TAP_SYNC_URL below; FORMAT=csv. The astroquery
     TapPlus wrappers choke on this service's table metadata and on its
     error responses, so the module POSTs the sync endpoint directly.
@@ -16,10 +19,6 @@ Service facts:
     macro (mag_psfcor[jplus::rSDSS]). NUMERIC indices do not follow filter
     order -- never use them.
 
-Requirements:
-    numpy, pandas, requests, astropy
-
-Notes:
     Non-detections carry the SExtractor mag=99 sentinel and are skipped.
     Fluxes are emitted AS-MEASURED (no MW dereddening).
     The uJAVA and bluest medium bands are shallow; expect low S/N and
@@ -88,7 +87,8 @@ def _adql(coord: SkyCoord, radius_arcsec: float) -> str:
 
 
 def _query_once(coord: SkyCoord, radius_arcsec: float, *, holder: dict) -> list[dict]:
-    """One sync TAP query; closest source; one row per detected band."""
+    """One sync TAP query; closest source; one row per detected band.
+    [] on no result or service failure."""
     def _post():
         response = requests.post(
             TAP_SYNC_URL,
@@ -163,7 +163,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        One row per detected band on success; meta carries tile_id/number.
+        One row per detected band on success; a no_match result otherwise.
+        meta carries tile_id/number.
     """
     holder: dict = {}
     rows = with_expanding_radius(

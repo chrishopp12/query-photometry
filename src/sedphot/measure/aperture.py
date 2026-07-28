@@ -1,23 +1,30 @@
 """
 aperture.py
 
-Stage 7: Mask, Fill, Curve of Growth, Witnesses
+Stage 7: Mask, Fill, Curve of Growth, Witnesses, Output Row
 ---------------------------------------------------------
 The measurement side of the scene engine. The fitted neighbors and the
 converged background are subtracted, residual neighbor pixels are
 masked through three channels and reconstructed by the twin fill, and
-the aperture flux is the curve of growth of what remains -- the target
-model itself is never integrated into the measurement. Every step
+the aperture flux is the curve of growth of what remains. Every step
 leaves a witness; the witnesses ride the output row's flags column and
 the provenance sidecar, not a human's memory of the run.
+
+The flux error is measured rather than propagated -- source-free
+apertures on the final residual (empap_error), floored by the
+white-noise value (flux_error). measurement_to_row assembles the schema
+row, and qa_flags packs the decisive witnesses into its flags column.
 
 Requirements:
     numpy, scipy
 
 Notes:
-    All fluxes microjansky. The reported flux is the aperture integral
-    of (filled - background); the fitted target model appears only in
-    witnesses (model curve, fill fallback) and comparisons.
+    All fluxes microjansky. In aperture mode the reported flux is the
+    aperture integral of (filled - background), and the fitted target
+    model appears only in witnesses (model curve, fill fallback) and
+    comparisons. In sersic mode measurement_to_row reports the fitted
+    target model itself, through the same scene fit and the same
+    statistical error model.
 """
 from __future__ import annotations
 
@@ -50,9 +57,10 @@ def build_mask(
     """Mask residual neighbor light through three channels.
 
     1. Intersection: a neighbor's own fitted model above the isophote
-       threshold AND inside its catalog-geometry ellipse (seeing floor)
-       -- faint shreds mask little, bright sources stay geometrically
-       bounded.
+       threshold AND inside its own recorded geometry -- the catalog
+       shape, or the registry's stored shape for a consumed component --
+       floored at seeing. Faint shreds mask little, bright sources stay
+       geometrically bounded.
     2. Stars: each measured profile above its own isophote, no
        geometric cap (a measured profile cannot claim light it does not
        see).
@@ -148,9 +156,9 @@ def build_mask(
                   f"masked, {flood_ujy:+.1f} uJy of escaped glow")
             mask = flood
 
-    # Optional mask-free core: with TARGET_MASK_FREE_AS > 0 the
-    # target's inner radius is never masked by any channel; at 0 the
-    # twin fill is trusted over a neighbor model's core subtraction.
+    # Optional mask-free core. At the default TARGET_MASK_FREE_AS = 0
+    # this is inert: the twin fill is trusted over a neighbor model's
+    # core subtraction. Above 0, no channel may mask inside that radius.
     freed = mask & (rr < recipe.TARGET_MASK_FREE_AS)
     if freed.any():
         print(f"    {tag}mask-free core: restored "
@@ -183,8 +191,29 @@ def twin_fill(
     the mirror difference), CLAMPED between the mirror value and the
     model fill so holes are impossible by construction. The model fill
     (fitted target + background) is the fallback for invalid mirrors.
-    Blank pixels inside the aperture fill the same way -- the coverage
-    gate has already bounded how many there can be.
+    Blank pixels inside the aperture fill the same way --
+    stamp.check_coverage has already bounded how many there can be
+    (recipe.COVERAGE_MIN), and refused the band outright past it.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Star-subtracted data (counts).
+    neighbors : np.ndarray
+        Fitted neighbor light (counts); subtracted before filling.
+    mask : np.ndarray
+        Neighbor mask (build_mask).
+    good : np.ndarray
+        Usable-pixel map.
+    stamp : Stamp
+        This band's stamp.
+    model_fill : np.ndarray
+        Fitted target model plus background (counts): the value used
+        where a pixel has no valid mirror, and one end of the fill clamp.
+    aperture_arcsec : float
+        Science aperture radius; blank pixels inside it are filled too.
+    tag : str
+        Run-log prefix.
 
     Returns
     -------
@@ -447,9 +476,9 @@ def empap_error(
         *,
         aperture_arcsec: float,
 ) -> tuple[float, int]:
-    """Empty-aperture flux error: the measured scatter of the statistic
-    the row reports.
+    """Empty-aperture flux error, measured on the final residual.
 
+    The measured scatter of the statistic the row reports.
     Source-free apertures are placed on the FINAL residual (fitted
     scene, plane, and mesh all subtracted) and their robust scatter is
     the standard deviation of "an aperture flux containing no target"
@@ -514,11 +543,13 @@ def flux_error(
         *,
         aperture_arcsec: float,
 ) -> tuple[float, str]:
-    """White-noise flux error: inverse variance when the archive serves
-    it, global sky rms otherwise -- the FLOOR under the measured
-    empty-aperture error (empap_error), kept for stamps too small to
-    place enough empty apertures. Floors and inflation belong to the
-    SED fitter, never to this table.
+    """White-noise flux error: inverse variance, or global sky rms.
+
+    Inverse variance when the archive serves it, global sky rms
+    otherwise -- the FLOOR under the measured empty-aperture error
+    (empap_error), kept for stamps too small to place enough empty
+    apertures. Floors and inflation belong to the SED fitter, never to
+    this table.
 
     Parameters
     ----------

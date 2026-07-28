@@ -3,13 +3,13 @@ calibrate.py
 
 Image Loading and Flux Calibration
 ---------------------------------------------------------
-
 FITS loading (plain or .fz) and the per-instrument calibration factors
 that put every image on the common microjansky scale:
 
     'nmgy'    Legacy bricks/cutouts, SDSS frames:  uJy = ADU_nmgy * 3.631
     'photzp'  CFHT MegaPipe (PHOTZP header, AB):   uJy = ADU * 10^(-(ZP-23.9)/2.5)
-    'ps1'     PanSTARRS stacks (ZP=25 for DN/s):   uJy = ADU * 10^((23.9-zp_dn)/2.5)
+    'ps1'     PanSTARRS stacks (ZP = 25 + 2.5 log10 EXPTIME):
+                                                   uJy = ADU * 10^((23.9-zp_dn)/2.5)
     'hst'     drizzled e/s with PHOTFLAM/PHOTPLAM: uJy = ADU * 10^((23.9-zp_ab)/2.5)
 
 Requirements:
@@ -77,8 +77,8 @@ def calib_factor(calib: str, header: fits.Header) -> float:
     calib : str
         Calibration key: 'nmgy' | 'photzp' | 'ps1' | 'hst'.
     header : fits.Header
-        Science-image header (supplies PHOTZP / EXPTIME / PHOTFLAM as
-        needed by the key).
+        Science-image header (supplies PHOTZP / EXPTIME / PHOTFLAM /
+        PHOTPLAM as needed by the key).
 
     Returns
     -------

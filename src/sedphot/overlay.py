@@ -3,11 +3,11 @@ overlay.py
 
 Catalog-Position Overlay on the HAP Color Composite
 ---------------------------------------------------------
-Where every catalog thinks the target is. Fetches the HAP pipeline's
-pre-made color composite for the field and plots each table row's matched
-position on it, so a table can be checked for the failure the flux columns
-cannot show: two providers confidently reporting photometry for two
-different objects.
+Where every catalog thinks the target is. Fetches the Hubble Advanced
+Products (HAP) pipeline's pre-made color composite for the field and plots
+each table row's matched position on it, so a table can be checked for the
+failure the flux columns cannot show: two providers confidently reporting
+photometry for two different objects.
 
 This answers a positional question, not a photometric one -- the QA scene
 figures cover the latter. It reads only the schema columns match_ra,
@@ -17,7 +17,7 @@ are a frozen contract (see schema.py).
 Data products (written under <out-dir>/Photometry/):
     <label>_overlay.png        context + zoom panels per target
     HST/*_drc_color.jpg        the cached HAP composite
-    HST/*_total_drc.fits       the cached detection mosaic (WCS only)
+    HST/*total*_drc.fits       the cached detection mosaic (WCS only)
 
 Requirements:
     numpy, pandas, matplotlib, astropy, astroquery, pillow
@@ -55,10 +55,10 @@ from .schema import SOURCE_PREFIXES
 # ------------------------------------
 # Constants
 # ------------------------------------
-# Marker style per provider token of SOURCE_PREFIXES -- open symbols, so a
-# marker never hides the object underneath it. Keyed on the token rather
-# than the full source string because the string carries a data release
-# (Legacy_DR9 vs Legacy_DR10) that must not change how a point is drawn.
+# Marker style per source -- open symbols, so a marker never hides the
+# object underneath it. An exact source string wins; otherwise the key is
+# the SOURCE_PREFIXES provider token, so a data release carried in the
+# string (Legacy_DR9 vs Legacy_DR10) never changes how a point is drawn.
 PROVIDER_STYLES = {
     # Exact source strings first, for the one case where a single provider
     # reports genuinely different positions: HAP segment centroids are
@@ -167,7 +167,10 @@ def discover_hap_total(coord: SkyCoord,
 
 def download_file(uri: str, filename: str,
                   cache_dir: str | Path) -> Path | None:
-    """Download one MAST product, cache-first. None on failure."""
+    """Download one MAST product, cache-first. None on failure.
+
+    The detection mosaic is ~380 MB; the color JPG is small.
+    """
     from astroquery.mast import Observations
 
     cache_dir = Path(cache_dir)
@@ -223,6 +226,8 @@ def load_color_image_and_wcs(color_path: str | Path,
 def rgb_cutout(rgb: np.ndarray, wcs: WCS, coord: SkyCoord,
                half_arcsec: float) -> tuple[np.ndarray, WCS] | None:
     """WCS-aware cutout of an RGB image, or None when off the mosaic."""
+    # Cutout2D needs a 2D array, and the slices it computes are the same for
+    # every channel, so one channel is enough to derive them.
     try:
         cut = Cutout2D(rgb[:, :, 0], coord, 2 * half_arcsec * u.arcsec,
                        wcs=wcs)
@@ -443,8 +448,9 @@ def build(
     zoom_arcsec, context_arcsec : float
         Panel half-widths in arcsec. [default: 5 and 15]
     wcs_from : str or Path, optional
-        Local FITS already on the composite's drizzle grid, instead of
-        downloading the detection mosaic. Dimension-checked either way.
+        Local FITS already on the composite's drizzle grid, used instead of
+        downloading the ~380 MB detection mosaic for its WCS. Dimension-
+        checked either way.
     dpi : int
         Figure resolution. [default: 200]
 

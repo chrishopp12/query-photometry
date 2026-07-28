@@ -4,9 +4,7 @@ galex.py
 GALEX GUVcat Catalog Provider
 ---------------------------------------------------------
 Closest-source FUV/NUV photometry from GUVcat_AIS (Bianchi et al. 2017, the
-All-sky Imaging Survey tier) via VizieR catalog II/335/galex_ais. The
-catalog is queried through VizieR rather than the MAST GALEX endpoint,
-which can error where VizieR answers.
+All-sky Imaging Survey tier), served through VizieR (II/335/galex_ais).
 
 The catalog's own E(B-V) (SFD at the source position) is converted to a
 per-band MW transmission carried in the mw_transmission column, using
@@ -19,8 +17,10 @@ Requirements:
 Notes:
     GUVcat magnitudes are native AB. Non-detections (sentinel/NaN mags) are
     skipped per band. AIS is shallow (~100 s); a no_match is common outside
-    deeper GI fields. VizieR outages can present as empty results -- see
-    panstarrs.py.
+    deeper GI fields. VizieR outages can present as empty results rather
+    than errors -- see retry.query_vizier_mirrors.
+    VizieR is preferred over the MAST GALEX endpoint, which can error where
+    VizieR answers.
 """
 from __future__ import annotations
 
@@ -53,7 +53,8 @@ GALEX_BANDS = {
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
-    """One VizieR cone query; closest source; one row per detected band."""
+    """One VizieR cone query; closest source; one row per detected band.
+    [] on no result or service failure."""
     mag_cols = [c for pair in GALEX_BANDS.values() for c in pair]
     # The Vizier instance is built per mirror attempt: vizier_server is the
     # only reliable way to point it (see retry.query_vizier_mirrors).
@@ -129,7 +130,8 @@ def query(coord: SkyCoord, radius_arcsec: float) -> ProviderResult:
     Returns
     -------
     result : ProviderResult
-        FUV/NUV rows where detected.
+        One row per detected GALEX band on success; a no_match result
+        otherwise.
     """
     rows = with_expanding_radius(_query_once, coord, radius_arcsec, "GALEX GUVcat")
     meta = {'catalog': GALEX_CAT, 'service': 'VizieR'}

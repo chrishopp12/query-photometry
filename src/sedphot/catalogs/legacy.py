@@ -12,16 +12,16 @@ The data release is selectable: DR10 adds i-band and the southern DECam
 sky; DR9 covers the BASS/MzLS north. The per-band Milky Way transmission
 columns are queried and carried per row.
 
-WISE rows are labeled WISE_Wn with the unWISE provenance in the source
-column -- band identity is the filter, measurement provenance lives in the
-source column. unWISE-forced and AllWISE values therefore share WISE_Wn
-band labels and differ only in source.
+WISE rows are labeled WISE_Wn; the source column separates this
+unWISE-forced photometry from AllWISE's (band identity is the filter,
+provenance is the source column).
 
 Beyond the closest-source provider interface, the same table feeds the
 scene measurement engine: query_scene returns every Tractor source in a
 cone above an r-band flux floor -- shape, per-band flux, PSF-size, and
 fit-quality columns, brightest-first -- for modeling the field around a
-target rather than measuring the target itself.
+target rather than measuring the target itself. The scene is that modeled
+field; see measure/recipe.py for the recipe these columns feed.
 
 Column conventions:
     Tractor flux_* are nanomaggies; flux_ivar_* are 1/nanomaggy^2.
@@ -88,7 +88,8 @@ def _columns(band: str) -> tuple[str, str, str]:
 # Query
 # ------------------------------------
 def _query_once(coord: SkyCoord, radius_arcsec: float, *, dr: str, holder: dict) -> list[dict]:
-    """One TAP cone query; closest source; one row per band. [] on no result."""
+    """One TAP cone query; closest source; one row per band. [] on no result
+    or service failure."""
     table = LEGACY_TABLES[dr]
     bands = LEGACY_BANDS[dr]
     ra = float(coord.ra.deg)
@@ -147,8 +148,7 @@ def _query_once(coord: SkyCoord, radius_arcsec: float, *, dr: str, holder: dict)
         mag = ujy_to_mag(flux_ujy)
         mag_err = flux_err_to_mag_err(flux_ujy, flux_err_ujy)
 
-        # WISE bands: filter identity in the label, unWISE provenance in the
-        # source string (see module notes).
+        # Filter identity in the label, provenance in the source string.
         if band.startswith('W'):
             band_label = f'WISE_{band}'
             source = f'unWISE_Legacy_{dr.upper()}'
@@ -191,7 +191,8 @@ def query(coord: SkyCoord, radius_arcsec: float, *,
     Returns
     -------
     result : ProviderResult
-        One row per band on success; meta carries brickname/release.
+        One row per band on success; a no_match result otherwise. meta
+        carries brickname/release.
     """
     if dr not in LEGACY_TABLES:
         raise ValueError(f"unknown Legacy release {dr!r}; known: {sorted(LEGACY_TABLES)}")
@@ -269,6 +270,9 @@ def shape_from_tractor(type_: str, sersic_n: float, shape_r: float,
 def query_shape(coord: SkyCoord, radius_arcsec: float = 2.0, *,
                 dr: str = LEGACY_DR_DEFAULT) -> tuple[dict, dict] | None:
     """Closest-source Tractor shape for a forced source model.
+
+    Forced here is sedphot's sense: the model's shape is frozen and only its
+    amplitude is fit.
 
     One-shot cone query (no radius expansion: a shape grabbed from a wider
     search risks the wrong source).

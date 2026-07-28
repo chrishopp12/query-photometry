@@ -15,7 +15,7 @@ Data products (cached in cache_dir, the target's Photometry/CFHT/):
                                  and skipped when PHOTZP is absent)
 
 Requirements:
-    requests, astropy, astroquery
+    requests, numpy, astropy, astroquery; reproject for the tile-edge mosaic
 
 Notes:
     - The deep optical stacks are collection CFHTMEGAPIPE; 'CFHTLS' returns
@@ -197,12 +197,10 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir : str or Path
         Photometry/CFHT/ directory; downloads are cached here.
     aperture_arcsec : float
-        Science aperture the stack coverage is judged against: a stack that
+        Science aperture the stack coverage is judged against; a stack that
         clips inside it fails and drives the tile-edge mosaic, matching the
-        measurement coverage gate at the SAME aperture. The pipeline always
-        passes the run's own value; the default only matches the CLI's so a
-        direct call cannot judge coverage at an aperture no run uses.
-        [default: 10]
+        measurement coverage gate at the same aperture. The pipeline passes
+        the run's own value; the default matches the CLI's. [default: 10]
 
     Returns
     -------

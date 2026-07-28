@@ -6,13 +6,20 @@ QA and SED Figures
 
 The diagnostic figures every image extraction writes, and the combined SED
 plot. Shared conventions across the figures: asinh/ZScale grayscale stamps,
-tab:blue aperture markings, tab:green mask contours, wavelength-ordered point colors.
+tab:blue aperture markings, tab:green mask contours, orange artifact
+contours, wavelength-ordered point colors. The SED's color scale is absolute
+(0.15-25 um); the growth-curve figure rescales to the bands plotted, so a
+color does not carry across the two figures.
 
-Data products:
-    QA/<inst>_<band>.png          per-band scene panels: data | fitted scene |
-                                  residual | masked + filled | curve of growth
-    QA/growth_curves.png          enclosed flux vs radius, all bands
-    <label>_sed.png               combined SED (catalog + measured points)
+Data products (written under <out-dir>/Photometry/):
+    <Instrument>/QA/<Inst>_<band>.png   per-band scene panels: data | fitted
+                                        scene | residual | masked + filled |
+                                        curve of growth
+    QA/growth_curves.png                enclosed flux vs radius, all bands
+    <label>_sed.png                     combined SED (catalog + measured)
+
+The scene-panel directory belongs to the caller: pipeline writes them under
+each instrument, `remeasure --write-qa` under QA/remeasure_R<N>as/.
 
 Requirements:
     numpy, pandas, matplotlib, astropy
@@ -67,6 +74,26 @@ def qa_scene_figure(measurement: dict, out_dir: str | Path) -> Path:
     (components + background), their residual, the measurement image
     (masked pixels twin-filled), and the curve of growth against the
     fitted target model's own curve.
+
+    Parameters
+    ----------
+    measurement : dict
+        One band's engine result. Reads the arrays 'image', 'scene',
+        'filled', 'mask', 'good', optional 'mesh' and 'artifact'; the
+        geometry 'cx', 'cy', 'pixscale', 'aperture_arcsec'; the curves
+        'rgrid', 'enclosed_ujy', 'model_cog'; the labels 'instrument',
+        'band', 'flux_ujy', 'flux_err_ujy', 'err_model'; and 'witness',
+        whose keys supply the panel annotations (bg_sb, bg_tilt_sb,
+        mesh_ap_uJy, maskfrac_ap, r_conv_as, excess_growth_uJy,
+        model_own_growth_uJy -- all defined in measure/aperture.py and
+        measure/recipe.py).
+    out_dir : str or Path
+        Directory for the figure; created when absent.
+
+    Returns
+    -------
+    figure_path : Path
+        The written <instrument>_<band>.png.
     """
     image = measurement['image']
     scene = measurement['scene']
@@ -158,6 +185,20 @@ def plot_growth_curves(measurements: list[dict], out_dir: str | Path) -> Path:
     Colors are wavelength-ordered over the range actually plotted: the
     absolute SED scale (far-UV through mid-IR) would compress an
     optical-only band set into near-identical hues.
+
+    Parameters
+    ----------
+    measurements : list of dict
+        One engine result per band; reads 'rgrid', 'enclosed_ujy',
+        'wave_um', 'instrument', 'band', and the first entry's
+        'aperture_arcsec' for the science-aperture line.
+    out_dir : str or Path
+        Directory for the figure; created when absent.
+
+    Returns
+    -------
+    figure_path : Path
+        The written growth_curves.png.
     """
     waves = [m['wave_um'] for m in measurements
              if np.isfinite(m['wave_um'])]
@@ -209,7 +250,9 @@ def plot_sed(
     Parameters
     ----------
     frames : dict[str, pd.DataFrame]
-        {legend label: schema table}; typically {'catalog': ..., 'measured': ...}.
+        {legend label: schema table}. The key 'measured' is load-bearing:
+        that frame draws with open faces, every other key draws filled,
+        and the legend is written for the {'catalog', 'measured'} pair.
     outpath : str or Path
         Output PNG.
     title : str

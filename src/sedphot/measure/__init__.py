@@ -15,7 +15,7 @@ The chain, one numbered stage per module: stamp -> psf -> components
 -> stars -> seats -> solve -> aperture -> engine (the per-galaxy
 driver). Shared services stay unnumbered: recipe.py (every constant),
 render.py (image-model primitives), background.py (the one background
-estimator), sersic.py (the single-Sersic shape fit), calibrate.py
-(flux calibration).
+estimator), artifacts.py (the catastrophic-pixel mask), sersic.py (the
+single-Sersic shape fit), calibrate.py (flux calibration).
 """
 from __future__ import annotations

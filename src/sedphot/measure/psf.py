@@ -37,7 +37,8 @@ from .stamp import Stamp
 # ------------------------------------
 # Implementation constants
 # ------------------------------------
-EDGE_MARGIN_AS = 3.0          # a star's CORE must sit this far inside the stamp
+EDGE_MARGIN_AS = 3.0          # a star's CENTER must sit this far inside the
+                              # stamp; only its core need be fully on-stamp
 
 BG_ANNULUS_AS = (9.0, 13.0)   # local background annulus about the star
 BG_ANNULUS_MIN_PX = 200       # annulus pixels required for its median
@@ -417,10 +418,9 @@ def resolve_psf(
 ) -> tuple[np.ndarray, float, str]:
     """Resolve the band PSF: empirical star first, Moffat fallback.
 
-    The empirical kernel is always preferred -- a beta=3 Moffat is
-    measurably too soft through the core against real survey PSFs, and
-    a too-soft kernel rings every bright core on subtraction. When no
-    star qualifies, the fallback is a Moffat sized by resolve_seeing.
+    The empirical kernel is always preferred (see the module header);
+    when no star qualifies, the fallback is a Moffat sized by
+    resolve_seeing.
 
     Parameters
     ----------

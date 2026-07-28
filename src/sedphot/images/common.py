@@ -8,7 +8,7 @@ by band alone (never by size), so a changed request can quietly reuse a
 file fetched under different settings; the checks here make that loud.
 
 Requirements:
-    numpy, astropy
+    numpy, astropy; reproject for mosaic_first_valid
 """
 from __future__ import annotations
 

@@ -9,7 +9,8 @@ fields -- package version, git revision of the code that ran, timestamp, and
 a content hash of the product itself.
 
 Data products:
-    <product>.provenance.json    next to every written product
+    <product-stem>.provenance.json    next to every written product (the
+                                      product's extension is replaced)
 
 Requirements:
     (stdlib only)
@@ -39,7 +40,8 @@ def sha256_16(path: str | Path) -> str:
 
 
 def git_state() -> dict:
-    """Git revision + dirty flag of the sedphot source tree; fail-soft."""
+    """Git revision + dirty flag of the repository containing the installed
+    sedphot source; fail-soft (null outside a repo)."""
     repo_dir = Path(__file__).resolve().parent
     try:
         rev = subprocess.run(
@@ -59,7 +61,8 @@ def git_state() -> dict:
 # Sidecar writer
 # ------------------------------------
 def write_sidecar(product_path: str | Path, meta: dict) -> Path:
-    """Write <product>.provenance.json next to a written product.
+    """Write the sidecar next to a written product, replacing the product's
+    extension with .provenance.json.
 
     Parameters
     ----------

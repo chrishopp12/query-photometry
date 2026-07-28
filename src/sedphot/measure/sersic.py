@@ -3,11 +3,11 @@ sersic.py
 
 Single-Sersic Shape Fit
 ---------------------------------------------------------
-Fit one Sersic profile's shape on a chosen band, or accept explicit
-parameters -- the shape source for the SPHEREx forced model and for
-pinning the scene engine's target profile. The Moffat PSF and the
-WCS position-angle transfer helpers live here because every consumer
-of a fitted shape needs them.
+Fit one Sersic profile's shape on a chosen band -- the shape source for
+the SPHEREx forced model and for pinning the scene engine's target
+profile under `--mode sersic`. The Moffat PSF and the WCS
+position-angle transfer helpers live here because every consumer of a
+fitted shape needs them.
 
 Requirements:
     numpy, scipy, astropy
@@ -34,7 +34,9 @@ from scipy.signal import fftconvolve
 # Constants
 # ------------------------------------
 MOFFAT_BETA = 3.0
-SERSIC_N_MAX = 8.0        # fit bound; the SPHEREx tool caps n at 6
+SERSIC_N_MAX = 8.0        # fit bound here; the SPHEREx tool caps n at 6,
+                          # and the scene engine's seats use
+                          # recipe.SERSIC_N_RANGE
 
 
 # ------------------------------------
