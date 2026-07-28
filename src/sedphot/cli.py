@@ -4,34 +4,34 @@ cli.py
 
 sedphot Command-Line Interface
 ---------------------------------------------------------
-Galaxy in, SED photometry out. resolve and remeasure only print; the
-other subcommands write into the galaxy directory given by --out-dir
-(default '.', so products land in ./Photometry/ of the current
-directory). resolve, catalogs, measure, spherex and run take the same
-target spec: a resolvable name (--name) or an explicit position
-(--ra --dec). sed and overlay work from tables already on disk, and
-remeasure from a provenance sidecar path.
+Galaxy in, SED photometry out. resolve and remeasure only print; every
+other subcommand requires --out-dir, the galaxy directory products,
+image caches and the scene cache all land under. resolve, catalogs,
+measure, spherex and run take the same target spec: a resolvable name
+(--name) or an explicit position (--ra --dec). sed and overlay work
+from tables already on disk, and remeasure from a provenance sidecar
+path.
 
 Usage:
     sedphot resolve  (--name NAME | --ra DEG --dec DEG)
-    sedphot catalogs (--name NAME | --ra DEG --dec DEG)
+    sedphot catalogs (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      (--instruments legacy panstarrs hst ... | --all)
                      [--radius 2.0] [--legacy-dr {dr10,dr9}] [--dered]
-    sedphot measure  (--name NAME | --ra DEG --dec DEG)
+    sedphot measure  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      (--instruments legacy sdss cfht ... | --all)
-                     [--mode {aperture,sersic}] [--aperture 10.0]
+                     [--mode {aperture,sersic}] [--aperture 12.0]
                      [--sky-rmin AS] [--registry FILE [--registry-update]]
-    sedphot spherex  (--name NAME | --ra DEG --dec DEG)
+    sedphot spherex  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
-    sedphot sed      [--out-dir DIR] [--label STEM]
-    sedphot overlay  [--out-dir DIR] [--label STEM] [--zoom-size 5.0]
+    sedphot sed      --out-dir DIR [--label STEM]
+    sedphot overlay  --out-dir DIR [--label STEM] [--zoom-size 5.0]
                      [--context-size 15.0] [--wcs-from FITS]
     sedphot remeasure PROVENANCE.json [--mode {sersic,aperture}]
                      [--aperture 12.0 | --integrated]
                      [--shape {forced,fitted}] [--registry FILE]
                      [--write-qa] [--out CSV]
-    sedphot run      (--name NAME | --ra DEG --dec DEG) [--skip ...]
-                     [--spherex {off,psf,sersic}]
+    sedphot run      (--name NAME | --ra DEG --dec DEG) --out-dir DIR
+                     [--skip ...] [--spherex {off,psf,sersic}]
                      [every flag in the measurement group -- see
                       `sedphot measure --help`; --dump-arrays is
                       measure-only]
@@ -40,16 +40,18 @@ Examples:
     Resolve a name to coordinates and the default output label:
         sedphot resolve --name "NGC 4889"
 
-    All catalog photometry for a position, into the current directory
+    All catalog photometry for a position
     (add --legacy-dr dr10 for the i-band southern release):
-        sedphot catalogs --ra 194.898792 --dec 27.959528 --all
+        sedphot catalogs --ra 194.898792 --dec 27.959528 --all \\
+            --out-dir Galaxies/J125935.7+275734
 
-    Legacy + Pan-STARRS only, into a galaxy directory:
+    Legacy + Pan-STARRS only:
         sedphot catalogs --name "M87" --instruments legacy panstarrs \\
-            --out-dir Clusters/Virgo/Galaxies/M87
+            --out-dir Galaxies/M87
 
     Uniform aperture photometry on every available image:
-        sedphot measure --name "M87" --all --aperture 10 --out-dir M87
+        sedphot measure --name "M87" --all --aperture 12 \\
+            --out-dir Galaxies/M87
 """
 from __future__ import annotations
 
@@ -68,8 +70,15 @@ from .results import STATUS_OK
 # ------------------------------------
 # Shared argument groups
 # ------------------------------------
-def _add_target_args(parser: argparse.ArgumentParser) -> None:
-    """The target spec + output location shared by every subcommand."""
+def _add_target_args(parser: argparse.ArgumentParser, *,
+                     needs_out_dir: bool = True) -> None:
+    """The target spec + output location shared by every subcommand.
+
+    A verb that writes requires --out-dir: products, image caches and the
+    scene cache all land under it, so an unstated one silently builds a
+    galaxy tree wherever the shell happens to be standing. resolve only
+    prints, so it takes no output directory at all.
+    """
     group = parser.add_argument_group("target")
     group.add_argument('--name', type=str, default=None,
                        help="Resolvable object name (Sesame -> NED -> SIMBAD)")
@@ -77,9 +86,10 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
                        help="RA in decimal degrees (with --dec, instead of --name)")
     group.add_argument('--dec', type=float, default=None,
                        help="Dec in decimal degrees")
-    group.add_argument('--out-dir', type=str, default=".",
-                       help="Galaxy directory; products land in <out-dir>/Photometry/ "
-                            "[default: .]")
+    if needs_out_dir:
+        group.add_argument('--out-dir', type=str, required=True,
+                           help="Galaxy directory; products land in "
+                                "<out-dir>/Photometry/ (required)")
     group.add_argument('--label', type=str, default=None,
                        help="Output filename stem [default: sanitized name or J-name]")
 
@@ -331,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_resolve = subparsers.add_parser(
         "resolve", help="Resolve a target name/position and print it")
-    _add_target_args(p_resolve)
+    _add_target_args(p_resolve, needs_out_dir=False)
     p_resolve.set_defaults(func=_cmd_resolve)
 
     p_catalogs = subparsers.add_parser(
@@ -403,8 +413,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sed = subparsers.add_parser(
         "sed", help="Combined SED plot from the tables already in out-dir")
-    p_sed.add_argument('--out-dir', type=str, default=".",
-                       help="Galaxy directory [default: .]")
+    p_sed.add_argument('--out-dir', type=str, required=True,
+                       help="Galaxy directory holding the tables (required)")
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
@@ -412,8 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_overlay = subparsers.add_parser(
         "overlay",
         help="Overlay each catalog's matched position on the HAP color image")
-    p_overlay.add_argument('--out-dir', type=str, default=".",
-                           help="Galaxy directory [default: .]")
+    p_overlay.add_argument('--out-dir', type=str, required=True,
+                           help="Galaxy directory holding the tables (required)")
     p_overlay.add_argument('--label', type=str, default=None,
                            help="Output stem [default: inferred when "
                                 "unambiguous]")
