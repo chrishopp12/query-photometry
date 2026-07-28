@@ -426,7 +426,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Local FITS already on the composite's "
                                 "drizzle grid, instead of fetching the "
                                 "~380 MB detection mosaic for its WCS "
-                                "(dimension-checked; a mismatch refuses)")
+                                "(dimension-checked; a mismatch, or a path "
+                                "naming no file, refuses)")
     p_overlay.add_argument('--dpi', type=int, default=200,
                            help="Figure resolution [default: 200]")
     p_overlay.set_defaults(func=_cmd_overlay)

@@ -26,9 +26,10 @@ Notes:
     The composite carries no WCS of its own, so the detection mosaic it
     was rendered from supplies one -- a ~380 MB download the first time a
     field is used, cached thereafter. Pass wcs_from= to point at a local
-    file already on that drizzle grid instead; the pixel dimensions are
-    checked against the JPG either way, and a mismatch refuses rather than
-    silently misplacing every marker.
+    file already on that drizzle grid instead; a path that names no file
+    refuses rather than reinstating the download, and the pixel dimensions
+    are checked against the JPG either way, so a grid mismatch refuses
+    rather than silently misplacing every marker.
 """
 from __future__ import annotations
 
@@ -450,15 +451,25 @@ def build(
     wcs_from : str or Path, optional
         Local FITS already on the composite's drizzle grid, used instead of
         downloading the ~380 MB detection mosaic for its WCS. Dimension-
-        checked either way.
+        checked either way. A path that is not a readable file refuses:
+        falling back to the download is the one outcome the caller asked
+        for by name to avoid.
     dpi : int
         Figure resolution. [default: 200]
 
     Returns
     -------
     figure_path : Path or None
-        The written PNG, or None when the field has no HAP composite.
+        The written PNG, or None when the field has no HAP composite or
+        wcs_from names no file.
     """
+    # Checked before anything is queried or downloaded: a mistyped path
+    # must cost nothing, and must never silently become the ~380 MB fetch.
+    if wcs_from and not Path(wcs_from).is_file():
+        print(f"  [overlay] --wcs-from names no file: {wcs_from}; refusing "
+              f"to fall back to the detection-mosaic download")
+        return None
+
     targets = []
     for label, table in tables.items():
         if table is None or table.empty:
@@ -482,7 +493,7 @@ def build(
         return None
     color_path = download_file(found['color_uri'], found['color_file'],
                                cache_dir)
-    wcs_path = (Path(wcs_from) if wcs_from and Path(wcs_from).exists()
+    wcs_path = (Path(wcs_from) if wcs_from
                 else download_file(found['fits_uri'], found['fits_file'],
                                    cache_dir))
 

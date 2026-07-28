@@ -804,14 +804,16 @@ def run_overlay(
         Panel half-widths in arcsec. [default: 5 and 15]
     wcs_from : str, optional
         Local FITS on the composite's drizzle grid, instead of fetching
-        the ~380 MB detection mosaic for its WCS.
+        the ~380 MB detection mosaic for its WCS. A path naming no file
+        refuses rather than reinstating the download.
     dpi : int
         Figure resolution. [default: 200]
 
     Returns
     -------
     figure_path : Path or None
-        The written PNG, or None when no tables or no HAP composite.
+        The written PNG, or None when no tables, no HAP composite, or a
+        wcs_from that names no file.
     """
     from .overlay import build
 

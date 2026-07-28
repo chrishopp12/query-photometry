@@ -223,6 +223,22 @@ def test_build_returns_none_when_no_table_has_rows(tmp_path):
     assert overlay.build({'a': empty}, tmp_path / "x.png", tmp_path) is None
 
 
+def test_build_refuses_a_wcs_from_that_names_no_file(tmp_path, capsys,
+                                                     monkeypatch):
+    """A mistyped path must not fall through to the detection-mosaic
+    download -- not fetching it is the whole reason the flag exists."""
+    def explode(*a, **k):
+        raise AssertionError("nothing may be queried or downloaded")
+
+    monkeypatch.setattr(overlay, 'discover_hap_total', explode)
+    monkeypatch.setattr(overlay, 'download_file', explode)
+    out = overlay.build({'a': phot_table(['Legacy_DR9'])},
+                        tmp_path / "x.png", tmp_path,
+                        wcs_from=tmp_path / "typo_drc.fits")
+    assert out is None
+    assert "typo_drc.fits" in capsys.readouterr().out
+
+
 def test_run_overlay_reports_missing_tables(tmp_path, capsys):
     from sedphot.pipeline import run_overlay
 
