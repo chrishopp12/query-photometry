@@ -205,6 +205,42 @@ def test_beyond_grid_threshold_uses_the_shortest_stored_grid(tmp_path):
     assert 'remeasure' in remeasure(p, 15.0, mode='aperture').iloc[0]['source']
 
 
+def test_remeasure_announces_crossing_the_stored_grid(tmp_path, capsys,
+                                                      monkeypatch):
+    """Inside the grid this is an interpolation of values already on disk;
+    past it the images are re-read and the whole scene rebuilt. The two
+    cost wildly different amounts, so the boundary must be reported."""
+    import pandas as pd
+
+    from sedphot import pipeline
+
+    prov = {'git_rev': 'abc123',
+            'target': {'ra_deg': 150.0, 'dec_deg': 2.0, 'label': 'g8'},
+            'instruments': ['legacy'], 'cutout_arcsec': 120.0,
+            'per_band': {'Legacy_r': {
+                'solve': {'params': [1.0] * 6, 'pix_ref': 0.262},
+                'fit_state': {'amps': [['target', 1.0]],
+                              'bg_coefs': [0.0, 0.0, 0.0],
+                              'rgrid': [2.0, 20.0],
+                              'enclosed_uJy': [90.0, 545.0]}}}}
+    p = tmp_path / 'Photometry' / 'g8_measured.provenance.json'
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps(prov))
+
+    def fake_run_measure(*a, **k):
+        return pd.DataFrame([{'band': 'Legacy_r', 'flux_uJy': 700.0}])
+
+    monkeypatch.setattr(pipeline, 'run_measure', fake_run_measure)
+    remeasure(p, 30.0, mode='aperture')
+    printed = capsys.readouterr().out
+    assert '30"' in printed          # what was asked for
+    assert '20"' in printed          # and where the stored curve ends
+
+    # Inside the grid nothing is rebuilt, so nothing is announced.
+    remeasure(p, 15.0, mode='aperture')
+    assert 'past the stored curve' not in capsys.readouterr().out
+
+
 def test_seatless_band_is_pinnable_without_a_shape_vector():
     """A scene with NO seats needs no shape vector: the fixed components at
     their stored amplitudes on the stored plane ARE the whole fit."""

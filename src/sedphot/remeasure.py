@@ -155,6 +155,13 @@ def remeasure(provenance_path: str | Path,
             if (b.get('fit_state') or {}).get('rgrid')]
     grid_max = min(ends) if ends else 0.0
     if mode == 'aperture' and not integrated and aperture_arcsec > grid_max:
+        # The boundary is worth a line: on one side this is a millisecond
+        # interpolation of values already on disk, on the other it re-reads
+        # the images, rebuilds the whole scene, and may solve.
+        print(f"  [remeasure] aperture {float(aperture_arcsec):g}\" is past "
+              f"the stored curve of growth (ends at {float(grid_max):g}\"); "
+              f"rebuilding the scene from the pinned fit instead of "
+              f"interpolating")
         state: dict = {}
         recon = reconstruct(provenance_path, float(aperture_arcsec),
                             shape=shape, registry_path=registry_path,
