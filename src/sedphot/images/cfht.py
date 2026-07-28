@@ -54,7 +54,6 @@ from .common import mosaic_first_valid, warn_undersized_cache
 # ------------------------------------
 COLLECTION = "CFHTMEGAPIPE"
 SEEING = 0.8
-DEFAULT_BANDS = ('u', 'g', 'r', 'i', 'z')
 WAVE_UM = {'u': 0.355, 'g': 0.475, 'r': 0.640, 'i': 0.776, 'z': 0.925}
 
 # MegaCam filter names look like 'u.MP9301', 'r.MP9601', 'gri.MP9605' (the
@@ -215,16 +214,13 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Cache-complete short circuit: when every requested band's stack
-    # is already on disk (with no request, every band in DEFAULT_BANDS),
+    # is already on disk (or, with no request, ANY bands are cached),
     # the CADC round trip's only product would be a band list the
     # cached filenames already encode -- and a CADC outage must not
-    # stall a fully offline re-measure. The unrequested case is judged
-    # against DEFAULT_BANDS rather than the cache itself: a list read
-    # off the cache satisfies the test by construction, so a band that
-    # failed on an earlier run would never be fetched again.
+    # stall a fully offline re-measure.
     cached = {p.name.split('_')[-1].split('.')[0]: p
               for p in sorted(cache_dir.glob('cfht_megapipe_?.fits'))}
-    wanted_now = tuple(bands) if bands else DEFAULT_BANDS
+    wanted_now = tuple(bands) if bands else tuple(sorted(cached))
     if cached and all(band in cached for band in wanted_now):
         for band in wanted_now:
             warn_undersized_cache(cached[band], size_arcsec, 'CFHT')
