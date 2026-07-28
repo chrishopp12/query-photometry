@@ -359,65 +359,68 @@ def plot_overlay(
     -------
     outpath : Path
     """
-    plt.rcParams.update({
+    # Scoped, not global: rcParams is process-wide state, and a caller that
+    # plots something else afterwards must not silently inherit this
+    # figure's serif fonts and black tick colors.
+    style = {
         'font.family': 'serif',
         'mathtext.fontset': 'dejavuserif',
         'axes.labelcolor': 'black',
         'xtick.color': 'black',
         'ytick.color': 'black',
-    })
+    }
+    with plt.rc_context(style):
+        n = len(panels)
+        fig = plt.figure(figsize=(5.5 * 2 * n, 6.2))
+        fig.patch.set_facecolor('white')
+        sources: set[str] = set()
+        first_ax = None
 
-    n = len(panels)
-    fig = plt.figure(figsize=(5.5 * 2 * n, 6.2))
-    fig.patch.set_facecolor('white')
-    sources: set[str] = set()
-    first_ax = None
+        for i, panel in enumerate(panels):
+            name = panel['label'].replace('_', ' ').strip().title()
+            coord = panel['coord']
 
-    for i, panel in enumerate(panels):
-        name = panel['label'].replace('_', ' ').strip().title()
-        coord = panel['coord']
+            if panel['ctx'] is not None:
+                rgb, wcs = panel['ctx']
+                ax = fig.add_subplot(1, 2 * n, 2 * i + 1, projection=wcs)
+                if first_ax is None:
+                    first_ax = ax
+                ax.set_facecolor('black')
+                ax.imshow(rgb, origin='lower', interpolation='bilinear')
+                tx, ty = wcs.world_to_pixel(coord)
+                ax.plot(tx, ty, '+', color='red', markersize=12,
+                        markeredgewidth=1.5, zorder=10)
+                add_zoom_box(ax, wcs, coord, zoom_arcsec)
+                add_scale_bar(ax, wcs, rgb.shape, bar_arcsec=5.0)
+                style_wcs_axes(ax)
+                ax.set_title(f'{name} ({2 * context_arcsec:g}")', fontsize=12,
+                             pad=8)
 
-        if panel['ctx'] is not None:
-            rgb, wcs = panel['ctx']
-            ax = fig.add_subplot(1, 2 * n, 2 * i + 1, projection=wcs)
-            if first_ax is None:
-                first_ax = ax
-            ax.set_facecolor('black')
-            ax.imshow(rgb, origin='lower', interpolation='bilinear')
-            tx, ty = wcs.world_to_pixel(coord)
-            ax.plot(tx, ty, '+', color='red', markersize=12,
-                    markeredgewidth=1.5, zorder=10)
-            add_zoom_box(ax, wcs, coord, zoom_arcsec)
-            add_scale_bar(ax, wcs, rgb.shape, bar_arcsec=5.0)
-            style_wcs_axes(ax)
-            ax.set_title(f'{name} ({2 * context_arcsec:g}")', fontsize=12,
-                         pad=8)
+            if panel['zoom'] is not None:
+                rgb, wcs = panel['zoom']
+                ax = fig.add_subplot(1, 2 * n, 2 * i + 2, projection=wcs)
+                ax.set_facecolor('black')
+                ax.imshow(rgb, origin='lower', interpolation='bilinear')
+                overlay_markers(ax, wcs, panel['table'], coord)
+                add_scale_bar(ax, wcs, rgb.shape, bar_arcsec=1.0)
+                style_wcs_axes(ax)
+                ax.set_title(f'{name} zoom ({2 * zoom_arcsec:g}")',
+                             fontsize=12, pad=8)
 
-        if panel['zoom'] is not None:
-            rgb, wcs = panel['zoom']
-            ax = fig.add_subplot(1, 2 * n, 2 * i + 2, projection=wcs)
-            ax.set_facecolor('black')
-            ax.imshow(rgb, origin='lower', interpolation='bilinear')
-            overlay_markers(ax, wcs, panel['table'], coord)
-            add_scale_bar(ax, wcs, rgb.shape, bar_arcsec=1.0)
-            style_wcs_axes(ax)
-            ax.set_title(f'{name} zoom ({2 * zoom_arcsec:g}")', fontsize=12,
-                         pad=8)
+            sources.update(panel['table']['source'].dropna().unique())
 
-        sources.update(panel['table']['source'].dropna().unique())
+        if first_ax is not None:
+            first_ax.legend(handles=legend_handles(sources), loc='upper left',
+                            fontsize=8, frameon=True, fancybox=True,
+                            facecolor='white', edgecolor='black',
+                            framealpha=0.85, borderpad=0.6,
+                            handletextpad=0.4, labelspacing=0.35)
 
-    if first_ax is not None:
-        first_ax.legend(handles=legend_handles(sources), loc='upper left',
-                        fontsize=8, frameon=True, fancybox=True,
-                        facecolor='white', edgecolor='black',
-                        framealpha=0.85, borderpad=0.6,
-                        handletextpad=0.4, labelspacing=0.35)
-
-    outpath = Path(outpath)
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=dpi, facecolor='white', bbox_inches='tight')
-    plt.close(fig)
+        outpath = Path(outpath)
+        outpath.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(outpath, dpi=dpi, facecolor='white', bbox_inches='tight')
+        plt.close(fig)
     return outpath
 
 

@@ -1,12 +1,15 @@
-"""CFHT stack selection: footprint-centroid ordering and cutout coverage."""
+"""CFHT stack selection: footprint-centroid ordering, coverage, and caching."""
 import io
 
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.table import Table
 
-from sedphot.images.cfht import (_covers_target, _footprint_center_offset,
-                                 _mosaic_clipping_stacks)
+from sedphot.images import cfht as cfht_images
+from sedphot.images.cfht import (COLLECTION, DEFAULT_BANDS, _band_of,
+                                 _covers_target, _footprint_center_offset,
+                                 _mosaic_clipping_stacks, fetch)
 
 TARGET = SkyCoord(150.0, 30.0, unit='deg')
 SCALE_DEG = 0.187 / 3600.0  # MegaPipe pixel scale

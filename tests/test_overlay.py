@@ -209,6 +209,33 @@ def test_plot_overlay_writes_a_figure(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_plot_overlay_does_not_leak_its_styling(tmp_path):
+    """rcParams is process-wide: a figure drawn after this one must not
+    silently inherit serif fonts and black tick colors."""
+    import matplotlib.pyplot as plt
+
+    color, wcs_path = write_pair(tmp_path)
+    rgb, wcs = overlay.load_color_image_and_wcs(color, wcs_path)
+    coord = SkyCoord(TARGET_RA, TARGET_DEC, unit='deg')
+    panel = {
+        'label': 'g', 'coord': coord, 'table': phot_table(['Legacy_DR9']),
+        'ctx': overlay.rgb_cutout(rgb, wcs, coord, 8.0),
+        'zoom': overlay.rgb_cutout(rgb, wcs, coord, 3.0),
+    }
+    # rc_context both isolates the test and pins a baseline that differs
+    # from every value plot_overlay sets.
+    with plt.rc_context({'font.family': ['sans-serif'],
+                         'mathtext.fontset': 'cm',
+                         'axes.labelcolor': 'red',
+                         'xtick.color': 'red', 'ytick.color': 'red'}):
+        overlay.plot_overlay([panel], tmp_path / "overlay.png",
+                             zoom_arcsec=3.0, context_arcsec=8.0, dpi=60)
+        assert plt.rcParams['font.family'] == ['sans-serif']
+        assert plt.rcParams['mathtext.fontset'] == 'cm'
+        for key in ('axes.labelcolor', 'xtick.color', 'ytick.color'):
+            assert plt.rcParams[key] == 'red', key
+
+
 def test_rgb_cutout_off_the_mosaic_returns_none():
     rgb, wcs = synthetic_rgb(), synthetic_wcs()
     far = SkyCoord(TARGET_RA + 1.0, TARGET_DEC + 1.0, unit='deg')
