@@ -1,5 +1,6 @@
 """CFHT stack selection: footprint-centroid ordering, coverage, and caching."""
 import io
+import time
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -10,7 +11,7 @@ from sedphot.images import cfht as cfht_images
 from sedphot.images.cfht import (COLLECTION, DEFAULT_BANDS, _band_of,
                                  _covers_target, _footprint_center_offset,
                                  _mosaic_clipping_stacks, fetch)
-from sedphot.results import STATUS_NO_COVERAGE, ProviderResult
+from sedphot.results import STATUS_ERROR, STATUS_NO_COVERAGE, ProviderResult
 
 TARGET = SkyCoord(150.0, 30.0, unit='deg')
 SCALE_DEG = 0.187 / 3600.0  # MegaPipe pixel scale
@@ -268,6 +269,38 @@ def test_partial_cache_retries_the_missing_bands(monkeypatch, tmp_path):
     assert queried == [COLLECTION]                  # the round trip happened
     assert sorted(downloaded) == ['u', 'z']         # only what was missing
     assert sorted(p.band for p in products) == ['g', 'i', 'r', 'u', 'z']
+
+
+def _dead_cadc(monkeypatch):
+    """Patch the CADC query to fail the way a registry/host outage does."""
+    from astroquery.cadc import CadcClass
+    monkeypatch.setattr(time, 'sleep', lambda s: None)   # skip the backoff
+
+    def dead_query(self, coordinates, *, radius=None, collection=None, **kw):
+        raise ConnectionError("CADC registry unreachable")
+
+    monkeypatch.setattr(CadcClass, 'query_region', dead_query)
+
+
+def test_cadc_outage_still_reports_the_cached_stacks(monkeypatch, tmp_path):
+    # A position the archive covers only partially never satisfies the short
+    # circuit, so every run reaches CADC. An outage there must not cost the
+    # re-measure the stacks already on disk.
+    for band in ('g', 'r', 'i'):
+        _cache_stack(tmp_path, band)
+    _dead_cadc(monkeypatch)
+    products = fetch(TARGET, cache_dir=tmp_path, size_arcsec=60.0)
+    assert not isinstance(products, ProviderResult)
+    assert sorted(p.band for p in products) == ['g', 'i', 'r']
+
+
+def test_cadc_outage_with_an_empty_cache_is_an_error(monkeypatch, tmp_path):
+    # Nothing to fall back to: the outage must surface as an error, never as
+    # a successful fetch that quietly measured no bands.
+    _dead_cadc(monkeypatch)
+    result = fetch(TARGET, cache_dir=tmp_path, size_arcsec=60.0)
+    assert isinstance(result, ProviderResult)
+    assert result.status == STATUS_ERROR
 
 
 def test_requested_bands_are_judged_on_what_was_asked_for(monkeypatch,

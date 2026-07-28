@@ -233,12 +233,9 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 sorted(cache_dir.glob('cfht_megapipe_?.nophotzp.fits'))}
     wanted_now = tuple(bands) if bands else DEFAULT_BANDS
     usable = [band for band in wanted_now if band in cached]
-    if usable and all(band in cached or band in rejected
-                      for band in wanted_now):
-        for band in usable:
-            warn_undersized_cache(cached[band], size_arcsec, 'CFHT')
-        print(f"  [CFHT] cached stacks cover "
-              f"{''.join(usable)}; skipping the CADC query")
+
+    def _cached_products() -> list[ImageProduct]:
+        """The already-cached bands as products, no service call."""
         return [ImageProduct(
             provider='cfht', instrument='CFHT', band=band,
             path=str(cached[band]), calib='photzp',
@@ -246,7 +243,16 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
             wave_um=WAVE_UM.get(band, float('nan')))
             for band in usable]
 
+    if usable and all(band in cached or band in rejected
+                      for band in wanted_now):
+        for band in usable:
+            warn_undersized_cache(cached[band], size_arcsec, 'CFHT')
+        print(f"  [CFHT] cached stacks cover "
+              f"{''.join(usable)}; skipping the CADC query")
+        return _cached_products()
+
     radius = (size_arcsec / 2.0) * u.arcsec
+    products: list[ImageProduct] = []
 
     try:
         cadc = Cadc()
@@ -273,7 +279,6 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
             per_band.setdefault(_band_of(row['energy_bandpassName']), []).append(row)
         wanted = tuple(bands) if bands else tuple(sorted(per_band))
 
-        products: list[ImageProduct] = []
         for band in wanted:
             rows = per_band.get(band)
             if not rows:
@@ -356,6 +361,15 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 path=str(path), calib='photzp', seeing_arcsec=SEEING,
                 wave_um=WAVE_UM.get(band, float('nan'))))
     except Exception as e:
+        # A position the archive covers only partially never satisfies the
+        # short circuit, so it reaches CADC on every run. An outage must
+        # still not cost it the stacks already on disk: report those and
+        # keep the re-measure offline.
+        fallback = products or _cached_products()
+        if fallback:
+            print(f"  [CFHT] CADC unreachable ({type(e).__name__}: {e}); "
+                  f"reporting {len(fallback)} cached stack(s)")
+            return fallback
         return ProviderResult(provider='cfht', status=STATUS_ERROR,
                               message=f"{type(e).__name__}: {e} (CADC registry/host "
                                       f"outages are transient -- retry later)")
