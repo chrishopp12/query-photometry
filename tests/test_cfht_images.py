@@ -10,6 +10,7 @@ from sedphot.images import cfht as cfht_images
 from sedphot.images.cfht import (COLLECTION, DEFAULT_BANDS, _band_of,
                                  _covers_target, _footprint_center_offset,
                                  _mosaic_clipping_stacks, fetch)
+from sedphot.results import STATUS_NO_COVERAGE, ProviderResult
 
 TARGET = SkyCoord(150.0, 30.0, unit='deg')
 SCALE_DEG = 0.187 / 3600.0  # MegaPipe pixel scale
@@ -206,12 +207,15 @@ def _cache_stack(cache_dir, band, **kw):
     return path
 
 
-def _patch_cadc(monkeypatch, archive_bands, *, queried=None, downloaded=None):
+def _patch_cadc(monkeypatch, archive_bands, *, queried=None, downloaded=None,
+                photzp=30.0):
     """Patch the two CADC calls and the stack download the provider makes.
 
     archive_bands : bands the fake archive holds a plane for.
     queried, downloaded : lists the fakes append to, so a test can assert a
         round trip did or did not happen -- the whole point of the cache.
+    photzp : zeropoint of every downloaded stack; None serves the
+        uncalibrated product the provider must reject.
     """
     from astroquery.cadc import CadcClass
 
@@ -229,7 +233,8 @@ def _patch_cadc(monkeypatch, archive_bands, *, queried=None, downloaded=None):
         band = url.rsplit('/', 1)[-1]
         if downloaded is not None:
             downloaded.append(band)
-        return _FakeResponse(_stack_bytes(np.ones((400, 400), np.float32)))
+        return _FakeResponse(_stack_bytes(np.ones((400, 400), np.float32),
+                                          photzp=photzp))
 
     monkeypatch.setattr(CadcClass, 'query_region', fake_query_region)
     monkeypatch.setattr(CadcClass, 'get_image_list', fake_get_image_list)
@@ -277,3 +282,46 @@ def test_requested_bands_are_judged_on_what_was_asked_for(monkeypatch,
                      size_arcsec=60.0)
     assert queried == [] and downloaded == []
     assert [p.band for p in products] == ['g']
+
+
+def test_photzp_less_stack_is_rejected_once_and_never_refetched(monkeypatch,
+                                                                tmp_path):
+    # A stack with no PHOTZP is renamed and reported unusable. The renamed
+    # file is the cache's record that this band was tried, so the next run
+    # neither downloads it again nor treats it as photometric.
+    queried, downloaded = [], []
+    _patch_cadc(monkeypatch, ('g',), queried=queried, downloaded=downloaded,
+                photzp=None)
+    first = fetch(TARGET, bands=('g',), cache_dir=tmp_path, size_arcsec=60.0)
+    assert isinstance(first, ProviderResult)
+    assert first.status == STATUS_NO_COVERAGE
+    assert downloaded == ['g']
+    assert (tmp_path / "cfht_megapipe_g.nophotzp.fits").exists()
+
+    downloaded.clear()
+    second = fetch(TARGET, bands=('g',), cache_dir=tmp_path, size_arcsec=60.0)
+    assert downloaded == []                        # not fetched a second time
+    assert isinstance(second, ProviderResult)      # nor reported as usable
+    assert second.status == STATUS_NO_COVERAGE
+
+
+def test_rejected_band_does_not_reopen_the_cadc_query(monkeypatch, tmp_path):
+    # A permanently rejected band is settled, not missing: it must not send
+    # the bands that are fine back through a query that cannot help them.
+    for band in ('g', 'r', 'i', 'z'):
+        _cache_stack(tmp_path, band)
+    (tmp_path / "cfht_megapipe_u.nophotzp.fits").write_bytes(
+        _stack_bytes(np.ones((400, 400), np.float32), photzp=None))
+    queried, downloaded = [], []
+    _patch_cadc(monkeypatch, DEFAULT_BANDS, queried=queried,
+                downloaded=downloaded)
+    products = fetch(TARGET, cache_dir=tmp_path, size_arcsec=60.0)
+    assert queried == [] and downloaded == []
+    assert sorted(p.band for p in products) == ['g', 'i', 'r', 'z']
+
+    # Asking for nothing BUT the rejected band has no product to report, so
+    # it must say no coverage rather than hand back an empty band list.
+    result = fetch(TARGET, bands=('u',), cache_dir=tmp_path, size_arcsec=60.0)
+    assert isinstance(result, ProviderResult)
+    assert result.status == STATUS_NO_COVERAGE
+    assert downloaded == []

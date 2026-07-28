@@ -12,7 +12,9 @@ MegaPipe deep-stack cutouts via the CADC SODA service:
 
 Data products (cached in cache_dir, the target's Photometry/CFHT/):
     cfht_megapipe_<band>.fits    SODA stack cutout (renamed *.nophotzp.fits
-                                 and skipped when PHOTZP is absent)
+                                 and skipped when PHOTZP is absent; the
+                                 renamed file stays part of the cache, so a
+                                 rejected stack is not fetched again)
 
 Requirements:
     requests, numpy, astropy, astroquery; reproject for the tile-edge mosaic
@@ -224,18 +226,25 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
     # failed on an earlier run would never be fetched again.
     cached = {p.name.split('_')[-1].split('.')[0]: p
               for p in sorted(cache_dir.glob('cfht_megapipe_?.fits'))}
+    # A stack rejected for a missing PHOTZP is settled as well: refetching
+    # it would only reject it again, so it counts as answered here -- and,
+    # being uncalibrated, it yields no product.
+    rejected = {p.name.split('_')[-1].split('.')[0]: p for p in
+                sorted(cache_dir.glob('cfht_megapipe_?.nophotzp.fits'))}
     wanted_now = tuple(bands) if bands else DEFAULT_BANDS
-    if cached and all(band in cached for band in wanted_now):
-        for band in wanted_now:
+    usable = [band for band in wanted_now if band in cached]
+    if usable and all(band in cached or band in rejected
+                      for band in wanted_now):
+        for band in usable:
             warn_undersized_cache(cached[band], size_arcsec, 'CFHT')
         print(f"  [CFHT] cached stacks cover "
-              f"{''.join(wanted_now)}; skipping the CADC query")
+              f"{''.join(usable)}; skipping the CADC query")
         return [ImageProduct(
             provider='cfht', instrument='CFHT', band=band,
             path=str(cached[band]), calib='photzp',
             seeing_arcsec=SEEING,
             wave_um=WAVE_UM.get(band, float('nan')))
-            for band in wanted_now]
+            for band in usable]
 
     radius = (size_arcsec / 2.0) * u.arcsec
 
@@ -271,8 +280,17 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                 print(f"  [CFHT] no {band} stack here")
                 continue
             path = cache_dir / f"cfht_megapipe_{band}.fits"
+            no_photzp = path.with_suffix(".nophotzp.fits")
             if path.exists():
                 warn_undersized_cache(path, size_arcsec, 'CFHT')
+            elif no_photzp.exists():
+                # An absent PHOTZP is a property of the data product, not a
+                # transient failure: the renamed file is the record that this
+                # band was already tried and cannot be calibrated, so it is
+                # skipped rather than downloaded and rejected again.
+                print(f"  [CFHT] {band}: cached stack has no PHOTZP "
+                      f"({no_photzp.name}) -- skipping photometry")
+                continue
             else:
                 # Order candidate stacks by how well their footprint centers the
                 # target, then take the first that actually covers the stamp
@@ -328,8 +346,10 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
                     hdu = hdul[1] if len(hdul) > 1 and hdul[0].data is None else hdul[0]
                     if 'PHOTZP' not in hdu.header:
                         print(f"  [CFHT] WARNING {band}: no PHOTZP in header -- "
-                              f"morphology-grade only, skipping photometry")
-                        path.rename(path.with_suffix(".nophotzp.fits"))
+                              f"morphology-grade only, skipping photometry; "
+                              f"kept as {no_photzp.name} so it is not "
+                              f"fetched again")
+                        path.rename(no_photzp)
                         continue
             products.append(ImageProduct(
                 provider='cfht', instrument='CFHT', band=band,
