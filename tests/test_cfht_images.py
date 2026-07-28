@@ -1,12 +1,15 @@
-"""CFHT stack selection: footprint-centroid ordering and cutout coverage."""
+"""CFHT stack selection: footprint-centroid ordering, coverage, and caching."""
 import io
 
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.table import Table
 
-from sedphot.images.cfht import (_covers_target, _footprint_center_offset,
-                                 _mosaic_clipping_stacks)
+from sedphot.images import cfht as cfht_images
+from sedphot.images.cfht import (COLLECTION, DEFAULT_BANDS, _band_of,
+                                 _covers_target, _footprint_center_offset,
+                                 _mosaic_clipping_stacks, fetch)
 
 TARGET = SkyCoord(150.0, 30.0, unit='deg')
 SCALE_DEG = 0.187 / 3600.0  # MegaPipe pixel scale
@@ -170,3 +173,107 @@ def test_mosaic_refuses_without_a_zeropoint():
               (np.ones((400, 400), np.float32),
                np.ones((400, 400), np.float32))]
     assert _mosaic_clipping_stacks(planes, TARGET, 60.0) is None
+
+
+# ------------------------------------
+# fetch: what the cache is allowed to skip
+# ------------------------------------
+class _FakeResponse:
+    """The two attributes the provider touches on a requests Response."""
+
+    def __init__(self, content):
+        self.content = content
+
+    def raise_for_status(self):
+        pass
+
+
+def _plane_table(bands):
+    """A CADC query result holding one calibrated MegaPipe plane per band."""
+    return Table({
+        'dataProductType': ['image'] * len(bands),
+        'calibrationLevel': [3] * len(bands),
+        'energy_bandpassName': [f"{band}.MP9301" for band in bands],
+        'position_bounds_samples': [[149.7, 29.7, 150.3, 29.7,
+                                     150.3, 30.3, 149.7, 30.3]] * len(bands),
+    })
+
+
+def _cache_stack(cache_dir, band, **kw):
+    """Write a cached stack the way an earlier successful fetch left it."""
+    path = cache_dir / f"cfht_megapipe_{band}.fits"
+    path.write_bytes(_stack_bytes(np.ones((400, 400), np.float32), **kw))
+    return path
+
+
+def _patch_cadc(monkeypatch, archive_bands, *, queried=None, downloaded=None):
+    """Patch the two CADC calls and the stack download the provider makes.
+
+    archive_bands : bands the fake archive holds a plane for.
+    queried, downloaded : lists the fakes append to, so a test can assert a
+        round trip did or did not happen -- the whole point of the cache.
+    """
+    from astroquery.cadc import CadcClass
+
+    def fake_query_region(self, coordinates, *, radius=None, collection=None,
+                          **kw):
+        if queried is not None:
+            queried.append(collection)
+        return _plane_table(archive_bands)
+
+    def fake_get_image_list(self, query_result, coordinates, radius):
+        band = _band_of(query_result['energy_bandpassName'][0])
+        return [f"https://cadc.invalid/soda/{band}"]
+
+    def fake_get(url, timeout=None):
+        band = url.rsplit('/', 1)[-1]
+        if downloaded is not None:
+            downloaded.append(band)
+        return _FakeResponse(_stack_bytes(np.ones((400, 400), np.float32)))
+
+    monkeypatch.setattr(CadcClass, 'query_region', fake_query_region)
+    monkeypatch.setattr(CadcClass, 'get_image_list', fake_get_image_list)
+    monkeypatch.setattr(cfht_images.requests, 'get', fake_get)
+
+
+def test_complete_cache_skips_the_cadc_query(monkeypatch, tmp_path):
+    # Every band on disk: the query would only re-derive the band list the
+    # filenames already encode, so a CADC outage cannot stall a re-measure.
+    for band in DEFAULT_BANDS:
+        _cache_stack(tmp_path, band)
+    queried, downloaded = [], []
+    _patch_cadc(monkeypatch, DEFAULT_BANDS, queried=queried,
+                downloaded=downloaded)
+    products = fetch(TARGET, cache_dir=tmp_path, size_arcsec=60.0)
+    assert queried == [] and downloaded == []
+    assert sorted(p.band for p in products) == sorted(DEFAULT_BANDS)
+
+
+def test_partial_cache_retries_the_missing_bands(monkeypatch, tmp_path):
+    # A band that failed on an earlier run leaves only the bands that
+    # worked on disk. Judging completeness on the cache itself would pass
+    # by construction and strand the failed bands forever, so an
+    # unrequested fetch is judged against DEFAULT_BANDS.
+    for band in ('g', 'r', 'i'):
+        _cache_stack(tmp_path, band)
+    queried, downloaded = [], []
+    _patch_cadc(monkeypatch, DEFAULT_BANDS, queried=queried,
+                downloaded=downloaded)
+    products = fetch(TARGET, cache_dir=tmp_path, size_arcsec=60.0)
+    assert queried == [COLLECTION]                  # the round trip happened
+    assert sorted(downloaded) == ['u', 'z']         # only what was missing
+    assert sorted(p.band for p in products) == ['g', 'i', 'r', 'u', 'z']
+
+
+def test_requested_bands_are_judged_on_what_was_asked_for(monkeypatch,
+                                                          tmp_path):
+    # An explicit request is complete once ITS bands are cached -- the
+    # bands the caller never asked for must not force a query.
+    _cache_stack(tmp_path, 'g')
+    queried, downloaded = [], []
+    _patch_cadc(monkeypatch, DEFAULT_BANDS, queried=queried,
+                downloaded=downloaded)
+    products = fetch(TARGET, bands=('g',), cache_dir=tmp_path,
+                     size_arcsec=60.0)
+    assert queried == [] and downloaded == []
+    assert [p.band for p in products] == ['g']
