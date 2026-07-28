@@ -24,9 +24,9 @@ Notes:
     covers everything else (all-sky).
     A null w*sigmpro marks an upper limit, not a measurement; such bands
     are skipped.
-    The IRSA call carries no transport retry, unlike the other catalog
-    providers; a single service blip costs the whole provider and reports
-    no_match.
+    The IRSA call backs off and retries (retry.retry_transient), so a
+    service blip does not cost the provider its match; a failure that
+    outlives the retries is reported and the provider ends at no_match.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.ipac.irsa import Irsa
 
 from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
-from ..retry import with_expanding_radius
+from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
 
@@ -64,14 +64,18 @@ def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
     """One IRSA cone query; closest source; one row per detected band.
     [] on no result or service failure."""
     mag_cols = [c for pair in ALLWISE_BANDS.values() for c in pair]
-    try:
-        result = Irsa.query_region(
+
+    def _run():
+        return Irsa.query_region(
             coord,
             catalog=ALLWISE_CAT,
             spatial="Cone",
             radius=radius_arcsec * u.arcsec,
             columns=",".join(['ra', 'dec', 'cc_flags', 'ext_flg'] + mag_cols),
         )
+
+    try:
+        result = retry_transient(_run, "AllWISE")
     except Exception as e:
         print(f"  [AllWISE] Query error: {e}")
         return []
