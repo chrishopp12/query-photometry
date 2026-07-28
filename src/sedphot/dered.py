@@ -22,9 +22,9 @@ Requirements:
 Notes:
     Only the catalog table is dereddened. run_measure never calls this module,
     so every <label>_measured.csv row keeps dered_applied = False -- combining
-    the two tables in one fit mixes corrected and uncorrected fluxes. CFHT
-    bands only ever come from run_measure, which is why they have no
-    EXT_COEFF entry.
+    the two tables in one fit mixes corrected and uncorrected fluxes, which
+    run_sed warns about when it draws them on one figure. CFHT bands only ever
+    come from run_measure, which is why they have no EXT_COEFF entry.
 
     Coefficients are Schlafly & Finkbeiner 2011 (R_V = 3.1) for the optical
     sets, WISE per Fitzpatrick-based IR values, GALEX per Bianchi+2017.

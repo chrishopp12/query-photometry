@@ -745,6 +745,10 @@ def _resolve_label(label: str | None, phot_dir: Path) -> str:
 def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
     """Combined SED figure from whatever schema tables exist in out_dir.
 
+    Every table's rows land on one axis, so the figure warns when they do
+    not share one dered_applied state (see dered.py: only the catalog
+    table is ever dereddened).
+
     Parameters
     ----------
     label : str, optional
@@ -771,6 +775,20 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
     if not frames:
         print(f"  [sed] no tables for {label!r} in {phot_dir}")
         return None
+
+    # Only run_catalogs ever dereddens (dered.py), so --dered leaves the
+    # measured table as-measured; drawn together the two frames then put
+    # corrected and uncorrected fluxes on one axis, and nothing in the
+    # figure itself shows it.
+    scales = {f"{label}_{kind}.csv": sorted({bool(v) for v in
+                                             frame['dered_applied']})
+              for kind, frame in frames.items() if 'dered_applied' in frame}
+    if len({state for states in scales.values() for state in states}) > 1:
+        detail = "; ".join(
+            f"{name} dered_applied={'/'.join(str(s) for s in states)}"
+            for name, states in sorted(scales.items()))
+        print(f"  [sed] WARNING {detail} -- the plotted fluxes are NOT on a "
+              f"common extinction scale")
 
     out = plot_sed(frames, phot_dir / f"{label}_sed.png", title=label)
     print(f"  [sed] wrote {out}")
