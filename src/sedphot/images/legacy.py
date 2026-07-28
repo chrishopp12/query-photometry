@@ -14,9 +14,9 @@ Two routes to Legacy Surveys pixels:
                       target position.
 
 Data products (cached in cache_dir, the target's Photometry/Legacy/):
-    legacy_<layer>_<band>.fits                   viewer cutout plane (nmgy)
-    legacysurvey-<brick>-image-<band>.fits.fz    brick coadd image
-    legacysurvey-<brick>-invvar-<band>.fits.fz   brick inverse variance
+    legacy_<layer>_<band>.fits                        viewer cutout plane (nmgy)
+    legacysurvey-<dr>-<brick>-image-<band>.fits.fz    brick coadd image
+    legacysurvey-<dr>-<brick>-invvar-<band>.fits.fz   brick inverse variance
 
 Requirements:
     requests, numpy, astropy, astroquery
@@ -26,6 +26,9 @@ Notes:
     Dec 32.375 deg north/south boundary; on a miss the other hemisphere is
     tried (the overlap strip exists in both). A cutout that comes back
     blank (all-zero) is treated as no coverage for that layer.
+    A brick coadd cached under the untagged name carries no data release of
+    its own; it is reused under the requested one and warned about, never
+    renamed -- cached filenames are a downstream stability contract.
 """
 from __future__ import annotations
 
@@ -278,8 +281,14 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
             path = cache_dir / f"legacysurvey-{dr}-{brick}-{kind}-{band}.fits.fz"
             untagged = cache_dir / f"legacysurvey-{brick}-{kind}-{band}.fits.fz"
             if not path.exists() and untagged.exists():
-                print(f"  [Legacy] using untagged brick cache "
-                      f"{untagged.name} (assumed {dr})")
+                # An untagged file records no release at all, so reusing it
+                # ASSUMES this run's. Renaming it is not an option -- cached
+                # filenames are a stability contract downstream -- so the
+                # assumption is stated loudly instead of made quietly.
+                print(f"  [Legacy] WARNING assuming untagged brick cache "
+                      f"{untagged.name} is {dr}: the file records no data "
+                      f"release, so this is UNVERIFIED -- delete it to "
+                      f"refetch {dr} pixels")
                 path = untagged
             if not path.exists():
                 fetched = False
