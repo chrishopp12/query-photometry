@@ -564,6 +564,10 @@ def run_measure(
             },
             "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
                       if 'legacy' in instruments else None,
+            # remeasure.reconstruct replays the fetch options so a rebuild
+            # reads the same pixels the fit solved on; an unrecorded program
+            # restriction would silently refetch a different HST mosaic.
+            "hst_proposal_id": hst_proposal_id if 'hst' in instruments else None,
             "per_band": {f"{m['instrument']}_{m['band']}": m['witness']
                          for m in measurements},
         })
