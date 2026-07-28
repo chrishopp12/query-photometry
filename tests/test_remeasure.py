@@ -271,3 +271,22 @@ def test_aperture_mode_is_shape_independent_within_the_grid(tmp_path):
     a = remeasure(p, 12.0, mode='aperture', shape='forced')
     b = remeasure(p, 12.0, mode='aperture', shape='fitted')
     assert list(a['flux_uJy']) == list(b['flux_uJy']) == [480.0, 350.0]
+
+
+def test_inert_shape_under_aperture_mode_warns(tmp_path, capsys):
+    """A shape request the run cannot honor must not be dropped in silence:
+    the measure verb refuses the same contradiction outright, and here the
+    caller would otherwise read a curve-of-growth flux as a shaped one."""
+    p = tmp_path / 'g9.provenance.json'
+    p.write_text(json.dumps(_shape_prov()))
+
+    remeasure(p, 12.0, mode='aperture', shape='fitted')
+    printed = capsys.readouterr().out
+    assert 'no effect' in printed and 'fitted' in printed
+
+    # The default asks for nothing, so it stays quiet...
+    remeasure(p, 12.0, mode='aperture', shape='forced')
+    assert 'no effect' not in capsys.readouterr().out
+    # ... and sersic mode honors the request rather than warning about it.
+    remeasure(p, 12.0, mode='sersic', shape='fitted')
+    assert 'no effect' not in capsys.readouterr().out

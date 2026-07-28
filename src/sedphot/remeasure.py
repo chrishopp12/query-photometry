@@ -125,9 +125,10 @@ def remeasure(provenance_path: str | Path,
 
     shape acts on sersic mode, and on aperture mode ONLY past the grid, where
     the target shape decides what gets subtracted from the aperture. Inside
-    the grid under aperture mode it is accepted and IGNORED WITHOUT WARNING:
-    the empirical curve is a measurement of the pixels, not a rendering of a
-    shape.
+    the grid under aperture mode it is accepted and ignored -- the empirical
+    curve is a measurement of the pixels, not a rendering of a shape -- and
+    anything but the default 'forced' says so on stdout, since a request
+    that spans the grid boundary is meaningful on the far side.
 
     Returns
     -------
@@ -177,6 +178,15 @@ def remeasure(provenance_path: str | Path,
              for band, flux in recon.items()],
             columns=['band', 'flux_uJy', 'mag_AB', 'aperture_as',
                      'mode', 'source'])
+    # Everything below is the inside-the-grid path, where shape has nothing
+    # to act on. The measure verb REFUSES the analogous combination; a
+    # warning is right here because the same request past the grid IS
+    # meaningful, so refusing would block one that spans both.
+    if mode == 'aperture' and shape != 'forced':
+        print(f"  [remeasure] WARNING: shape={shape!r} has no effect under "
+              f"--mode aperture inside the stored grid (ends at "
+              f"{float(grid_max):g}\"): the empirical curve is a measurement "
+              f"of the pixels, not a rendering of a shape")
     rows = []
     demoted: list[str] = []
     for band, b in per_band.items():
