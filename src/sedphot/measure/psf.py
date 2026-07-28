@@ -312,7 +312,7 @@ def empirical_psf(stamp: Stamp, stars: pd.DataFrame) -> tuple[np.ndarray, float,
         graft_note = ''
         low = np.where(snr < recipe.PSF_WING_SNR)[0]
         first_low = int(low[0]) if len(low) else len(mids)
-        if first_low < len(mids) and mids[min(first_low, len(mids) - 1)] < GRAFT_MAX_AS:
+        if first_low < len(mids) and mids[first_low] < GRAFT_MAX_AS:
             j = max(first_low - 1, 1)
             graft_radius = mids[j]
             gamma = fwhm / (2 * np.sqrt(2 ** (1 / MOFFAT_BETA) - 1))
