@@ -33,7 +33,6 @@ Notes:
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import matplotlib
@@ -214,7 +213,7 @@ def download_file(uri: str, filename: str,
         return None
     if not cache_path.exists():
         return None
-    print(f"  [overlay] done ({os.path.getsize(cache_path) / 1e6:.1f} MB)")
+    print(f"  [overlay] done ({cache_path.stat().st_size / 1e6:.1f} MB)")
     return cache_path
 
 
