@@ -343,7 +343,8 @@ def residual_mesh(
 # ------------------------------------
 # Sidecar reconstruction: re-evaluate a stored background
 # ------------------------------------
-def eval_plane(coefs, shape: tuple[int, int]) -> np.ndarray:
+def eval_plane(coefs: np.ndarray | list[float],
+               shape: tuple[int, int]) -> np.ndarray:
     """Re-evaluate a stored background plane over a stamp of `shape`.
 
     The inverse of bin_plane's `coefs` -- [level, x-tilt, y-tilt] in the
@@ -358,8 +359,9 @@ def eval_plane(coefs, shape: tuple[int, int]) -> np.ndarray:
     return c0 + c1 * (xx - nx / 2) / nx + c2 * (yy - ny / 2) / ny
 
 
-def _bin_surface(row_starts, col_starts, bin_px: float,
-                 smoothed: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+def _bin_surface(row_starts: np.ndarray, col_starts: np.ndarray,
+                 bin_px: float, smoothed: np.ndarray,
+                 shape: tuple[int, int]) -> np.ndarray:
     """Bilinear bin-grid surface at pixel resolution, clamped to the hull.
 
     The shared core of residual_mesh and eval_mesh: queries are clamped to

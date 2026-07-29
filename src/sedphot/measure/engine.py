@@ -676,7 +676,7 @@ def measure_band(
     fill_mask = mask if artifact_mask is None else (mask | artifact_mask)
     fill = twin_fill(image, neighbors, fill_mask, good, stamp, model_fill,
                      aperture_arcsec=aperture_arcsec, tag=tag)
-    contributing = good | ((stamp.rr < aperture_arcsec) & ~good)
+    contributing = good | (stamp.rr < aperture_arcsec)
     if artifact_mask is not None:
         contributing = contributing | artifact_mask
     enc = curve(np.where(contributing,

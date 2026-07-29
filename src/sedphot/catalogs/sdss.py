@@ -31,7 +31,7 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astroquery.sdss import SDSS
 
 from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
-from ..retry import with_expanding_radius
+from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
 from ..units import mag_err_to_flux_err, mag_to_ujy
 
@@ -56,15 +56,18 @@ _PHOTOOBJ_FIELDS = (
 def _query_once(coord: SkyCoord, radius_arcsec: float) -> list[dict]:
     """One SDSS region query; closest primary source; one row per detected
     band. [] on no result or service failure."""
-    try:
+    def _run():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            result = SDSS.query_region(
+            return SDSS.query_region(
                 coord,
                 radius=radius_arcsec * u.arcsec,
                 photoobj_fields=_PHOTOOBJ_FIELDS,
                 data_release=DATA_RELEASE,
             )
+
+    try:
+        result = retry_transient(_run, "SDSS")
     except Exception as e:
         print(f"  [SDSS] Query error: {e}")
         return []

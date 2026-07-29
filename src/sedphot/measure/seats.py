@@ -585,7 +585,7 @@ def registry_name(ra_deg: float, dec_deg: float) -> str:
 
 
 def resolve_registry_key(registry: dict, ra_deg: float, dec_deg: float,
-                         tol_arcsec: float = None) -> str:
+                         tol_arcsec: float | None = None) -> str:
     """Registry key for (ra, dec), reusing a near-duplicate entry.
 
     registry_name() alone fragments a source whose seat anchor drifts

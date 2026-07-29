@@ -136,15 +136,21 @@ def test_measure_and_remeasure_share_an_aperture_default():
 @pytest.mark.parametrize('flag', [['--sersic-from', 'z'],
                                   ['--sersic-seeing', '0.9'],
                                   ['--sersic-params', '2', '1.5', '30', '3']])
-def test_shape_flags_refused_under_aperture_mode(verb, flag, monkeypatch):
-    """A shape flag with --mode aperture must be refused, never dropped."""
+def test_shape_flags_refused_under_aperture_mode(verb, flag, monkeypatch,
+                                                 capsys):
+    """A shape flag with --mode aperture must be refused, never dropped.
+
+    A contradictory flag is a usage error, so it exits 2 like argparse's
+    own and names itself on stderr.
+    """
     monkeypatch.setattr(sys, 'argv',
                         ['sedphot', verb] + TARGET
                         + (['--all'] if verb == 'measure' else [])
                         + ['--mode', 'aperture'] + flag)
     with pytest.raises(SystemExit) as exc:
         cli.main()
-    assert 'only applies to --mode sersic' in str(exc.value)
+    assert exc.value.code == 2
+    assert 'only applies to --mode sersic' in capsys.readouterr().err
 
 
 def test_spherex_sersic_keeps_its_shape_flag_under_aperture_mode(monkeypatch):

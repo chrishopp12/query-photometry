@@ -53,7 +53,7 @@ from astropy.coordinates import SkyCoord
 from scipy.optimize import least_squares, lsq_linear
 
 from . import recipe
-from .background import bin_plane
+from .background import bin_plane, eval_plane
 from .render import pa_map, render_nuker, render_sersic_boxed
 from .seats import seat_slices
 from .stamp import Stamp
@@ -722,8 +722,6 @@ def pinned_fit(
         identical -- minus amp_bounds, and with solve_info None and a
         one-element track (nothing was solved or alternated).
     """
-    from .background import eval_plane
-
     cf = stamp.cf
     fixed = [c for c in comps if c['name'] not in drops]
     fixed_bases = [c['base'] for c in fixed]

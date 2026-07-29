@@ -100,8 +100,7 @@ def _resolve_from_args(args: argparse.Namespace):
         return resolve_target(name=args.name, ra=args.ra, dec=args.dec,
                               label=args.label)
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(2)
+        _usage_error(str(e))
 
 
 def _add_measure_args(parser: argparse.ArgumentParser) -> None:
@@ -162,13 +161,23 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                        help="Restrict the HST provider to one program")
 
 
+def _usage_error(message: str) -> None:
+    """Exit on a command line that cannot be honored.
+
+    Exit 2 is argparse's own code for a usage error; 1 means the command
+    ran and did not produce what was asked. Every refusal of the flags
+    themselves belongs here so a driver can tell the two apart.
+    """
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(2)
+
+
 def _instruments_from_args(args: argparse.Namespace, registry: dict) -> list[str]:
     """Validate the --instruments/--all selection against a provider registry."""
     if args.all:
         return list(registry)
     if not args.instruments:
-        print("error: give --instruments ... or --all", file=sys.stderr)
-        sys.exit(2)
+        _usage_error("give --instruments ... or --all")
     return args.instruments
 
 
@@ -286,7 +295,7 @@ def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
     be trusted.
     """
     if args.registry_update and not args.registry:
-        sys.exit(f"sedphot {verb}: --registry-update needs --registry PATH")
+        _usage_error(f"sedphot {verb}: --registry-update needs --registry PATH")
     shape_flags = [name for name, value in
                    (('--sersic-from', args.sersic_from),
                     ('--sersic-params', args.sersic_params),
@@ -297,9 +306,9 @@ def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
     if verb == 'run' and getattr(args, 'spherex', 'off') != 'off':
         shape_flags = [f for f in shape_flags if f != '--sersic-params']
     if args.mode != 'sersic' and shape_flags:
-        sys.exit(f"sedphot {verb}: {', '.join(shape_flags)} only applies to "
-                 f"--mode sersic (got --mode {args.mode}); drop the flag or "
-                 f"pass --mode sersic")
+        _usage_error(f"sedphot {verb}: {', '.join(shape_flags)} only applies "
+                     f"to --mode sersic (got --mode {args.mode}); drop the "
+                     f"flag or pass --mode sersic")
 
 
 def _cmd_measure(args: argparse.Namespace) -> None:

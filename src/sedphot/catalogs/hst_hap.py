@@ -34,7 +34,7 @@ from astropy.table import Table
 from astroquery.mast import Observations
 
 from ..results import STATUS_NO_MATCH, STATUS_OK, ProviderResult
-from ..retry import with_expanding_radius
+from ..retry import retry_transient, with_expanding_radius
 from ..schema import make_row
 from ..units import flux_err_to_mag_err, mag_err_to_flux_err, mag_to_ujy
 
@@ -52,7 +52,9 @@ def _fetch_hap_catalog(filename: str) -> pd.DataFrame | None:
     """Download a HAP catalog ECSV from MAST; None on failure."""
     url = MAST_FILE_URL.format(filename=filename)
     try:
-        content = urllib.request.urlopen(url, timeout=60).read()
+        content = retry_transient(
+            lambda: urllib.request.urlopen(url, timeout=60).read(),
+            f"MAST {filename}")
     except Exception as e:
         print(f"  [HST] Failed to fetch {filename}: {e}")
         return None

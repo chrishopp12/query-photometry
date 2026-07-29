@@ -762,8 +762,7 @@ def run_spherex(
             options: dict = {'bands': (band,), 'size_arcsec': cutout_arcsec,
                              'cache_dir': cache_dir}
             if instrument == 'legacy':
-                cache_dir = Path(out_dir) / "Photometry" / "Legacy"
-                options.update(cache_dir=cache_dir, dr=legacy_dr)
+                options.update(dr=legacy_dr)
             fetched = IMAGE_PROVIDERS[instrument](coord, **options)
             if isinstance(fetched, ProviderResult):
                 raise RuntimeError(f"could not fetch the shape-fit image: "

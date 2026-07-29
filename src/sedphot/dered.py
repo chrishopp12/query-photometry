@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
 
+from .retry import retry_transient
 from .units import ujy_to_mag
 
 
@@ -61,12 +62,14 @@ EXT_COEFF = {
 def fetch_ebv_sfd(coord: SkyCoord) -> float:
     """Schlafly & Finkbeiner-recalibrated SFD E(B-V) at the target position.
 
-    Queries the IRSA dust service once; returns NaN on failure (tier-2
-    rows then fall through to tier 3).
+    The IRSA call backs off and retries; a failure that outlives the
+    retries returns NaN (tier-2 rows then fall through to tier 3).
     """
     try:
         from astroquery.ipac.irsa.irsa_dust import IrsaDust
-        table = IrsaDust.get_query_table(coord, section='ebv')
+        table = retry_transient(
+            lambda: IrsaDust.get_query_table(coord, section='ebv'),
+            "IRSA dust")
         return float(table['ext SandF mean'][0])
     except Exception as e:
         print(f"  [dered] IRSA dust query failed: {e}")
