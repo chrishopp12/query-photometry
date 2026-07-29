@@ -55,6 +55,7 @@ from astropy.coordinates import SkyCoord
 from .catalogs.legacy import LEGACY_DR_DEFAULT, query_scene
 from .measure import recipe
 from .measure.components import gated_row
+from .resolve import sanitize_label
 
 # ------------------------------------
 # Constants
@@ -70,9 +71,9 @@ POSITION_COLUMNS = (("ra_deg", "dec_deg"), ("ra", "dec"))
 PASS_HARVEST = "harvest"
 PASS_PARALLEL = "parallel"
 
-PLAN_COLUMNS = ("name", "ra_deg", "dec_deg", "dir", "pass", "group",
-                "order", "gates", "matched", "n_consumers", "n_gated",
-                "priority")
+PLAN_COLUMNS = ("name", "label", "ra_deg", "dec_deg", "dir", "pass",
+                "group", "order", "gates", "matched", "n_consumers",
+                "n_gated", "priority")
 
 
 # ------------------------------------
@@ -252,7 +253,9 @@ def read_targets(path: str | Path,
     Returns
     -------
     targets : list of dict
-        name, ra_deg, dec_deg, dir, priority.
+        name, label, ra_deg, dec_deg, dir, priority. A ``label`` column
+        overrides the sanitized name; it is the product filename stem,
+        so an existing tree's stems must be named rather than guessed.
     """
     path = Path(path)
     with path.open(newline="", encoding="utf-8") as handle:
@@ -283,6 +286,8 @@ def read_targets(path: str | Path,
             directory = str(Path(out_root) / name)
         priority = (row.get("priority") or "").strip()
         targets.append({"name": name,
+                        "label": (row.get("label") or "").strip()
+                                 or sanitize_label(name),
                         "ra_deg": float(row[position[0]]),
                         "dec_deg": float(row[position[1]]),
                         "dir": directory,
@@ -326,30 +331,61 @@ def audit_groups(rows: list[dict], *, scene_arcsec: float) -> list[dict]:
         another group that would read it.
     """
     harvest = [r for r in rows if r["pass"] == PASS_HARVEST]
-    entries = [(position, r) for r in harvest
-               for position in r.get("entries") or []]
-    if not entries or len(harvest) < 2:
+    entries = [{"ra_deg": position[0], "dec_deg": position[1],
+                "group": r["group"], "owner": r["name"]}
+               for r in harvest for position in r.get("entries") or []]
+    fields = [{"ra_deg": r["ra_deg"], "dec_deg": r["dec_deg"],
+               "group": r["group"], "name": r["name"]} for r in harvest]
+    return audit_entries(entries, fields, scene_arcsec=scene_arcsec)
+
+
+def audit_entries(entries: list[dict], fields: list[dict], *,
+                  scene_arcsec: float) -> list[dict]:
+    """Records inside the consuming reach of a field in another group.
+
+    The same check on either side of the harvest pass: predicted records
+    before it runs, actual registry entries after. Positions carry the
+    group that wrote them; a hit is a record one group would have handed
+    another had the passes been sequential.
+
+    Parameters
+    ----------
+    entries : list of dict
+        ra_deg, dec_deg, group, owner.
+    fields : list of dict
+        Consuming positions: ra_deg, dec_deg, group, name.
+    scene_arcsec : float
+        The consuming reach.
+
+    Returns
+    -------
+    violations : list of dict
+        One per (record, out-of-group reader) pair.
+    """
+    if not entries or len(fields) < 2:
         return []
 
-    entry_coords = SkyCoord([p[0] for p, _ in entries] * u.deg,
-                            [p[1] for p, _ in entries] * u.deg)
-    field_coords = SkyCoord([r["ra_deg"] for r in harvest] * u.deg,
-                            [r["dec_deg"] for r in harvest] * u.deg)
+    entry_coords = SkyCoord([e["ra_deg"] for e in entries] * u.deg,
+                            [e["dec_deg"] for e in entries] * u.deg)
+    field_coords = SkyCoord([f["ra_deg"] for f in fields] * u.deg,
+                            [f["dec_deg"] for f in fields] * u.deg)
 
     left, right, _, _ = field_coords.search_around_sky(entry_coords,
                                                        scene_arcsec * u.arcsec)
     violations = []
     for entry_index, field_index in zip(left, right):
-        position, owner = entries[int(entry_index)]
-        reader = harvest[int(field_index)]
-        if owner["group"] == reader["group"]:
+        entry = entries[int(entry_index)]
+        reader = fields[int(field_index)]
+        if entry["group"] == reader["group"]:
             continue
-        violations.append({"ra_deg": position[0], "dec_deg": position[1],
-                           "written_by": owner["name"],
-                           "written_group": owner["group"],
+        violations.append({"ra_deg": entry["ra_deg"],
+                           "dec_deg": entry["dec_deg"],
+                           "written_by": entry["owner"],
+                           "written_group": entry["group"],
                            "read_by": reader["name"],
                            "read_group": reader["group"]})
-    return sorted(violations, key=lambda v: (v["written_by"], v["read_by"]))
+    return sorted(violations, key=lambda v: (str(v["written_by"]),
+                                             str(v["read_by"])))
 
 
 def build_plan(targets: list[dict], census: list[dict], *,
@@ -397,7 +433,7 @@ def build_plan(targets: list[dict], census: list[dict], *,
     for i, target in enumerate(targets):
         in_harvest = i in groups
         rows.append({
-            "name": target["name"],
+            "name": target["name"], "label": target["label"],
             "ra_deg": target["ra_deg"], "dec_deg": target["dec_deg"],
             "dir": target["dir"],
             "pass": PASS_HARVEST if in_harvest else PASS_PARALLEL,

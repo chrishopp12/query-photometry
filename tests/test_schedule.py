@@ -164,7 +164,8 @@ def test_an_unmatched_target_is_reported_not_gated() -> None:
 
 def _targets(seps, names=None):
     names = names or [f"t{i}" for i in range(len(seps))]
-    return [{'name': name, 'ra_deg': _offset(RA0, DEC0, sep)[0],
+    return [{'name': name, 'label': name,
+             'ra_deg': _offset(RA0, DEC0, sep)[0],
              'dec_deg': DEC0, 'dir': f"/tmp/{name}", 'priority': None}
             for name, sep in zip(names, seps)]
 
@@ -352,13 +353,21 @@ def test_build_plan_rejects_a_misaligned_census() -> None:
 
 def test_read_targets_accepts_the_shared_sample_catalog(tmp_path) -> None:
     path = tmp_path / "sample.csv"
-    path.write_text("name,ra_deg,dec_deg,z_ref_kind,dir,priority\n"
-                    "a,210.0,30.0,cluster,/data/a,\n"
-                    "b,210.1,30.0,spec,,5\n"
-                    "a,210.0,30.0,cluster,/data/a,\n", encoding="utf-8")
+    from sedphot.resolve import sanitize_label
+
+    path.write_text("name,ra_deg,dec_deg,z_ref_kind,dir,label,priority\n"
+                    "M 87,210.0,30.0,cluster,/data/a,m87_deep,\n"
+                    "b,210.1,30.0,spec,,,5\n"
+                    "M 87,210.0,30.0,cluster,/data/a,m87_deep,\n",
+                    encoding="utf-8")
     targets = read_targets(path, out_root="/root")
-    assert [t['name'] for t in targets] == ['a', 'b']
+    assert [t['name'] for t in targets] == ['M 87', 'b']
     assert targets[0]['dir'] == '/data/a'
+    # A named label wins; an unnamed one falls back to the sanitized name,
+    # because the label is the product filename stem an existing tree
+    # already committed to.
+    assert targets[0]['label'] == 'm87_deep'
+    assert targets[1]['label'] == sanitize_label('b')
     assert targets[1]['dir'] == str(tmp_path.parent / "root" / "b") \
         or targets[1]['dir'].endswith("root/b")
     assert targets[1]['priority'] == 5.0
