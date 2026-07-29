@@ -307,18 +307,24 @@ def _cmd_measure(args: argparse.Namespace) -> None:
     coord, label = _resolve_from_args(args)
     instruments = _instruments_from_args(args, IMAGE_PROVIDERS)
     try:
-        _run_measure_from_args(args, coord, label, instruments)
+        measured = _run_measure_from_args(args, coord, label, instruments)
     except ValueError as e:
         # An actionable refusal -- an aperture outside the curve-of-growth
         # grid, an unknown provider -- reads as a crash when it arrives as a
         # traceback. Same treatment the other verbs give their own refusals.
         sys.exit(f"sedphot measure: {e}")
+    # A band that raised leaves the table short while every provider still
+    # reports ok. Exiting 0 there tells a driver the galaxy is done.
+    failed = (measured.attrs.get('absent_bands') or {}).get('failed', [])
+    if failed:
+        sys.exit(f"sedphot measure: {len(failed)} band(s) failed and are "
+                 f"absent from the table: {', '.join(failed)}")
 
 
 def _run_measure_from_args(args: argparse.Namespace, coord, label,
-                           instruments: list[str]) -> None:
+                           instruments: list[str]):
     """Forward the parsed measurement options to the driver."""
-    run_measure(
+    return run_measure(
         coord, label, args.out_dir,
         instruments=instruments,
         mode=args.mode,

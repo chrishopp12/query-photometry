@@ -105,6 +105,9 @@ def write_coverage_report(results: list[ProviderResult], path: str | Path) -> Pa
             "n_rows": len(r.rows),
             "message": r.message,
             "radius_used_arcsec": r.radius_used,
+            **{key: r.meta[key]
+               for key in ("measured_bands", "demoted_bands", "failed_bands")
+               if key in r.meta},
         }
         for r in results
     }
@@ -118,3 +121,24 @@ def print_coverage_summary(results: list[ProviderResult]) -> None:
     for r in results:
         detail = f" -- {r.message}" if r.message else ""
         print(f"  {r.provider:12s} {r.status:12s} {len(r.rows):3d} rows{detail}")
+
+
+def absent_bands(results: list[ProviderResult]) -> dict[str, list]:
+    """Bands that were requested and are missing from the table.
+
+    Two ways a band goes absent while its provider still reports ok: the
+    aperture fell off the image footprint (demoted), or the measurement
+    raised (failed). Callers gate an exit code on this.
+
+    Returns
+    -------
+    absent : dict
+        {'demoted': [...], 'failed': [...]}, each entry '<provider> <band>'.
+    """
+    demoted, failed = [], []
+    for r in results:
+        for band in r.meta.get("demoted_bands", []):
+            demoted.append(f"{r.provider} {band}")
+        for entry in r.meta.get("failed_bands", []):
+            failed.append(f"{r.provider} {entry['band']} ({entry['error']})")
+    return {"demoted": demoted, "failed": failed}

@@ -23,8 +23,7 @@ Notes:
 """
 from __future__ import annotations
 
-import os
-import tempfile
+import io
 import urllib.request
 
 import numpy as np
@@ -58,17 +57,14 @@ def _fetch_hap_catalog(filename: str) -> pd.DataFrame | None:
         print(f"  [HST] Failed to fetch {filename}: {e}")
         return None
 
-    with tempfile.NamedTemporaryFile(suffix='.ecsv', delete=False) as f:
-        f.write(content)
-        tmppath = f.name
-
+    # ECSV is text, so the download parses straight out of memory -- a temp
+    # file unlinked in a finally still leaks when the process is killed.
     try:
-        cat = Table.read(tmppath, format='ascii.ecsv').to_pandas()
+        cat = Table.read(io.StringIO(content.decode('utf-8')),
+                         format='ascii.ecsv').to_pandas()
     except Exception as e:
         print(f"  [HST] Failed to parse {filename}: {e}")
         cat = None
-    finally:
-        os.unlink(tmppath)
 
     return cat
 

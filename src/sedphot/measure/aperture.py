@@ -629,9 +629,16 @@ def measurement_to_row(measurement: dict, *, mode: str = 'aperture') -> dict:
     """
     witness = measurement['witness']
     if mode == 'sersic':
-        # NaN when no target model exists to report (blind scene, or
-        # the refit disabled by patch without an explicit shape).
-        flux = witness.get('target_model_uJy', float('nan'))
+        # A blind scene, or the refit disabled by patch without an explicit
+        # shape, leaves nothing to report. Reporting NaN under a sersic-
+        # tagged filename claims a model flux that was never fitted.
+        if 'target_model_uJy' not in witness:
+            raise ValueError(
+                f"sersic mode: no target model for "
+                f"{measurement['instrument']}_{measurement['band']} -- the "
+                f"scene has no target component (blind scene, or target_refit "
+                f"disabled by patch without an explicit shape)")
+        flux = witness['target_model_uJy']
     else:
         flux = measurement['flux_ujy']
     err = measurement['flux_err_ujy']

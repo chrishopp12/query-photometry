@@ -3,6 +3,7 @@ joint solve, the measurement witnesses, and one synthetic band
 end-to-end through the driver."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1422,3 +1423,36 @@ def test_prepare_scene_cone_scales_with_the_stamp(tmp_path, monkeypatch):
     assert calls['scene'][0] == pytest.approx(grown)
     assert calls['scene'][1] == f'tractor_scene_dr9_r{tag}.csv'
     assert calls['gaia'][1] == f'gaia_scene_r{tag}.csv'
+
+
+def _patched_scene(tmp_path, monkeypatch, patches):
+    """prepare_scene against a written patches.json, with no network."""
+    from sedphot.measure import engine
+    monkeypatch.setattr(engine, 'query_scene',
+                        lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(engine.gaia, 'query_cone',
+                        lambda *a, **k: pd.DataFrame())
+    (tmp_path / recipe.PATCH_FILENAME).write_text(json.dumps(patches),
+                                                  encoding='utf-8')
+    return engine.prepare_scene(SkyCoord(RA, DEC, unit='deg'),
+                                phot_dir=tmp_path, out_dir=tmp_path,
+                                aperture_arcsec=12.0, cutout_half_arcsec=60.0)
+
+
+def test_a_typod_patch_key_is_refused(tmp_path, monkeypatch):
+    """A key that names nothing means the override never applied -- the
+    same class of error every malformed entry already raises for."""
+    with pytest.raises(ValueError, match='unrecognized key'):
+        _patched_scene(tmp_path, monkeypatch, {'target_refits': True})
+
+
+def test_the_refusal_names_the_offending_key(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match='target_refits'):
+        _patched_scene(tmp_path, monkeypatch,
+                       {'target_refit': True, 'target_refits': True})
+
+
+def test_a_recognized_patch_key_still_loads(tmp_path, monkeypatch):
+    scene = _patched_scene(tmp_path, monkeypatch,
+                           {'target_refit': False, 'comment': 'edge-on disk'})
+    assert scene['patches']['target_refit'] is False

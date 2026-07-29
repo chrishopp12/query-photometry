@@ -52,6 +52,7 @@ from .results import (
     STATUS_OK,
     ImageProduct,
     ProviderResult,
+    absent_bands,
     print_coverage_summary,
     write_coverage_report,
 )
@@ -521,6 +522,7 @@ def run_measure(
             provider_rows: list[dict] = []
             measured_bands: list[str] = []
             demoted_bands: list[str] = []
+            failed_bands: list[dict] = []
             for product in order_bands(products):
                 band_key = f"{product.instrument}_{product.band}"
                 pin = pin_by_band.get(band_key) if pin_by_band else None
@@ -555,6 +557,9 @@ def run_measure(
                 except Exception as e:
                     print(f"  {product.instrument} {product.band} FAILED: "
                           f"{type(e).__name__}: {e}")
+                    failed_bands.append({"band": product.band,
+                                         "error": type(e).__name__,
+                                         "message": str(e)})
                     continue
                 measurements.append(measurement)
                 provider_rows.append(row)
@@ -570,6 +575,9 @@ def run_measure(
                 pieces.append(f"measured bands: {', '.join(measured_bands)}")
             if demoted_bands:
                 pieces.append(f"aperture off footprint: {', '.join(demoted_bands)}")
+            if failed_bands:
+                pieces.append("failed: " + ", ".join(
+                    f"{f['band']} ({f['error']})" for f in failed_bands))
             if measured_bands:
                 status = STATUS_OK
             elif demoted_bands:
@@ -577,9 +585,16 @@ def run_measure(
             else:
                 status = STATUS_ERROR
                 pieces.append("fetched images but every measurement failed")
+            # A band that raised leaves the table one row short while the
+            # provider still reports ok. Recording the absent bands as data
+            # -- not only as console text -- is what makes the shortfall
+            # answerable after the run.
             results.append(ProviderResult(
                 provider=name, status=status, rows=provider_rows,
-                message="; ".join(pieces)))
+                message="; ".join(pieces),
+                meta={"measured_bands": list(measured_bands),
+                      "demoted_bands": list(demoted_bands),
+                      "failed_bands": list(failed_bands)}))
             print()
 
         if registry_update:
@@ -587,9 +602,17 @@ def run_measure(
             print(f"registry updated: {registry_path}\n")
 
         measured_df = rows_to_frame(rows)
+        absent = absent_bands(results)
+        measured_df.attrs['absent_bands'] = absent
 
         print("Provider summary:")
         print_coverage_summary(results)
+        if absent['demoted'] or absent['failed']:
+            print("\nBands requested but ABSENT from the table:")
+            for band in absent['demoted']:
+                print(f"  no_coverage  {band}")
+            for band in absent['failed']:
+                print(f"  FAILED       {band}")
         if write_outputs:
             write_coverage_report(results, phot_dir / "coverage_measure.json")
 

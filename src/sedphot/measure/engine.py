@@ -138,8 +138,11 @@ def prepare_scene(
                  'target_system', 'comment'}
         unknown = sorted(set(patches) - known)
         if unknown:
-            print(f"  WARNING {recipe.PATCH_FILENAME}: unrecognized "
-                  f"key(s) {unknown} ignored (known: {sorted(known)})")
+            # A typo'd key means the override the caller wrote never
+            # applied. Every malformed entry below raises; a key that
+            # names nothing is the same class of error.
+            raise ValueError(f"{patch_path}: unrecognized key(s) {unknown} "
+                             f"(known: {sorted(known)})")
         for entry in patches.get('replace_rows', []):
             missing = sorted({'ra', 'dec', 'with'} - set(entry))
             if missing:

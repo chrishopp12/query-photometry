@@ -100,6 +100,11 @@ def mosaic_first_valid(planes, coord, size_arcsec, pixscale):
         from reproject import reproject_interp
         from reproject.mosaicking import reproject_and_coadd
     except ImportError:
+        # Naming the cause matters: without it a recoverable tile-boundary
+        # target reports no_coverage and reads as a survey gap.
+        print("  WARNING mosaic skipped: reproject is not installed, so a "
+              "target on a tile boundary cannot be filled from adjacent "
+              "tiles and will report no_coverage")
         return None, None
     npix = max(1, int(round(size_arcsec / pixscale)))
     target = WCS(naxis=2)
@@ -112,7 +117,9 @@ def mosaic_first_valid(planes, coord, size_arcsec, pixscale):
         array, footprint = reproject_and_coadd(
             planes, output_projection=target, shape_out=(npix, npix),
             reproject_function=reproject_interp, combine_function='first')
-    except Exception:
+    except Exception as e:
+        print(f"  WARNING mosaic of {len(planes)} plane(s) failed, falling "
+              f"back to single-tile coverage: {type(e).__name__}: {e}")
         return None, None
     array = array.astype('f4')
     array[footprint == 0] = np.nan   # honest no-coverage, not a 0 fill value
