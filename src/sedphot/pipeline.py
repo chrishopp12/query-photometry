@@ -244,6 +244,68 @@ def _resolve_shape(
     return shape_sky, origin
 
 
+def measure_sidecar_payload(
+        *,
+        coord: SkyCoord,
+        label: str,
+        target_name: str | None,
+        instruments: list[str],
+        mode: str,
+        aperture_arcsec: float,
+        cutout_arcsec: float,
+        shape_sky: dict | None,
+        shape_origin: dict | None,
+        scene: dict,
+        registry_path: str | None,
+        registry_update: bool,
+        recipe_snapshot: dict,
+        legacy_dr: str,
+        legacy_bricks: bool,
+        hst_proposal_id: str | None,
+        measurements: list[dict],
+) -> dict:
+    """Caller-supplied half of the _measured.csv sidecar.
+
+    Split out so the payload can be asserted without running a measurement:
+    write_sidecar supplies the automatic fields, and everything else is
+    decided here. A key that is built but never written -- the failure mode
+    behind the missing hst_proposal_id -- is only detectable at this seam.
+
+    Returns
+    -------
+    payload : dict
+        Passed verbatim to provenance.write_sidecar.
+    """
+    return {
+        "kind": f"{mode}_photometry",
+        "target": {"name": target_name, "label": label,
+                   "ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
+        "instruments": instruments,
+        "mode": mode,
+        "aperture_arcsec": aperture_arcsec,
+        "cutout_arcsec": cutout_arcsec,
+        "sersic_shape": ({**shape_sky, **(shape_origin or {})} if shape_sky
+                         else ({'source': 'reference-band refit'}
+                               if mode == 'sersic' else None)),
+        "scene": {
+            "n_catalog_rows": int(len(scene['cat'])),
+            "n_confirmed_stars": int(len(scene['stars'])),
+            "patches": sorted(scene['patches'].keys()),
+            "registry_path": str(registry_path) if registry_path else None,
+            "registry_updated": bool(registry_update),
+            "recipe": recipe_snapshot,
+        },
+        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
+                  if 'legacy' in instruments else None,
+        # remeasure.reconstruct replays the fetch options so a rebuild
+        # reads the same pixels the fit solved on; an unrecorded program
+        # restriction would silently refetch a different HST mosaic.
+        "hst_proposal_id": hst_proposal_id if 'hst' in instruments else None,
+        "per_band": {f"{m['instrument']}_{m['band']}": m['witness']
+                     for m in measurements},
+    }
+
+
 def run_measure(
         coord: SkyCoord,
         label: str,
@@ -543,34 +605,17 @@ def run_measure(
         plot_growth_curves(measurements, phot_dir / "QA")
         out_csv = phot_dir / f"{label}_measured.csv"
         measured_df.to_csv(out_csv, index=False)
-        write_sidecar(out_csv, {
-            "kind": f"{mode}_photometry",
-            "target": {"name": target_name, "label": label,
-                       "ra_deg": float(coord.ra.deg), "dec_deg": float(coord.dec.deg)},
-            "instruments": instruments,
-            "mode": mode,
-            "aperture_arcsec": aperture_arcsec,
-            "cutout_arcsec": cutout_arcsec,
-            "sersic_shape": ({**shape_sky, **shape_origin} if shape_sky
-                             else ({'source': 'reference-band refit'}
-                                   if mode == 'sersic' else None)),
-            "scene": {
-                "n_catalog_rows": int(len(scene['cat'])),
-                "n_confirmed_stars": int(len(scene['stars'])),
-                "patches": sorted(scene['patches'].keys()),
-                "registry_path": str(registry_path) if registry_path else None,
-                "registry_updated": bool(registry_update),
-                "recipe": recipe.snapshot(),
-            },
-            "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
-                      if 'legacy' in instruments else None,
-            # remeasure.reconstruct replays the fetch options so a rebuild
-            # reads the same pixels the fit solved on; an unrecorded program
-            # restriction would silently refetch a different HST mosaic.
-            "hst_proposal_id": hst_proposal_id if 'hst' in instruments else None,
-            "per_band": {f"{m['instrument']}_{m['band']}": m['witness']
-                         for m in measurements},
-        })
+        write_sidecar(out_csv, measure_sidecar_payload(
+            coord=coord, label=label, target_name=target_name,
+            instruments=instruments, mode=mode,
+            aperture_arcsec=aperture_arcsec, cutout_arcsec=cutout_arcsec,
+            shape_sky=shape_sky, shape_origin=shape_origin,
+            scene=scene,
+            registry_path=registry_path, registry_update=registry_update,
+            recipe_snapshot=recipe.snapshot(),
+            legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+            hst_proposal_id=hst_proposal_id,
+            measurements=measurements))
         print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
         print(measured_df.to_string(index=False))
 
