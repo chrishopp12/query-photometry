@@ -23,6 +23,8 @@ Usage:
                      [--sky-rmin AS] [--registry FILE [--registry-update]]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
+    sedphot plan     --targets CSV --out PLAN.json [--out-root DIR]
+                     [--cutout-size 120.0] [--link-margin AS]
     sedphot sed      --out-dir DIR [--label STEM]
     sedphot overlay  --out-dir DIR [--label STEM] [--zoom-size 5.0]
                      [--context-size 15.0] [--wcs-from FITS]
@@ -65,6 +67,7 @@ from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
                        run_sed, run_spherex)
 from .resolve import resolve_target
 from .results import STATUS_OK
+from .schedule import DEFAULT_LINK_MARGIN_AS
 
 
 # ------------------------------------
@@ -229,6 +232,48 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
 
 def _cmd_sed(args: argparse.Namespace) -> None:
     run_sed(args.label, args.out_dir)
+
+
+def _cmd_plan(args: argparse.Namespace) -> None:
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
+    from .measure import recipe
+    from .schedule import (build_plan, census_from_catalog, fetch_catalog,
+                           read_targets, write_plan)
+
+    targets = read_targets(args.targets, out_root=args.out_root)
+    print(f"{len(targets)} targets from {args.targets}")
+
+    census = []
+    for i, target in enumerate(targets, start=1):
+        coord = SkyCoord(target['ra_deg'] * u.deg, target['dec_deg'] * u.deg)
+        cat = fetch_catalog(coord, target['dir'],
+                            cutout_arcsec=args.cutout_size,
+                            legacy_dr=args.legacy_dr)
+        entry = census_from_catalog(coord, cat,
+                                    cutout_arcsec=args.cutout_size)
+        census.append(entry)
+        print(f"  [{i}/{len(targets)}] {target['name']}: "
+              f"{len(cat)} scene rows, {entry['n_gated']} gated"
+              + ("" if entry['matched'] else ", NO CATALOG MATCH")
+              + (", gates" if entry['gates'] else ""))
+
+    plan = build_plan(targets, census, cutout_arcsec=args.cutout_size,
+                      margin_arcsec=args.link_margin)
+    json_path, csv_path = write_plan(plan, args.out)
+
+    print(f"\nscene cone {plan['scene_radius_arcsec']}\", "
+          f"gate reach {plan['gate_reach_arcsec']}\", "
+          f"link {plan['link_radius_arcsec']}\" "
+          f"(margin {plan['link_margin_arcsec']}\")")
+    print(f"harvest pass: {plan['n_harvest']} targets in "
+          f"{plan['n_groups']} group(s), largest {plan['largest_group']}")
+    print(f"parallel pass: {plan['n_parallel']} targets")
+    if plan['n_unmatched']:
+        print(f"WARNING: {plan['n_unmatched']} target(s) have no catalog "
+              f"row within {recipe.TARGET_MATCH_AS}\"")
+    print(f"{json_path}\n{csv_path}")
 
 
 def _cmd_overlay(args: argparse.Namespace) -> None:
@@ -450,6 +495,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
+
+    p_plan = subparsers.add_parser(
+        "plan", help="Plan a multi-target sweep: gate census, groups, order")
+    p_plan.add_argument('--targets', type=str, required=True,
+                        help="Target CSV: a name column, ra_deg/dec_deg, "
+                             "an optional dir and priority")
+    p_plan.add_argument('--out', type=str, required=True,
+                        help="Plan JSON to write; the flat CSV goes beside it")
+    p_plan.add_argument('--out-root', type=str, default=None,
+                        help="Parent directory for targets whose CSV row "
+                             "names no dir")
+    p_plan.add_argument('--cutout-size', type=float, default=120.0,
+                        help="Stamp width the sweep will use; both the scene "
+                             "cone and the gate reach derive from it "
+                             "[default: 120.0]")
+    p_plan.add_argument('--link-margin', type=float,
+                        default=DEFAULT_LINK_MARGIN_AS,
+                        help="Padding past the modeled write-plus-read span "
+                             "before two fields are called independent "
+                             f"[default: {DEFAULT_LINK_MARGIN_AS}]")
+    p_plan.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
+                        choices=['dr10', 'dr9'],
+                        help=f"Scene catalog release [default: {LEGACY_DR_DEFAULT}]")
+    p_plan.set_defaults(func=_cmd_plan)
 
     p_overlay = subparsers.add_parser(
         "overlay",
