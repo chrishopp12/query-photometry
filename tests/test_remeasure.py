@@ -55,6 +55,35 @@ def test_remeasure_both_modes_and_skips(tmp_path):
         remeasure(p, 12.0, mode='bogus')
 
 
+def test_integrated_aperture_records_the_radius_it_actually_reached(tmp_path):
+    """There is no empirical total: the reported flux is the outermost
+    stored point, so aperture_as must name that point's radius. inf claimed
+    a radius the curve never reached, and read as a total."""
+    prov = {
+        'git_rev': 'abc123',
+        'per_band': {
+            'Legacy_r': {
+                'target_model_uJy': 570.0,
+                'fit_state': {'rgrid': [2.0, 6.0, 12.0, 20.0],
+                              'model_cog_uJy': [100.0, 300.0, 500.0, 560.0],
+                              'enclosed_uJy': [90.0, 290.0, 480.0, 545.0]}},
+        },
+    }
+    p = tmp_path / 'g1.provenance.json'
+    p.write_text(json.dumps(prov))
+
+    row = remeasure(p, None, mode='aperture').iloc[0]
+    assert row['flux_uJy'] == 545.0          # the outermost stored value
+    assert row['aperture_as'] == 20.0        # ...at the radius it was stored at
+
+    # The sersic model total really does integrate to infinity.
+    assert remeasure(p, None, mode='sersic').iloc[0]['aperture_as'] == \
+        float('inf')
+
+    # A requested aperture is still reported as requested.
+    assert remeasure(p, 12.0, mode='aperture').iloc[0]['aperture_as'] == 12.0
+
+
 def _shape_prov():
     """One gating band (a free-target curve stored) and one without."""
     return {

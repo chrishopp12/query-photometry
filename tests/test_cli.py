@@ -132,6 +132,51 @@ def test_measure_and_remeasure_share_an_aperture_default():
     assert measure.aperture == remeasure.aperture
 
 
+def test_measure_and_remeasure_share_a_mode_default():
+    """Same argument as the aperture default: a bare remeasure must report
+    the same quantity a bare measure produced, not a different estimator."""
+    measure = cli.build_parser().parse_args(['measure'] + TARGET + ['--all'])
+    remeasure = cli.build_parser().parse_args(
+        ['remeasure', 'x.provenance.json'])
+    assert measure.mode == remeasure.mode == 'aperture'
+
+
+@pytest.mark.parametrize('flag', [['--sersic-from', 'z'],
+                                  ['--sersic-seeing', '0.9'],
+                                  ['--sersic-params', '2', '1.5', '30', '3']])
+def test_run_spherex_sersic_accepts_every_shape_flag(flag, monkeypatch):
+    """run_all forwards all three shape flags to run_spherex, so refusing
+    any of them under --mode aperture refuses a flag that IS honored."""
+    monkeypatch.setattr(cli, 'run_all', lambda *a, **k: {})
+    monkeypatch.setattr(sys, 'argv', ['sedphot', 'run'] + TARGET + [
+        '--mode', 'aperture', '--spherex', 'sersic'] + flag)
+    assert cli.main() is None
+
+
+@pytest.mark.parametrize('params,message', [
+    (['7', '1.5', '30', '3'], 'outside the fitted range'),
+    (['0.2', '1.5', '30', '3'], 'outside the fitted range'),
+    (['2', '0.5', '30', '3'], 'a/b >= 1'),
+    (['2', '1.5', '30', '0'], 'reff_arcsec must be positive'),
+])
+def test_explicit_sersic_params_are_bounded(params, message):
+    """The help promised n<=6 and nothing enforced it."""
+    from sedphot.pipeline import _resolve_shape
+    with pytest.raises(ValueError, match=message):
+        _resolve_shape(None, None, sersic_from=None,
+                       sersic_params=[float(v) for v in params],
+                       cutout_half_arcsec=60.0, sersic_seeing=None)
+
+
+def test_an_in_range_sersic_shape_is_accepted():
+    from sedphot.pipeline import _resolve_shape
+    shape, origin = _resolve_shape(None, None, sersic_from=None,
+                                   sersic_params=[2.0, 1.5, 30.0, 3.0],
+                                   cutout_half_arcsec=60.0, sersic_seeing=None)
+    assert shape['n'] == 2.0
+    assert origin['source'] == 'explicit parameters'
+
+
 @pytest.mark.parametrize('verb', ['measure', 'run'])
 @pytest.mark.parametrize('flag', [['--sersic-from', 'z'],
                                   ['--sersic-seeing', '0.9'],

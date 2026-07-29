@@ -132,7 +132,11 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                             "[default: recipe.BG_RMIN_AS = 15]")
     group.add_argument('--registry', type=str, default=None,
                        help="Cross-field registry JSON to consume (solved "
-                            "shared sources enter as frozen components)")
+                            "shared sources enter as frozen components). "
+                            "Unlike remeasure, measure does NOT auto-discover "
+                            "a sibling registry.json: consuming one changes "
+                            "the fluxes, so a fresh measurement has to be "
+                            "asked [default: none]")
     group.add_argument('--registry-update', action='store_true',
                        help="Also write this galaxy's solved seats back to "
                             "--registry (updates are last-writer-wins; run "
@@ -143,9 +147,9 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                             "per-instrument reference-band refit]")
     group.add_argument('--sersic-params', nargs=4, type=float, default=None,
                        metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
-                       help="Sersic mode: explicit shape (n, a/b >= 1, PA "
-                            "deg E of N, r_eff arcsec) -- pins the target "
-                            "profile in every band")
+                       help="Sersic mode: explicit shape (0.4 <= n <= 6, "
+                            "a/b >= 1, PA deg E of N, r_eff arcsec > 0) -- "
+                            "pins the target profile in every band")
     group.add_argument('--sersic-seeing', type=float, default=None,
                        help="PSF FWHM (arcsec) assumed by the --sersic-from "
                             "shape fit; fitted n and r_eff are PSF-sensitive")
@@ -301,10 +305,11 @@ def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
                     ('--sersic-params', args.sersic_params),
                     ('--sersic-seeing', args.sersic_seeing))
                    if value is not None]
-    # Under `run`, --sersic-params also declares the SPHEREx extraction
-    # shape, so it is meaningful with an aperture-mode measurement.
+    # Under `run`, the shape flags also declare the SPHEREx extraction
+    # shape, so they are meaningful with an aperture-mode measurement.
+    # run_all forwards all three to run_spherex, so all three are exempt.
     if verb == 'run' and getattr(args, 'spherex', 'off') != 'off':
-        shape_flags = [f for f in shape_flags if f != '--sersic-params']
+        shape_flags = []
     if args.mode != 'sersic' and shape_flags:
         _usage_error(f"sedphot {verb}: {', '.join(shape_flags)} only applies "
                      f"to --mode sersic (got --mode {args.mode}); drop the "
@@ -414,8 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
                                 "[default: sersic]")
     p_spherex.add_argument('--sersic-params', nargs=4, type=float, default=None,
                            metavar=('N', 'AXRATIO', 'PA_DEG', 'REFF_AS'),
-                           help="Sersic mode: explicit shape (n<=6, a/b >= 1, "
-                                "PA deg E of N, r_eff arcsec)")
+                           help="Sersic mode: explicit shape (0.4 <= n <= 6, "
+                                "a/b >= 1, PA deg E of N, r_eff arcsec > 0)")
     p_spherex.add_argument('--sersic-from', type=str, default=None,
                            help="Sersic mode: fit the shape on this band's "
                                 "image ('Legacy_z' or 'z') instead of the "
@@ -474,11 +479,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-report band fluxes from a stored fit (no re-fetch, no refit)")
     p_remeasure.add_argument('provenance', type=str,
                              help="Path to a <label>_measured.provenance.json")
-    p_remeasure.add_argument('--mode', choices=['sersic', 'aperture'],
-                             default='sersic',
-                             help="sersic: fitted-model flux; aperture: "
-                                  "empirical neighbor-subtracted flux "
-                                  "[default: sersic]")
+    p_remeasure.add_argument('--mode', choices=['aperture', 'sersic'],
+                             default='aperture',
+                             help="aperture: empirical neighbor-subtracted "
+                                  "flux; sersic: fitted-model flux. Matches "
+                                  "the measure default, like --aperture does, "
+                                  "so a bare remeasure re-reports what the "
+                                  "measurement measured [default: aperture]")
     p_remeasure.add_argument('--aperture', type=float, default=12.0,
                              help="Circular aperture radius, arcsec; matches "
                                   "the measure default, so a bare remeasure "

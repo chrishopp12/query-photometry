@@ -193,6 +193,12 @@ def _resolve_shape(
         n, axis_ratio, pa_deg, reff_arcsec = [float(v) for v in sersic_params]
         if axis_ratio < 1.0:
             raise ValueError("--sersic-params axis_ratio is a/b >= 1")
+        n_lo, n_hi = recipe.SERSIC_N_RANGE
+        if not n_lo <= n <= n_hi:
+            raise ValueError(f"--sersic-params n={n:g} is outside the fitted "
+                             f"range [{n_lo:g}, {n_hi:g}]")
+        if reff_arcsec <= 0.0:
+            raise ValueError("--sersic-params reff_arcsec must be positive")
         shape_sky = dict(n=n, reff_arcsec=reff_arcsec,
                          ellip=1.0 - 1.0 / axis_ratio, pa_deg=pa_deg % 180.0)
         return shape_sky, {'source': 'explicit parameters'}

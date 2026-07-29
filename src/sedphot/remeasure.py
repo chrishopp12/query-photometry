@@ -109,8 +109,9 @@ def remeasure(provenance_path: str | Path,
                               R. That re-reads the cached images (fetching any
                               that are missing) and SOLVES any band the sidecar
                               cannot pin.
-      aperture, integrated    the outermost stored point, reported with
-                              aperture_as = inf. There is no empirical total.
+      aperture, integrated    the outermost stored point, reported at that
+                              point's radius. There is no empirical total,
+                              so aperture_as names where the curve stopped.
 
     'past grid' is judged against the SHORTEST grid in the sidecar, so it is a
     property of the galaxy, not of one band.
@@ -207,12 +208,20 @@ def remeasure(provenance_path: str | Path,
         # The source records the shape actually used, not the one requested,
         # so a demoted band is visible in the table itself.
         tag = f"{mode}_{used}" if mode == 'sersic' else mode
+        if not integrated:
+            reported_ap = float(aperture_arcsec)
+        elif mode == 'sersic':
+            reported_ap = float('inf')      # the model total, genuinely to infinity
+        else:
+            # The empirical integrated flux is the outermost stored point,
+            # not a total: inf claimed a radius the curve never reached.
+            reported_ap = float(rgrid[-1])
         rows.append(dict(
             band=band,
             flux_uJy=round(flux, 4),
             mag_AB=(round(UJY_AB_ZP - 2.5 * np.log10(flux), 4)
                     if flux > 0 else float('nan')),
-            aperture_as=(float('inf') if integrated else float(aperture_arcsec)),
+            aperture_as=reported_ap,
             mode=mode,
             source=f"{tag}_remeasure:{rev}"))
     if demoted:
@@ -390,6 +399,11 @@ def reconstruct(provenance_path: str | Path, aperture_arcsec: float,
     if registry_path is None:
         cand = galaxy_dir.parent / 'registry.json'
         registry_path = str(cand) if cand.exists() else None
+        # measure has no such fallback, so which registry a reconstruction
+        # consumed is not inferable from the command line alone.
+        if registry_path:
+            print(f"  [remeasure] consuming the auto-discovered registry "
+                  f"{registry_path} (pass --registry to override)")
     grid = list(np.arange(2.0, float(np.ceil(aperture_arcsec)) + 2.0, 1.0))
     qa_dir = (galaxy_dir / 'Photometry' / 'QA'
               / f"remeasure_R{int(np.ceil(aperture_arcsec))}as"
