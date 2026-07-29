@@ -14,6 +14,7 @@ from sedphot.schedule import (
     DEFAULT_LINK_MARGIN_AS,
     PASS_HARVEST,
     PASS_PARALLEL,
+    audit_groups,
     build_plan,
     census_from_catalog,
     connected_groups,
@@ -153,7 +154,8 @@ def test_an_unmatched_target_is_reported_not_gated() -> None:
     assert census['gates'] is False
 
     empty = census_from_catalog(coord, pd.DataFrame(), cutout_arcsec=120.0)
-    assert empty == {'matched': False, 'gates': False, 'n_gated': 0}
+    assert empty == {'matched': False, 'gates': False, 'n_gated': 0,
+                     'entries': []}
 
 
 # ------------------------------------
@@ -255,6 +257,87 @@ def test_plan_records_its_own_radii_and_counts_unmatched() -> None:
     assert plan['gate_reach_arcsec'] == round(gate_reach_arcsec(120.0), 2)
     assert plan['link_radius_arcsec'] == round(link_radius_arcsec(120.0), 2)
     assert plan['n_unmatched'] == 1
+
+
+def test_a_clean_plan_has_no_boundary_crossings() -> None:
+    targets = _targets([0.0, 50.0, 9000.0, 9050.0])
+    plan = build_plan(targets, _census([True] * 4), cutout_arcsec=120.0)
+    assert plan['n_groups'] == 2
+    assert plan['n_violations'] == 0
+
+
+def _audit_rows(writer_group, reader_group, reader_pass=PASS_HARVEST):
+    """Two fields 80" apart, the first harvesting a record 40" from it."""
+    return [
+        {'name': 'writer', 'ra_deg': RA0, 'dec_deg': DEC0,
+         'pass': PASS_HARVEST, 'group': writer_group,
+         'entries': [[_offset(RA0, DEC0, 40.0)[0], DEC0]]},
+        {'name': 'reader', 'ra_deg': _offset(RA0, DEC0, 80.0)[0],
+         'dec_deg': DEC0, 'pass': reader_pass, 'group': reader_group,
+         'entries': []},
+    ]
+
+
+def test_the_audit_catches_a_record_crossing_a_group_boundary() -> None:
+    violations = audit_groups(_audit_rows(0, 1), scene_arcsec=100.0)
+    assert len(violations) == 1
+    assert violations[0]['written_by'] == 'writer'
+    assert violations[0]['read_by'] == 'reader'
+    assert violations[0]['written_group'] != violations[0]['read_group']
+
+
+def test_the_audit_passes_a_record_shared_inside_one_group() -> None:
+    # Same record, same reach -- but one group, where a shared record is
+    # the sequence working as intended rather than a race.
+    assert audit_groups(_audit_rows(0, 0), scene_arcsec=100.0) == []
+
+
+def test_the_audit_ignores_the_parallel_pass() -> None:
+    # A parallel-pass field consumes the merged registry after the
+    # freeze, so it sees every record regardless of who wrote it.
+    rows = _audit_rows(0, 1, reader_pass=PASS_PARALLEL)
+    assert audit_groups(rows, scene_arcsec=100.0) == []
+
+
+def test_the_audit_ignores_a_record_out_of_reach() -> None:
+    assert audit_groups(_audit_rows(0, 1), scene_arcsec=30.0) == []
+
+
+def test_a_valid_margin_cannot_produce_a_crossing() -> None:
+    # The link floor is write reach + read reach, so a record inside one
+    # field's gate reach and another's scene cone puts the two fields
+    # under the link distance -- i.e. in the same group by construction.
+    for margin in (0.0, 60.0, DEFAULT_LINK_MARGIN_AS, 500.0):
+        for seps in ([0.0, 50.0, 140.0], [0.0, 90.0, 180.0, 9000.0]):
+            targets = _targets(seps)
+            plan = build_plan(targets, _census([True] * len(seps)),
+                              cutout_arcsec=120.0, margin_arcsec=margin)
+            assert plan['n_violations'] == 0, (margin, seps)
+
+
+def test_a_negative_margin_is_refused() -> None:
+    with pytest.raises(ValueError, match="negative"):
+        link_radius_arcsec(120.0, margin_arcsec=-1.0)
+    with pytest.raises(ValueError, match="negative"):
+        build_plan(_targets([0.0, 60.0]), _census([True, True]),
+                   cutout_arcsec=120.0, margin_arcsec=-1.0)
+
+
+def test_census_reports_the_positions_it_would_harvest() -> None:
+    coord = SkyCoord(RA0 * u.deg, DEC0 * u.deg)
+    neighbor = _offset(RA0, DEC0, 20.0)
+    cat = pd.DataFrame([_row(RA0, DEC0), _row(*neighbor)])
+    census = census_from_catalog(coord, cat, cutout_arcsec=120.0)
+
+    # The gated neighbor, plus the target's own position because it gates.
+    assert len(census['entries']) == 2
+    assert census['entries'][0] == pytest.approx([neighbor[0], neighbor[1]])
+    assert census['entries'][1] == pytest.approx([RA0, DEC0])
+
+    # A target that does not gate contributes no record of its own.
+    faint = pd.DataFrame([_row(RA0, DEC0, flux_ujy=10.0), _row(*neighbor)])
+    census = census_from_catalog(coord, faint, cutout_arcsec=120.0)
+    assert len(census['entries']) == 1
 
 
 def test_build_plan_rejects_a_misaligned_census() -> None:

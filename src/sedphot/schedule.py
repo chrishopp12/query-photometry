@@ -94,13 +94,23 @@ def link_radius_arcsec(cutout_arcsec: float,
                        margin_arcsec: float = DEFAULT_LINK_MARGIN_AS) -> float:
     """Separation under which two fields can share a registry entry.
 
+    The floor is the write reach plus the read reach: under it a record
+    can be harvested by one field and consumed by another the grouping
+    calls independent, so a negative margin is refused rather than
+    left for the audit to discover.
+
     Parameters
     ----------
     cutout_arcsec : float
         Stamp width; both component radii derive from it.
     margin_arcsec : float
-        Padding past the modeled span. [default: 120.0]
+        Padding past the modeled span; must not be negative.
+        [default: 120.0]
     """
+    if margin_arcsec < 0:
+        raise ValueError(f"link margin {margin_arcsec} is negative; the link "
+                         f"distance may not fall below the write-plus-read "
+                         f"span")
     return (gate_reach_arcsec(cutout_arcsec)
             + scene_radius_arcsec(cutout_arcsec) + margin_arcsec)
 
@@ -176,10 +186,13 @@ def census_from_catalog(coord: SkyCoord, cat: pd.DataFrame, *,
     -------
     census : dict
         matched (a catalog row claims the target), gates (that row
-        qualifies for a shape gate), n_gated (gated neighbors in reach).
+        qualifies for a shape gate), n_gated (gated neighbors in reach),
+        and entries -- the positions this field would harvest, which is
+        every gated neighbor plus the target itself when it gates.
     """
     if not len(cat):
-        return {"matched": False, "gates": False, "n_gated": 0}
+        return {"matched": False, "gates": False, "n_gated": 0,
+                "entries": []}
 
     rows = SkyCoord(cat["ra"].to_numpy() * u.deg,
                     cat["dec"].to_numpy() * u.deg)
@@ -193,10 +206,15 @@ def census_from_catalog(coord: SkyCoord, cat: pd.DataFrame, *,
                                        recipe.TARGET_MATCH_AS + 1.0))
 
     reach = gate_reach_arcsec(cutout_arcsec)
-    n_gated = sum(1 for i in range(len(cat))
-                  if separations[i] < reach
-                  and gated_row(cat.iloc[i], float(separations[i])))
-    return {"matched": matched, "gates": gates, "n_gated": int(n_gated)}
+    entries = [[float(cat.iloc[i]["ra"]), float(cat.iloc[i]["dec"])]
+               for i in range(len(cat))
+               if separations[i] < reach
+               and gated_row(cat.iloc[i], float(separations[i]))]
+    n_gated = len(entries)
+    if gates:
+        entries.append([float(coord.ra.deg), float(coord.dec.deg)])
+    return {"matched": matched, "gates": gates, "n_gated": n_gated,
+            "entries": entries}
 
 
 def fetch_catalog(coord: SkyCoord, target_dir: str | Path, *,
@@ -278,6 +296,62 @@ def read_targets(path: str | Path,
 # The plan
 # ------------------------------------
 
+def audit_groups(rows: list[dict], *, scene_arcsec: float) -> list[dict]:
+    """Records one group would write that another group's field would read.
+
+    The grouping claims that running groups concurrently equals running
+    every field in one sequence. It does not claim the groups are
+    physically separate -- light from off the stamp reaches the stamp at
+    any separation, and no radius changes that. What it does claim is
+    that no record crosses a group boundary, and that is checkable: a
+    harvested position inside another group's scene cone is a record
+    that field WOULD have consumed had the passes been sequential, and
+    did not. Every hit is a reason to raise the margin and re-plan.
+
+    Only harvest-pass fields are consumers here. The parallel pass reads
+    the merged registry after the freeze, so it sees every record
+    regardless of which group wrote it.
+
+    Parameters
+    ----------
+    rows : list of dict
+        Plan rows carrying pass, group, name, and entries.
+    scene_arcsec : float
+        The consuming reach.
+
+    Returns
+    -------
+    violations : list of dict
+        entry position, the group that writes it, and the field in
+        another group that would read it.
+    """
+    harvest = [r for r in rows if r["pass"] == PASS_HARVEST]
+    entries = [(position, r) for r in harvest
+               for position in r.get("entries") or []]
+    if not entries or len(harvest) < 2:
+        return []
+
+    entry_coords = SkyCoord([p[0] for p, _ in entries] * u.deg,
+                            [p[1] for p, _ in entries] * u.deg)
+    field_coords = SkyCoord([r["ra_deg"] for r in harvest] * u.deg,
+                            [r["dec_deg"] for r in harvest] * u.deg)
+
+    left, right, _, _ = field_coords.search_around_sky(entry_coords,
+                                                       scene_arcsec * u.arcsec)
+    violations = []
+    for entry_index, field_index in zip(left, right):
+        position, owner = entries[int(entry_index)]
+        reader = harvest[int(field_index)]
+        if owner["group"] == reader["group"]:
+            continue
+        violations.append({"ra_deg": position[0], "dec_deg": position[1],
+                           "written_by": owner["name"],
+                           "written_group": owner["group"],
+                           "read_by": reader["name"],
+                           "read_group": reader["group"]})
+    return sorted(violations, key=lambda v: (v["written_by"], v["read_by"]))
+
+
 def build_plan(targets: list[dict], census: list[dict], *,
                cutout_arcsec: float,
                margin_arcsec: float = DEFAULT_LINK_MARGIN_AS) -> dict:
@@ -332,6 +406,7 @@ def build_plan(targets: list[dict], census: list[dict], *,
             "gates": census[i]["gates"], "matched": census[i]["matched"],
             "n_consumers": consumers[i], "n_gated": census[i]["n_gated"],
             "priority": target["priority"],
+            "entries": census[i].get("entries") or [],
         })
 
     # Within a group: the most-read record first, an explicit priority
@@ -348,6 +423,7 @@ def build_plan(targets: list[dict], census: list[dict], *,
     group_sizes = [sum(1 for r in rows if r["group"] == g)
                    for g in sorted({r["group"] for r in rows
                                     if r["group"] is not None})]
+    violations = audit_groups(rows, scene_arcsec=scene)
     return {
         "cutout_arcsec": cutout_arcsec,
         "scene_radius_arcsec": round(scene, 2),
@@ -360,6 +436,8 @@ def build_plan(targets: list[dict], census: list[dict], *,
         "n_groups": len(group_sizes),
         "largest_group": max(group_sizes) if group_sizes else 0,
         "n_unmatched": sum(1 for r in rows if not r["matched"]),
+        "n_violations": len(violations),
+        "violations": violations,
         "targets": rows,
     }
 

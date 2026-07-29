@@ -275,6 +275,16 @@ def _cmd_plan(args: argparse.Namespace) -> None:
               f"row within {recipe.TARGET_MATCH_AS}\"")
     print(f"{json_path}\n{csv_path}")
 
+    if plan['n_violations']:
+        for v in plan['violations'][:10]:
+            print(f"  {v['ra_deg']:.6f} {v['dec_deg']:+.6f} written by "
+                  f"{v['written_by']} (group {v['written_group']}), read by "
+                  f"{v['read_by']} (group {v['read_group']})")
+        sys.exit(f"sedphot plan: {plan['n_violations']} record(s) cross a "
+                 f"group boundary, so running the groups concurrently would "
+                 f"not equal running them in sequence; raise --link-margin "
+                 f"above {plan['link_margin_arcsec']} and re-plan")
+
 
 def _cmd_overlay(args: argparse.Namespace) -> None:
     if run_overlay(args.label, args.out_dir,
