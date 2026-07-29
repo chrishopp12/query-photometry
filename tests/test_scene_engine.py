@@ -1309,6 +1309,68 @@ def test_order_bands_puts_the_reference_first():
     assert [p.band for p in ordered] == ['r', 'z', 'g']
 
 
+# ------------------------------------
+# The transfer color factor is taken against the REFERENCE band
+# ------------------------------------
+def _color_fixture():
+    """One seat whose owner has a distinct flux in each catalog column."""
+    cat = pd.DataFrame([{'flux_g': 10.0, 'flux_r': 20.0, 'flux_z': 50.0}])
+    comps = [{'name': 'src0', 'irow': 0}]
+    seats = [{'owner': 'src0'}]
+    return seats, cat, comps
+
+
+def test_seat_color_divides_by_the_reference_bands_own_column():
+    """The factor multiplies a flux SOLVED in ref_band, so the denominator
+    must be ref_band's catalog column. With r as reference the denominator
+    is flux_r; with i it is flux_z, and the two differ by flux_z/flux_r."""
+    from sedphot.measure.engine import _seat_colors
+    seats, cat, comps = _color_fixture()
+
+    # sibling g (BAND_COLOR_COL['g'] = flux_g = 10)
+    r_ref = _seat_colors(seats, cat, comps, 'g', 'r')   # / flux_r = 20
+    i_ref = _seat_colors(seats, cat, comps, 'g', 'i')   # / flux_z = 50
+    assert r_ref[0] == pytest.approx(10.0 / 20.0)
+    assert i_ref[0] == pytest.approx(10.0 / 50.0)
+    # the whole bug, as a ratio: the old code returned r_ref in both cases
+    assert r_ref[0] / i_ref[0] == pytest.approx(50.0 / 20.0)
+
+
+def test_r_reference_reproduces_the_legacy_denominator():
+    """The A1925 campaign ran with r as reference on every instrument, so
+    the fix must be a no-op there -- a re-measure stays bit-identical."""
+    from sedphot.measure.engine import _seat_colors
+    seats, cat, comps = _color_fixture()
+    for band in ('u', 'g', 'r', 'i', 'z', 'y'):
+        legacy = float(np.clip(
+            cat.iloc[0][recipe.BAND_COLOR_COL.get(band, 'flux_r')]
+            / cat.iloc[0]['flux_r'], 0.05, 20.0))
+        assert _seat_colors(seats, cat, comps, band, 'r')[0] == \
+            pytest.approx(legacy)
+
+
+def test_a_reference_band_with_no_listed_column_falls_back_to_flux_r():
+    """An HST filter is not in BAND_COLOR_COL; numerator and denominator
+    both default, so every factor is a self-consistent 1.0."""
+    from sedphot.measure.engine import _seat_colors
+    seats, cat, comps = _color_fixture()
+    assert _seat_colors(seats, cat, comps, 'F814W', 'F606W')[0] == \
+        pytest.approx(1.0)
+
+
+def test_an_unusable_reference_flux_goes_neutral():
+    from sedphot.measure.engine import _seat_colors
+    seats, cat, comps = _color_fixture()
+    cat.loc[0, 'flux_z'] = 0.0          # denominator for an i reference
+    assert _seat_colors(seats, cat, comps, 'g', 'i')[0] == 1.0
+
+
+def test_a_seat_whose_owner_is_not_in_the_catalog_goes_neutral():
+    from sedphot.measure.engine import _seat_colors
+    _, cat, comps = _color_fixture()
+    assert _seat_colors([{'owner': 'ghost'}], cat, comps, 'g', 'i')[0] == 1.0
+
+
 def test_transfer_band_recovers_sibling_fluxes(tmp_path):
     from sedphot.measure.engine import measure_band
     from sedphot.results import ImageProduct
@@ -1374,6 +1436,10 @@ def test_transfer_band_recovers_sibling_fluxes(tmp_path):
         nbr_ap, rel=0.2)
     assert ref is not None and 'target' in ref['drops']
     assert ref['col_flux'][0] == pytest.approx(tgt_total, rel=0.1)
+    # col_flux is a flux in THIS band, so the band travels with it --
+    # a sibling's color factor is meaningless without knowing the
+    # denominator's band.
+    assert ref['band'] == 'r'
 
     measurement_g, ref_g = measure_band(
         product_g, coord, scene, ref, caches, aperture_arcsec=12.0,

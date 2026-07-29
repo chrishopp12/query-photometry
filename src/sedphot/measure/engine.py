@@ -232,13 +232,20 @@ def _band_colors(cat: pd.DataFrame, band: str) -> dict[int, float]:
     return out
 
 
-def _seat_colors(seats: list[dict], cat: pd.DataFrame,
-                 comps: list[dict], band: str) -> list[float]:
-    """Color factor per transferred seat column: the owner's catalog
-    flux in the nearest listed band to this one, over its catalog
-    flux_r. Keeps transfer flux leashes physical across colors;
-    clamped, and neutral (1.0) when the catalog cannot say."""
+def _seat_colors(seats: list[dict], cat: pd.DataFrame, comps: list[dict],
+                 band: str, ref_band: str) -> list[float]:
+    """Color factor per transferred seat column: the owner's catalog flux
+    in the nearest listed band to this one, over its catalog flux in the
+    nearest listed band to the REFERENCE.
+
+    The factor multiplies the seat's flux solved in ref_band, so the
+    denominator has to be ref_band's own catalog column. Anchoring it on
+    flux_r instead is self-consistent only while the reference IS r --
+    otherwise every transfer band's amplitude window centers on the wrong
+    color ratio. Clamped, and neutral (1.0) when the catalog cannot say.
+    """
     col = recipe.BAND_COLOR_COL.get(band.lower(), 'flux_r')
+    den = recipe.BAND_COLOR_COL.get(ref_band.lower(), 'flux_r')
     irow_by_name = {c['name']: c['irow'] for c in comps}
     colors = []
     for seat in seats:
@@ -246,7 +253,7 @@ def _seat_colors(seats: list[dict], cat: pd.DataFrame,
         if irow < 0 or irow >= len(cat):
             colors.append(1.0)
             continue
-        flux_ref = float(cat.iloc[irow]['flux_r'])
+        flux_ref = float(cat.iloc[irow].get(den, np.nan))
         flux_band = float(cat.iloc[irow].get(col, np.nan))
         usable = (np.isfinite(flux_band) and np.isfinite(flux_ref)
                   and flux_ref > 0 and flux_band > 0)
@@ -545,8 +552,8 @@ def measure_band(
     fit_ref = None
     if ref is not None and seats:
         fit_ref = dict(ref)
-        fit_ref['col_color'] = _seat_colors(seats, cat, comps,
-                                            product.band)
+        fit_ref['col_color'] = _seat_colors(seats, cat, comps, product.band,
+                                            ref.get('band', 'r'))
     if pin is not None:
         # Pinned reconstruction: rebuild the stored fit with no solve and
         # no harvest. Every shape, amplitude, and plane coefficient comes
@@ -812,7 +819,11 @@ def measure_band(
         n_fixed = len(fit['fixed'])
         # Amplitudes ARE microjanskys: the reference fluxes for the
         # sibling-band leashes come straight off the solve.
+        # band rides along because col_flux is a flux IN THIS BAND: a
+        # sibling's color factor has to be taken against this band's
+        # catalog column, not against a fixed one.
         new_ref = dict(seats=seats, drops=sorted(drops),
+                       band=product.band,
                        p=solve_info['p'], pix=stamp.pixscale,
                        col_flux=[max(float(a), 0.0)
                                  for a in fit['amps'][n_fixed:]])
