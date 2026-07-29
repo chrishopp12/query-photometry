@@ -378,6 +378,24 @@ def test_a_fully_resumed_harvest_keeps_the_registry_it_found(
     assert json.loads(merged_path.read_text()) == before
 
 
+def test_a_running_target_log_can_be_read_before_it_finishes(
+        tmp_path, monkeypatch) -> None:
+    seen = {}
+
+    def _fake(coord, label, out_dir, **kwargs):
+        print("started measuring")
+        # Read the log from inside the run: block buffering would show
+        # nothing here, and an operator tailing it would see a hang.
+        seen[label] = (tmp_path / "logs" / f"{label}.log").read_text(
+            encoding='utf-8')
+        return {}
+
+    monkeypatch.setattr("sedphot.pipeline.run_all", _fake)
+    targets = [_target('a', which=PASS_PARALLEL, tmp_path=tmp_path)]
+    _sweep(tmp_path, targets, log_dir=tmp_path / "logs")
+    assert "started measuring" in seen['a']
+
+
 def test_pass_selection_runs_only_what_was_asked(tmp_path,
                                                  fake_run_all) -> None:
     targets = [_target('h', sep=0.0, group=0, tmp_path=tmp_path),

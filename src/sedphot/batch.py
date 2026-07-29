@@ -146,7 +146,10 @@ def _run_logged(target: dict, *, registry_path: str | None,
         return _run_target(target, registry_path=registry_path,
                            registry_update=registry_update, options=options)
     path = Path(log_dir) / f"{target['label']}.log"
-    with path.open("w", encoding="utf-8") as handle:
+    # Line-buffered: a block-buffered log stays empty until the target
+    # finishes, which for a target measured in minutes is indistinguishable
+    # from a hang to whoever is watching it.
+    with path.open("w", encoding="utf-8", buffering=1) as handle:
         with redirect_stdout(handle):
             return _run_target(target, registry_path=registry_path,
                                registry_update=registry_update,
