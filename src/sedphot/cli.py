@@ -25,6 +25,10 @@ Usage:
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
     sedphot plan     --targets CSV --out PLAN.json [--out-root DIR]
                      [--cutout-size 120.0] [--link-margin AS]
+    sedphot batch    --plan PLAN.json --registry-dir DIR --report CSV
+                     [--workers 4] [--pass {harvest,parallel,all}]
+                     [--no-groups] [--no-resume] [--log-dir DIR]
+                     [the measurement group, minus --registry*]
     sedphot sed      --out-dir DIR [--label STEM]
     sedphot overlay  --out-dir DIR [--label STEM] [--zoom-size 5.0]
                      [--context-size 15.0] [--wcs-from FITS]
@@ -60,6 +64,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .batch import DEFAULT_STOP_AFTER_FAILURES
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .images import IMAGE_PROVIDERS
@@ -106,11 +111,20 @@ def _resolve_from_args(args: argparse.Namespace):
         _usage_error(str(e))
 
 
-def _add_measure_args(parser: argparse.ArgumentParser) -> None:
-    """Every measurement option, shared by the measure and run verbs.
+def _add_measure_args(parser: argparse.ArgumentParser, *,
+                      registry_args: bool = True) -> None:
+    """Every measurement option, shared by the measure, run and batch verbs.
 
     Defined once so run always accepts the same set as measure; a flag run
     silently lacked would show up only as a wrong flux.
+
+    Parameters
+    ----------
+    registry_args : bool
+        Expose --registry/--registry-update. batch sets this False: the
+        sweep owns one registry per group during the harvest pass and a
+        frozen union afterward, so a caller-supplied pair would
+        contradict the plan being executed. [default: True]
     """
     group = parser.add_argument_group("measurement")
     group.add_argument('--mode', type=str, default='aperture',
@@ -133,6 +147,10 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                             "sized for survey galaxies; a compact HST target "
                             "wants a few arcsec "
                             "[default: recipe.BG_RMIN_AS = 15]")
+    if not registry_args:
+        parser.set_defaults(registry=None, registry_update=False)
+        _add_shape_args(group)
+        return
     group.add_argument('--registry', type=str, default=None,
                        help="Cross-field registry JSON to consume (solved "
                             "shared sources enter as frozen components). "
@@ -144,6 +162,11 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                        help="Also write this galaxy's solved seats back to "
                             "--registry (updates are last-writer-wins; run "
                             "sweeps serially)")
+    _add_shape_args(group)
+
+
+def _add_shape_args(group) -> None:
+    """The shape and provider options, on both sides of the registry pair."""
     group.add_argument('--sersic-from', type=str, default=None,
                        help="Sersic mode: pin the target shape to a fit on "
                             "this band ('z' or 'Legacy_z') [default: "
@@ -342,6 +365,58 @@ def _cmd_run(args: argparse.Namespace) -> None:
         target_name=args.name,
     )
     if failures:
+        sys.exit(1)
+
+
+def _cmd_batch(args: argparse.Namespace) -> None:
+    import json
+
+    from .batch import run_sweep
+
+    _check_measure_args(args, 'batch')
+    with open(args.plan, encoding='utf-8') as handle:
+        plan = json.load(handle)
+
+    # registry_path and registry_update are the sweep's to set: the
+    # harvest pass owns one registry per group and the parallel pass
+    # runs against the frozen union, so a caller-supplied pair would
+    # contradict the plan it is executing.
+    run_options = dict(
+        skip=args.skip,
+        radius_arcsec=args.radius,
+        dered=args.dered,
+        mode=args.mode,
+        bands=args.bands,
+        aperture_arcsec=args.aperture,
+        cutout_arcsec=args.cutout_size,
+        sky_rmin_arcsec=args.sky_rmin,
+        rgrid=args.radii,
+        sersic_from=args.sersic_from,
+        sersic_seeing=args.sersic_seeing,
+        spherex_model=args.spherex,
+        sersic_params=args.sersic_params,
+        legacy_dr=args.legacy_dr,
+        legacy_bricks=args.legacy_bricks,
+        hst_proposal_id=args.hst_proposal_id,
+    )
+    try:
+        summary = run_sweep(
+            plan, registry_dir=args.registry_dir, run_options=run_options,
+            which_pass=args.pass_, workers=args.workers,
+            resume=not args.no_resume, groups=not args.no_groups,
+            report_path=args.report, log_dir=args.log_dir,
+            stop_after_failures=args.stop_after_failures)
+    except ValueError as err:
+        sys.exit(f"sedphot batch: {err}")
+
+    for problem in summary['merge_problems'][:10]:
+        print(f"  shared key: {problem}")
+    for violation in summary['violations'][:10]:
+        print(f"  crossing: {violation['ra_deg']:.6f} "
+              f"{violation['dec_deg']:+.6f} written in group "
+              f"{violation['written_group']}, read by {violation['read_by']} "
+              f"in group {violation['read_group']}")
+    if summary['aborted'] or summary['n_failed']:
         sys.exit(1)
 
 
@@ -613,6 +688,48 @@ def build_parser() -> argparse.ArgumentParser:
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")
     p_run.set_defaults(func=_cmd_run)
+
+    p_batch = subparsers.add_parser(
+        "batch", help="Execute a plan: the harvest pass, then the parallel one")
+    p_batch.add_argument('--plan', type=str, required=True,
+                         help="Plan JSON from `sedphot plan`")
+    p_batch.add_argument('--registry-dir', type=str, required=True,
+                         help="Per-group registries and the merged, frozen "
+                              "one land here")
+    p_batch.add_argument('--report', type=str, required=True,
+                         help="Per-target report CSV")
+    p_batch.add_argument('--log-dir', type=str, default=None,
+                         help="Per-target stdout logs [default: interleaved]")
+    p_batch.add_argument('--workers', type=int, default=4,
+                         help="Concurrent groups, then concurrent targets. "
+                              "The parallel pass is bounded by what the "
+                              "archives tolerate, not by cores [default: 4]")
+    p_batch.add_argument('--pass', dest='pass_', type=str, default='all',
+                         choices=('harvest', 'parallel', 'all'),
+                         help="Which pass to run [default: all]")
+    p_batch.add_argument('--no-groups', action='store_true',
+                         help="Run the harvest pass as one sequence against "
+                              "one registry: the reference the grouped path "
+                              "is judged against")
+    p_batch.add_argument('--no-resume', action='store_true',
+                         help="Re-measure targets that already have a "
+                              "measured table and a readable sidecar")
+    p_batch.add_argument('--stop-after-failures', type=int,
+                         default=DEFAULT_STOP_AFTER_FAILURES,
+                         help="Abandon the sweep after this many failures; "
+                              f"0 disables [default: {DEFAULT_STOP_AFTER_FAILURES}]")
+    p_batch.add_argument('--skip', nargs='+', default=None,
+                         choices=all_providers,
+                         help="Providers to leave out")
+    p_batch.add_argument('--radius', type=float, default=2.0,
+                         help="Catalog match radius in arcsec [default: 2.0]")
+    p_batch.add_argument('--dered', action='store_true',
+                         help="Deredden the catalog table")
+    p_batch.add_argument('--spherex', type=str, default='off',
+                         choices=('off', 'psf', 'sersic'),
+                         help="SPHEREx extraction [default: off]")
+    _add_measure_args(p_batch, registry_args=False)
+    p_batch.set_defaults(func=_cmd_batch)
 
     return parser
 
