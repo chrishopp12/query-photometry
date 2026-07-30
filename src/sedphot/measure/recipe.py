@@ -186,8 +186,16 @@ STAR_PROFILE_MAX_FRAC = 1.3
 # predicted catalog-amplitude footprint is masked and twin-filled
 # instead. Beyond the zone the component stays, with its amplitude
 # leashed to the color-scaled catalog expectation.
+#
+# The floor is ZERO: the expectation is a catalog prediction, and data
+# showing no light where the catalog predicts some must be able to say
+# so. A positive floor forces predicted light into the scene that the
+# stamp rejects, which is the catalog overriding the measurement. The
+# ceiling is the real rail -- a stamp wanting MORE than the star can
+# provide means the star model is too faint or the light is not the
+# star's, and that is the miss worth catching and recording.
 STAR_ZONE_BUFFER_AS = 3.0
-STAR_REVERT_AMP_BAND = (0.5, 2.0)
+STAR_REVERT_AMP_BAND = (0.0, 2.0)
 
 
 # ------------------------------------

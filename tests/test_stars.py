@@ -187,10 +187,12 @@ def test_failed_profile_reverts_to_the_catalog_component():
     kept = next(c for c in pruned if c['name'] == 'src1')
     assert kept['star_reverted'] and not kept['gate']
     lo, hi = kept['amp_lohi']
-    # the leash is (0.5, 2.0) x the IN-STAMP expectation (flux0), which
-    # for this on-stamp star is its catalog flux to a fraction of a
-    # percent (finite-frame clipping of the render)
-    assert lo == pytest.approx(0.5 * kept['flux0'])
+    # the ceiling is 2.0 x the IN-STAMP expectation (flux0), which for
+    # this on-stamp star is its catalog flux to a fraction of a percent
+    # (finite-frame clipping of the render). The floor is zero: a stamp
+    # showing no light where the catalog predicts some must be able to
+    # solve the amplitude to zero.
+    assert lo == 0.0
     assert hi == pytest.approx(2.0 * kept['flux0'])
 
 
@@ -287,7 +289,8 @@ def test_offstamp_star_leash_is_in_stamp_not_total():
     lo, hi = kept['amp_lohi']
     # the leash tracks the IN-STAMP wing flux, not the 4000-uJy total
     assert hi < 0.1 * 4000.0
-    assert lo == pytest.approx(0.5 * in_stamp, rel=1e-3)
+    assert hi == pytest.approx(2.0 * in_stamp, rel=1e-3)
+    assert lo == 0.0
 
 
 def test_two_gaia_rows_same_component_treated_once():
