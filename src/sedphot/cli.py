@@ -21,6 +21,7 @@ Usage:
                      (--instruments legacy sdss cfht ... | --all)
                      [--mode {aperture,sersic}] [--aperture 12.0]
                      [--sky-rmin AS] [--registry FILE [--registry-update]]
+                     [--legacy-route {auto,viewer,noirlab}]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
     sedphot plan     --targets CSV --out PLAN.json [--out-root DIR]
@@ -58,6 +59,15 @@ Examples:
     Uniform aperture photometry on every available image:
         sedphot measure --name "M87" --all --aperture 12 \\
             --out-dir Galaxies/M87
+
+    Pin the Legacy cutout service so a sample stays on one gridding.
+    The routes do not frame identically, so under the default 'auto' a
+    service outage silently splits a sample between them; pinning makes
+    the outage an error instead. The route asked for is recorded in the
+    sidecar's legacy.route, and the route that actually answered in its
+    image_sources:
+        sedphot measure --name "M87" --all --legacy-route noirlab \\
+            --out-dir Galaxies/M87
 """
 from __future__ import annotations
 
@@ -68,6 +78,7 @@ from .batch import DEFAULT_STOP_AFTER_FAILURES
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .images import IMAGE_PROVIDERS
+from .images.legacy import LEGACY_ROUTES, ROUTE_AUTO
 from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
                        run_sed, run_spherex)
 from .resolve import resolve_target
@@ -187,6 +198,15 @@ def _add_shape_args(group) -> None:
                        help="Fetch NERSC brick coadds instead of viewer "
                             "cutouts: adds the inverse-variance map "
                             "(per-pixel errors), ~40 MB/file")
+    group.add_argument('--legacy-route', type=str, default=ROUTE_AUTO,
+                       choices=LEGACY_ROUTES,
+                       help="Which Legacy cutout service to use. 'auto' "
+                            "tries the NERSC viewer then falls back to "
+                            "NOIRLab; 'viewer' or 'noirlab' pins one and "
+                            "fails rather than substituting the other. The "
+                            "two do not frame identically, so under 'auto' "
+                            "an outage silently splits a sample across two "
+                            f"griddings [default: {ROUTE_AUTO}]")
     group.add_argument('--hst-proposal-id', type=str, default=None,
                        help="Restrict the HST provider to one program")
 
@@ -361,6 +381,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
         hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )
@@ -397,6 +418,7 @@ def _cmd_batch(args: argparse.Namespace) -> None:
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
         hst_proposal_id=args.hst_proposal_id,
     )
     try:
@@ -485,6 +507,7 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
         dump_arrays=args.dump_arrays,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
         hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )

@@ -82,7 +82,7 @@ def _payload(**overrides):
         scene={'cat': [0] * 116, 'stars': [0] * 4, 'patches': {}},
         registry_path=None, registry_update=False,
         recipe_snapshot={'BG_RMIN_AS': 15.0},
-        legacy_dr='dr9', legacy_bricks=False,
+        legacy_dr='dr9', legacy_bricks=False, legacy_route='auto',
         hst_proposal_id=None,
         measurements=[{'instrument': 'Legacy', 'band': 'z',
                        'witness': {'flux_uJy': 1099.6}}],
@@ -107,7 +107,8 @@ def test_the_hst_program_is_null_when_hst_did_not_run():
 
 
 def test_the_legacy_block_tracks_the_instrument_list():
-    assert _payload()['legacy'] == {'dr': 'dr9', 'bricks': False}
+    assert _payload()['legacy'] == {'dr': 'dr9', 'bricks': False,
+                                    'route': 'auto'}
     assert _payload(instruments=['sdss'])['legacy'] is None
 
 
@@ -191,3 +192,18 @@ def test_an_unreadable_image_reports_none_rather_than_raising(tmp_path) -> None:
         {'Legacy_g': None}
     assert image_fetch_sources([]) == {}
     assert image_fetch_sources(None) == {}
+
+
+def test_the_payload_separates_the_route_asked_from_the_one_served() -> None:
+    # Under 'auto' these differ exactly when a service was down, which is
+    # the case worth being able to find later.
+    payload = _payload(legacy_route='auto')
+    assert payload['legacy']['route'] == 'auto'
+    assert 'image_sources' in payload
+
+    pinned = _payload(legacy_route='noirlab')
+    assert pinned['legacy']['route'] == 'noirlab'
+
+
+def test_the_route_is_absent_when_legacy_was_not_measured() -> None:
+    assert _payload(instruments=['sdss'])['legacy'] is None

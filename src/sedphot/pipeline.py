@@ -40,6 +40,7 @@ from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .dered import apply_dereddening
 from .images import IMAGE_PROVIDERS
+from .images.legacy import ROUTE_AUTO
 from .measure import recipe
 from .measure.aperture import measurement_to_row
 from .measure.engine import measure_band, order_bands, prepare_scene
@@ -287,6 +288,7 @@ def measure_sidecar_payload(
         recipe_snapshot: dict,
         legacy_dr: str,
         legacy_bricks: bool,
+        legacy_route: str,
         hst_proposal_id: str | None,
         measurements: list[dict],
         image_sources: dict[str, str] | None = None,
@@ -322,7 +324,11 @@ def measure_sidecar_payload(
             "registry_updated": bool(registry_update),
             "recipe": recipe_snapshot,
         },
-        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
+        # 'route' is what was ASKED for; image_sources below is what
+        # actually answered. Under 'auto' those differ exactly when a
+        # service was down, which is the case worth being able to find.
+        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks,
+                   "route": legacy_route}
                   if 'legacy' in instruments else None,
         # Which service served each band's pixels. A provider can have
         # several routes whose framing differs, and the rotation picks by
@@ -363,6 +369,7 @@ def run_measure(
         dump_arrays: bool = False,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        legacy_route: str = ROUTE_AUTO,
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> pd.DataFrame:
@@ -489,7 +496,8 @@ def run_measure(
             options: dict = {'bands': bands, 'size_arcsec': cutout_arcsec,
                              'cache_dir': cache_dir}
             if name == 'legacy':
-                options.update(dr=legacy_dr, use_bricks=legacy_bricks)
+                options.update(dr=legacy_dr, use_bricks=legacy_bricks,
+                               route=legacy_route)
             if name == 'cfht':
                 options.update(aperture_arcsec=aperture_arcsec)
             if name == 'hst' and hst_proposal_id:
@@ -669,6 +677,7 @@ def run_measure(
             registry_path=registry_path, registry_update=registry_update,
             recipe_snapshot=recipe.snapshot(),
             legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+            legacy_route=legacy_route,
             hst_proposal_id=hst_proposal_id,
             measurements=measurements,
             image_sources=image_fetch_sources(
@@ -987,6 +996,7 @@ def run_all(
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        legacy_route: str = ROUTE_AUTO,
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> dict[str, str]:
@@ -1057,6 +1067,7 @@ def run_all(
                     registry_path=registry_path,
                     registry_update=registry_update,
                     legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                    legacy_route=legacy_route,
                     hst_proposal_id=hst_proposal_id,
                     target_name=target_name)
     except Exception as e:

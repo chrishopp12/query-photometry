@@ -65,6 +65,14 @@ NOIRLAB_CUTOUT_URL = "https://datalab.noirlab.edu/svc/cutout"
 CUTOUT_TIMEOUT = (6, 180)
 
 PIXSCALE = 0.262           # native arcsec/pixel
+
+# Cutout routes. The two services serve the same DR coadd pixels but do
+# not frame them identically, so which one answered is part of what a
+# flux was measured on -- pinnable, and stamped into every image.
+ROUTE_AUTO = 'auto'
+ROUTE_VIEWER = 'viewer'
+ROUTE_NOIRLAB = 'noirlab'
+LEGACY_ROUTES = (ROUTE_AUTO, ROUTE_VIEWER, ROUTE_NOIRLAB)
 SEEING = 1.2               # typical arcsec, for detection kernels
 NORTH_SOUTH_DEC = 32.375   # survey hemisphere boundary
 
@@ -430,7 +438,8 @@ def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
 # ------------------------------------
 def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 120.0,
           cache_dir: str | Path, dr: str = LEGACY_DR_DEFAULT,
-          use_bricks: bool = False) -> list[ImageProduct] | ProviderResult:
+          use_bricks: bool = False,
+          route: str = ROUTE_AUTO) -> list[ImageProduct] | ProviderResult:
     """Fetch Legacy Surveys images at the target.
 
     Parameters
@@ -449,29 +458,48 @@ def fetch(coord: SkyCoord, *, bands: tuple | None = None, size_arcsec: float = 1
         Fetch NERSC brick coadds (image + inverse variance) instead of
         viewer cutouts -- real per-pixel errors at ~40 MB per file.
         [default: False]
+    route : str
+        Which cutout service to use: 'auto' rotates the viewer then
+        NOIRLab, 'viewer' and 'noirlab' pin one and FAIL rather than
+        substitute the other. The routes do not frame identically --
+        they differ by a fraction of a pixel even when both return the
+        full box -- so under 'auto' a service outage silently splits a
+        sample across two griddings. Pin the route to keep a sample
+        uniform; leave it auto for a one-off. [default: 'auto']
 
     Returns
     -------
     products or result : list[ImageProduct] | ProviderResult
         Image products on success; a no_coverage/error result otherwise.
     """
+    if route not in LEGACY_ROUTES:
+        raise ValueError(f"unknown Legacy route {route!r} "
+                         f"(known: {sorted(LEGACY_ROUTES)})")
     bands = tuple(bands) if bands else DEFAULT_BANDS[dr]
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    services = {
+        ROUTE_VIEWER: ('NERSC viewer', lambda: _fetch_cutouts(
+            coord, bands, size_arcsec, cache_dir, dr)),
+        ROUTE_NOIRLAB: ('NOIRLab cutout', lambda: _fetch_noirlab(
+            coord, bands, size_arcsec, cache_dir, dr)),
+    }
     try:
         if use_bricks:
             products = _fetch_bricks(coord, bands, cache_dir, dr)
-        else:
+        elif route == ROUTE_AUTO:
             # Rotate cutout services: the NERSC viewer first, then the
             # NOIRLab SIA (same DR pixels, independent host). Alternating on
             # failure reaches the live fallback without waiting out a dead
             # primary's backoff.
-            products = try_services([
-                ('NERSC viewer', lambda: _fetch_cutouts(
-                    coord, bands, size_arcsec, cache_dir, dr)),
-                ('NOIRLab cutout', lambda: _fetch_noirlab(
-                    coord, bands, size_arcsec, cache_dir, dr)),
-            ], 'Legacy cutout')
+            products = try_services([services[ROUTE_VIEWER],
+                                     services[ROUTE_NOIRLAB]],
+                                    'Legacy cutout')
+        else:
+            # A pinned route does not rotate: substituting the other
+            # service is exactly the silent regridding the pin exists to
+            # prevent, so an outage has to surface as an error.
+            products = try_services([services[route]], 'Legacy cutout')
     except Exception as e:
         return ProviderResult(provider='legacy', status=STATUS_ERROR,
                               message=f"{type(e).__name__}: {e}")

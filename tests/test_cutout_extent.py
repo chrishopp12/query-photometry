@@ -8,7 +8,7 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from sedphot.images.legacy import PIXSCALE, stamp_spans_request
+from sedphot.images.legacy import PIXSCALE, fetch, stamp_spans_request
 from sedphot.pipeline import image_fetch_sources
 
 RA0, DEC0 = 210.0, 30.0
@@ -67,3 +67,59 @@ def test_the_tolerance_is_not_a_free_pass() -> None:
     # Widening the slack past the shortfall accepts it, so the tolerance
     # is doing the work it claims and not silently swallowing more.
     assert stamp_spans_request(data, w, COORD, SIZE, tol_arcsec=8.0)
+
+
+# ------------------------------------
+# Route selection
+# ------------------------------------
+
+def _stub_routes(monkeypatch, *, viewer, noirlab):
+    """Record which routes are attempted; each returns a marker or raises."""
+    tried = []
+
+    def _viewer(*a, **k):
+        tried.append('viewer')
+        if viewer is None:
+            raise ConnectionError("NERSC viewer down")
+        return viewer
+
+    def _noirlab(*a, **k):
+        tried.append('noirlab')
+        if noirlab is None:
+            raise ConnectionError("NOIRLab down")
+        return noirlab
+
+    monkeypatch.setattr('sedphot.images.legacy._fetch_cutouts', _viewer)
+    monkeypatch.setattr('sedphot.images.legacy._fetch_noirlab', _noirlab)
+    return tried
+
+
+def test_auto_falls_back_to_the_second_service(tmp_path, monkeypatch) -> None:
+    tried = _stub_routes(monkeypatch, viewer=None, noirlab=['product'])
+    out = fetch(COORD, cache_dir=tmp_path, route='auto')
+    assert out == ['product']
+    assert tried == ['viewer', 'noirlab']
+
+
+def test_a_pinned_route_does_not_substitute_the_other(tmp_path,
+                                                      monkeypatch) -> None:
+    # The whole point of pinning: an outage must surface, not silently
+    # re-grid the sample onto the other service.
+    tried = _stub_routes(monkeypatch, viewer=None, noirlab=['product'])
+    result = fetch(COORD, cache_dir=tmp_path, route='viewer')
+    assert 'noirlab' not in tried
+    assert getattr(result, 'status', None) in ('error', 'no_coverage')
+
+
+def test_a_pinned_route_uses_only_the_one_asked_for(tmp_path,
+                                                    monkeypatch) -> None:
+    tried = _stub_routes(monkeypatch, viewer=['viewer_product'],
+                         noirlab=['noirlab_product'])
+    assert fetch(COORD, cache_dir=tmp_path,
+                 route='noirlab') == ['noirlab_product']
+    assert tried == ['noirlab']
+
+
+def test_an_unknown_route_is_refused(tmp_path) -> None:
+    with pytest.raises(ValueError, match="unknown Legacy route"):
+        fetch(COORD, cache_dir=tmp_path, route='nersc')
