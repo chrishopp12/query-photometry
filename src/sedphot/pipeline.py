@@ -65,6 +65,40 @@ INSTRUMENT_DIRS = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
                    'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
 
 
+def select_providers(registry, requested, skip=None) -> list[str]:
+    """Resolve a provider selection against a registry.
+
+    Parameters
+    ----------
+    registry : mapping
+        The provider registry to select from.
+    requested : list[str] or None
+        Explicit provider names, or the literal ['all'] / ['none'].
+        None means every provider, so an unstated selection keeps the
+        stage running rather than silently dropping it.
+    skip : iterable[str], optional
+        Names to remove after selection, applied to either form.
+
+    Returns
+    -------
+    selected : list[str]
+        Registry order, so a run's provider sequence never depends on
+        the order they were typed.
+    """
+    skip = set(skip or [])
+    if requested is None or [r.lower() for r in requested] == ['all']:
+        chosen = set(registry)
+    elif [r.lower() for r in requested] == ['none']:
+        chosen = set()
+    else:
+        unknown = [r for r in requested if r not in registry]
+        if unknown:
+            raise ValueError(f"unknown provider(s) {unknown}; "
+                             f"known: {sorted(registry)} (or all/none)")
+        chosen = set(requested)
+    return [name for name in registry if name in chosen and name not in skip]
+
+
 # ------------------------------------
 # Catalog driver
 # ------------------------------------
@@ -980,6 +1014,8 @@ def run_all(
         out_dir: str | Path,
         *,
         skip: list[str] | None = None,
+        catalogs: list[str] | None = None,
+        images: list[str] | None = None,
         radius_arcsec: float = 2.0,
         dered: bool = False,
         mode: str = 'aperture',
@@ -1037,49 +1073,54 @@ def run_all(
         or a SPHEREx error status); empty when everything succeeded.
         The run verb exits nonzero on a non-empty return.
     """
-    skip = set(skip or [])
-    catalog_set = [name for name in CATALOG_PROVIDERS if name not in skip]
-    image_set = [name for name in IMAGE_PROVIDERS if name not in skip]
+    catalog_set = select_providers(CATALOG_PROVIDERS, catalogs, skip)
+    image_set = select_providers(IMAGE_PROVIDERS, images, skip)
     failures: dict[str, str] = {}
 
     print("\n===== catalogs =====")
-    try:
-        run_catalogs(coord, label, out_dir, instruments=catalog_set,
-                     radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
-                     dered=dered, target_name=target_name)
-    except Exception as e:
-        failures['catalogs'] = f"{type(e).__name__}: {e}"
-        print(f"catalogs stage FAILED: {failures['catalogs']}")
+    if not catalog_set:
+        print("no catalog providers selected; stage skipped")
+    else:
+        try:
+            run_catalogs(coord, label, out_dir, instruments=catalog_set,
+                         radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
+                         dered=dered, target_name=target_name)
+        except Exception as e:
+            failures['catalogs'] = f"{type(e).__name__}: {e}"
+            print(f"catalogs stage FAILED: {failures['catalogs']}")
 
     print("\n===== images + measurement =====")
     coverage_path = Path(out_dir) / "Photometry" / "coverage_measure.json"
     before = coverage_path.stat().st_mtime if coverage_path.exists() else None
-    try:
-        run_measure(coord, label, out_dir, instruments=image_set,
-                    mode=mode, bands=bands,
-                    aperture_arcsec=aperture_arcsec,
-                    cutout_arcsec=cutout_arcsec,
-                    sky_rmin_arcsec=sky_rmin_arcsec,
-                    rgrid=rgrid,
-                    sersic_from=sersic_from,
-                    sersic_params=sersic_params,
-                    sersic_seeing=sersic_seeing,
-                    registry_path=registry_path,
-                    registry_update=registry_update,
-                    legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
-                    legacy_route=legacy_route,
-                    hst_proposal_id=hst_proposal_id,
-                    target_name=target_name)
-    except Exception as e:
-        failures['measure'] = f"{type(e).__name__}: {e}"
-        print(f"measure stage FAILED: {failures['measure']}")
-        after = (coverage_path.stat().st_mtime if coverage_path.exists()
-                 else None)
-        if after == before:
-            coverage_path.parent.mkdir(parents=True, exist_ok=True)
-            write_coverage_report([ProviderResult(
-                provider='measure', status=STATUS_ERROR,
-                message=failures['measure'])], coverage_path)
+    if not image_set:
+        print("no image providers selected; stage skipped")
+    else:
+        try:
+            run_measure(coord, label, out_dir, instruments=image_set,
+                        mode=mode, bands=bands,
+                        aperture_arcsec=aperture_arcsec,
+                        cutout_arcsec=cutout_arcsec,
+                        sky_rmin_arcsec=sky_rmin_arcsec,
+                        rgrid=rgrid,
+                        sersic_from=sersic_from,
+                        sersic_params=sersic_params,
+                        sersic_seeing=sersic_seeing,
+                        registry_path=registry_path,
+                        registry_update=registry_update,
+                        legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                        legacy_route=legacy_route,
+                        hst_proposal_id=hst_proposal_id,
+                        target_name=target_name)
+        except Exception as e:
+            failures['measure'] = f"{type(e).__name__}: {e}"
+            print(f"measure stage FAILED: {failures['measure']}")
+            after = (coverage_path.stat().st_mtime if coverage_path.exists()
+                     else None)
+            if after == before:
+                coverage_path.parent.mkdir(parents=True, exist_ok=True)
+                write_coverage_report([ProviderResult(
+                    provider='measure', status=STATUS_ERROR,
+                    message=failures['measure'])], coverage_path)
 
     if spherex_model != 'off':
         print("\n===== SPHEREx =====")
