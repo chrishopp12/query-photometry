@@ -1337,8 +1337,9 @@ def test_seat_color_divides_by_the_reference_bands_own_column():
 
 
 def test_r_reference_reproduces_the_legacy_denominator():
-    """The A1925 campaign ran with r as reference on every instrument, so
-    the fix must be a no-op there -- a re-measure stays bit-identical."""
+    """Where r holds the reference role the denominator is flux_r either
+    way, so taking the color against the reference band is a no-op and a
+    re-measure of such a run stays bit-identical."""
     from sedphot.measure.engine import _seat_colors
     seats, cat, comps = _color_fixture()
     for band in ('u', 'g', 'r', 'i', 'z', 'y'):
