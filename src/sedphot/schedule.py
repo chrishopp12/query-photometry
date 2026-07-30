@@ -248,7 +248,10 @@ def read_targets(path: str | Path,
         names each target's directory, and ``priority`` overrides the
         derived order (higher runs earlier).
     out_root : str or Path, optional
-        Parent for targets whose directory is not named. [default: None]
+        Root that ``dir`` resolves against, matching how sed_fitting
+        resolves it against a campaign's data_root -- so one shared
+        catalog drives both tools. An absolute ``dir`` wins regardless.
+        [default: None]
 
     Returns
     -------
@@ -278,12 +281,13 @@ def read_targets(path: str | Path,
         if not name or name in seen:
             continue
         seen.add(name)
-        directory = (row.get("dir") or "").strip()
-        if not directory:
-            if out_root is None:
-                raise ValueError(f"{path}: {name} has no dir and no "
-                                 f"out-root was given")
-            directory = str(Path(out_root) / name)
+        # dir is RELATIVE to out_root, the same way sed_fitting resolves it
+        # against a campaign's data_root -- so one shared catalog serves
+        # both tools. An absolute dir still wins (pathlib absorbs it), and
+        # without an out_root the value is used as given.
+        relative = (row.get("dir") or "").strip() or name
+        directory = (str(Path(out_root) / relative) if out_root
+                     else relative)
         priority = (row.get("priority") or "").strip()
         targets.append({"name": name,
                         "label": (row.get("label") or "").strip()
