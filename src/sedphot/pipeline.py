@@ -703,7 +703,7 @@ def run_spherex(
         bkg_size: float = 15.0,
         mjd_range: list[float] | None = None,
         poll: float = 5.0,
-        timeout: float = 3600.0,
+        timeout: float = 10800.0,
         cutout_arcsec: float = 120.0,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         target_name: str | None = None,
@@ -740,7 +740,10 @@ def run_spherex(
     poll : float
         Job poll interval in seconds. [default: 5.0]
     timeout : float
-        Job timeout in seconds. [default: 3600.0]
+        Job timeout in seconds. IRSA queues a spectrophotometry job for
+        ~30 minutes and the extraction itself can run an hour, so the
+        default is deliberately far above a healthy job's wall time --
+        it is a backstop, not a schedule. [default: 10800.0]
     cutout_arcsec : float
         Stamp width for a --sersic-from shape fit. [default: 120]
     legacy_dr : str

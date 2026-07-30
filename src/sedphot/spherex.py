@@ -326,6 +326,58 @@ def uws_status(session, uws_url):
     return phase, results
 
 
+def uws_error_detail(session, uws_url):
+    """The service's own explanation for a failed job, or None.
+
+    IRSA carries it in the job document's uws:errorSummary and answers
+    {job}/error with "This endpoint is not used"; the UWS spec allows
+    either, so the job document is read first and /error only as a
+    fallback for services that populate it. Without this, a failed
+    extraction reports only its phase -- which cannot distinguish a
+    rejected request from a service-side fault, and so cannot say
+    whether retrying is worth anything.
+    """
+    def _clean(text):
+        return " ".join((text or "").split())[:1000] or None
+
+    try:
+        response = session.get(uws_url, timeout=30)
+        if response.status_code == 200:
+            root = ET.fromstring(response.text)
+            summary = root.find("uws:errorSummary", UWS_NS)
+            if summary is not None:
+                message = _clean(summary.findtext("uws:message",
+                                                  namespaces=UWS_NS))
+                kind = summary.get("type")
+                if message:
+                    return f"{message} [{kind}]" if kind else message
+    except (requests.RequestException, ET.ParseError):
+        pass
+
+    try:
+        response = session.get(uws_url.rstrip("/") + "/error", timeout=30)
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    text = (response.text or "").strip()
+    if not text:
+        return None
+    try:
+        return _clean(" ".join(ET.fromstring(text).itertext()))
+    except ET.ParseError:
+        pass
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return _clean(text)
+    if isinstance(payload, dict):
+        for key in ("detail", "message", "error", "errorSummary"):
+            if payload.get(key):
+                return _clean(str(payload[key]))
+    return _clean(text)
+
+
 def _votable_to_flat(content):
     """Parse an IRSA spectrophotometry VOTable into a flat per-exposure table.
 
@@ -396,7 +448,7 @@ def read_result_table(session, href):
 # ------------------------------------
 # Orchestration
 # ------------------------------------
-def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None,
+def _wait(poll_fn, interval=5, timeout=10800, on_update=None, done=None,
           max_poll_failures=5):
     """Poll poll_fn -> (phase, payload) until done, or raise on timeout.
 
@@ -436,7 +488,7 @@ def _wait(poll_fn, interval=5, timeout=3600, on_update=None, done=None,
 
 def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
                             mjd_range=None, out_csv=None, session=None,
-                            ff_session_id=None, poll=5, timeout=3600,
+                            ff_session_id=None, poll=5, timeout=10800,
                             verbose=True):
     """End-to-end: submit -> wait -> download the per-exposure table.
 
@@ -499,7 +551,14 @@ def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
         interval=poll, timeout=timeout,
         on_update=lambda p, _r: log("uws", p))
     if phase.upper() != "COMPLETED":
-        raise RuntimeError(f"UWS job ended in phase {phase} (not COMPLETED)")
+        # The service's own explanation, when it offers one: a phase alone
+        # cannot say whether the request was rejected or the service was
+        # overloaded, and those call for opposite responses.
+        detail = uws_error_detail(session, uws_url)
+        raise RuntimeError(
+            f"UWS job ended in phase {phase} (not COMPLETED)"
+            + (f" -- service says: {detail}" if detail else "")
+            + f" [job {uws_url}]")
     if not results:
         raise RuntimeError("UWS job COMPLETED but exposed no results")
 
@@ -690,7 +749,7 @@ def _index_extraction(spherex_dir: Path, tag: str, filename: str,
 # ------------------------------------
 def fetch(coord, *, out_dir, model: Sersic | None = None,
           bkg_region_size: float = 15, mjd_range: tuple | None = None,
-          poll: float = 5, timeout: float = 3600,
+          poll: float = 5, timeout: float = 10800,
           shape_origin: str | None = None,
           label: str | None = None,
           target_name: str | None = None) -> ProviderResult:

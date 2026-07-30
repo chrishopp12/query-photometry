@@ -588,8 +588,10 @@ def build_parser() -> argparse.ArgumentParser:
                                 "workaround for broken-metadata epochs)")
     p_spherex.add_argument('--poll', type=float, default=5.0,
                            help="Job poll interval, seconds [default: 5]")
-    p_spherex.add_argument('--timeout', type=float, default=3600.0,
-                           help="Job timeout, seconds [default: 3600]")
+    p_spherex.add_argument('--timeout', type=float, default=10800.0,
+                           help="Job timeout, seconds. IRSA queues these"
+                                " for ~30 min and the extraction itself can"
+                                " run an hour [default: 10800]")
     p_spherex.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                            choices=('dr10', 'dr9'),
                            help="Legacy Surveys data release for a shape-fit "
