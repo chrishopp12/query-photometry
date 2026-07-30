@@ -82,7 +82,7 @@ The package carries a large private vocabulary. Read this before the deep sectio
 | **transfer band** | `measure/solve.py` | Any non-reference band of an instrument. It reuses the reference band's seat list verbatim, freezes the target-system seats at the reference shape, and re-solves neighbor seats warm, with each seat's amplitude leashed to a color-scaled reference flux. |
 | **frozen** | `measure/solve.py`, `measure/seats.py` | Held at a stored shape and not solved. Applies to a transfer band's target seats, and to a registry-consumed component (which is a fixed column with a tight amplitude leash). |
 | **free** | `measure/solve.py` | Solved rather than held. `free_target=True` runs the pass in which *every* seat including the target is solved — the per-band shape a gating target harvests to the registry. `free_idx` is the index list of seats a transfer band actually solves. |
-| **leash** | `measure/solve.py` | An amplitude bounded to a window around an *expected* flux instead of the generic sanity ceiling. Sources of an expectation: a star's color-scaled catalog flux (`recipe.STAR_REVERT_AMP_BAND`), a transfer band's color-scaled reference solution (`TRANSFER_AMP_BAND`), a registry entry's stored per-band flux (`REGISTRY_AMP_BAND`). An amplitude sitting on its leash bound is recorded as a witness (`leash_bound`, flag token `leash=N`). |
+| **leash** | `measure/solve.py` | An amplitude bounded to a window around an *expected* flux instead of the generic sanity ceiling. Sources of an expectation: a star's color-scaled catalog flux (`recipe.STAR_REVERT_AMP_BAND`), a transfer band's color-scaled reference solution (`TRANSFER_AMP_BAND`), a registry entry's stored per-band flux (`REGISTRY_AMP_BAND`). Enforcement is a hard bound in `lsq_linear`, not a penalty: a forbidden amplitude parks exactly on the bound and the residual it would have absorbed is redistributed into the other columns and the background. An amplitude sitting on a bound is recorded as a witness (`leash_bound` names, `leash_detail` records, flag tokens `leash=N` / `leashhi=N`). A **zero** lower bound is the non-negativity floor every column carries, not a leash — an amplitude solving to zero against it is the data answering "no light", and it is not counted. |
 | **`forced`** | two senses | (1) **Engine**: forced-photometry mode — a caller-supplied sky shape pins the target profile (`--sersic-params` / `--sersic-from` under `--mode sersic`, via `engine._pin_target`); the amplitude stays free. (2) **`remeasure --shape forced`**: report on the instrument's *reference-band* shape, the one the science curve was built on. These are unrelated mechanisms that share a word. |
 | **`fitted`** | `remeasure.py` | `--shape fitted`: report on each band's own free-target shape. Only a gating target's transfer bands store one (`solve_free`); every other band falls back to `forced` and says so in the log and in its `source` string. |
 
@@ -1260,7 +1260,8 @@ Conditional tokens:
 | `far=` | the stamp had enough far field to measure an independent level. A sign or scale contradiction with `bg=` is the background-ownership warning — a flag, never a demotion. |
 | `art=` | artifact area was masked (arcsec²) |
 | `mesh=` | the residual mesh's flux inside the aperture (µJy) |
-| `leash=N` | N amplitudes sit on a leash bound |
+| `leash=N` | N amplitudes sit on a bound (the zero non-negativity floor excluded) |
+| `leashhi=N` | N of those sit on a **ceiling**: the stamp wanted more light than the component can supply. Absent when none do |
 | `refit=` | the target refit's flux over its catalog flux (native scene band only) |
 | `atbound=N` | N shape parameters sit on a box bound |
 | `reg=N` | N registry entries were consumed |

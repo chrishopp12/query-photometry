@@ -19,6 +19,7 @@ from sedphot.measure.aperture import (build_mask, flux_error,
                                       plateau_hold, qa_flags, twin_fill,
                                       witness_row)
 from sedphot.measure.components import build_components, gated_row
+from sedphot.measure.engine import leash_witness
 from sedphot.measure.psf import moffat_kernel
 from sedphot.measure.render import ampl_from_total, render_sersic
 from sedphot.measure.seats import (apply_registry, build_seats,
@@ -381,6 +382,94 @@ def test_flags_carry_the_farfield_witness():
     assert 'far=+0.1234' in flags
     witness['farfield_sb'] = None
     assert 'far=' not in qa_flags(witness, n_comps=3, consumed=[])
+
+
+def test_flags_split_leash_hits_by_side():
+    """A ceiling hit means the stamp wanted MORE than the leash allows and
+    is the diagnostically significant direction; the bare count conflates
+    it with a floor hit, which means the opposite."""
+    witness = dict(cov=1.0, maskfrac_ap=0.01, twinfrac=1.0,
+                   nbsub_ap_uJy=2.0, excess_growth_uJy=1.0,
+                   ped_b_sb=0.001, r_conv_as=15.0, bg_sb=0.002,
+                   leash_bound=['src1', 'src2'],
+                   leash_detail=[dict(owner='src1', kind='star', side='hi',
+                                      amp_uJy=2.0, bound_uJy=2.0),
+                                 dict(owner='src2', kind='star', side='lo',
+                                      amp_uJy=0.5, bound_uJy=0.5)])
+    flags = qa_flags(witness, n_comps=3, consumed=[])
+    assert 'leash=2' in flags
+    assert 'leashhi=1' in flags
+    # no ceiling hit -> no token at all, rather than leashhi=0
+    witness['leash_detail'] = [dict(owner='src2', kind='star', side='lo',
+                                    amp_uJy=0.5, bound_uJy=0.5)]
+    assert 'leashhi=' not in qa_flags(witness, n_comps=3, consumed=[])
+
+
+def test_generic_ceiling_is_reported_and_zero_floor_is_not_a_leash():
+    """Two things the witness could not see before.
+
+    A component with no amp_lohi still has the generic AMP_MAX_X_CAT
+    ceiling enforced by _design, but reported its bounds as (None, None) --
+    so a clamp there was structurally unrecordable. And every column
+    carries a non-negativity floor at zero; an amplitude solving to zero
+    against it is the data answering 'no light', not a constraint that
+    forbade an answer, so it must not count as a leash hit."""
+    rng = np.random.default_rng(23)
+    stamp = make_stamp(np.zeros((200, 200)))
+    psf = moffat_kernel(1.3, PIX)
+    f_target = 300.0
+    image = (inject_sersic((200, 200), psf, flux=f_target,
+                           reff_px=2.0 / PIX, n=2.0, x=stamp.cx, y=stamp.cy)
+             + rng.normal(0.0, NOISE, (200, 200)))
+    cat = make_catalog([
+        catalog_row(stamp.wcs, stamp.cx, stamp.cy,
+                    flux_nmgy=f_target / 3.631, shape_r=2.0),
+        catalog_row(stamp.wcs, stamp.cx + 40.0 / PIX, stamp.cy,
+                    flux_nmgy=100.0 / 3.631, shape_r=1.5),
+    ])
+    comps = build_components(cat, stamp, psf, 1.3)
+    fit = joint_fit(image, np.ones((200, 200), bool), stamp, psf, comps,
+                    [], set())
+
+    bounds, kinds = fit['amp_bounds'], fit['amp_bound_kind']
+    assert len(bounds) == len(comps) and len(kinds) == len(comps)
+    # resolved, not (None, None): the ceiling is visible to a witness
+    assert all(lo is not None and hi is not None for lo, hi in bounds)
+    assert all(lo == 0.0 for lo, _ in bounds)
+    assert all(hi > 0.0 for _, hi in bounds)
+    assert set(kinds) == {'ceiling'}
+
+    # the phantom solves to zero against that floor; that is an answer,
+    # not a leash hit
+    owners = [c['name'] for c in fit['fixed']]
+    names, detail = leash_witness(owners, fit['amps'], bounds, kinds)
+    assert names == [] and detail == []
+
+
+def test_leash_witness_records_side_and_family():
+    """The owner name alone cannot say which bound was hit, which side, or
+    by how much -- and a hit at a positive floor means the opposite of a
+    hit at a ceiling."""
+    owners = ['starA', 'regB', 'seatC', 'plainD']
+    amps = [4.0, 0.8, 5.0, 3.0]
+    bounds = [(0.0, 4.0),        # star ceiling: stamp wanted more
+              (0.8, 1.25),       # registry floor: stamp wanted less
+              (0.5, 10.0),       # transfer, comfortably interior
+              (0.0, 100.0)]      # generic ceiling, interior
+    kinds = ['star', 'registry', 'transfer', 'ceiling']
+    names, detail = leash_witness(owners, amps, bounds, kinds)
+
+    assert names == ['regB', 'starA']
+    by_owner = {d['owner']: d for d in detail}
+    assert by_owner['starA']['side'] == 'hi'
+    assert by_owner['starA']['kind'] == 'star'
+    assert by_owner['starA']['bound_uJy'] == 4.0
+    assert by_owner['regB']['side'] == 'lo'
+    assert by_owner['regB']['kind'] == 'registry'
+    assert 'seatC' not in by_owner and 'plainD' not in by_owner
+
+    # a (None, None) entry from an older fit dict is skipped, not crashed on
+    assert leash_witness(['x'], [1.0], [(None, None)], ['ceiling']) == ([], [])
 
 
 def test_target_is_the_closest_row_not_every_row_in_match():

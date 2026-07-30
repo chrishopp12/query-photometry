@@ -607,6 +607,13 @@ def qa_flags(witness: dict, *, n_comps: int, consumed: list[str]) -> str:
         tokens.append(f"mesh={witness['mesh_ap_uJy']:+.1f}")
     if witness.get('leash_bound'):
         tokens.append(f"leash={len(witness['leash_bound'])}")
+        # A ceiling hit means the stamp wanted MORE than the leash allows,
+        # which is the diagnostically significant direction; a floor hit
+        # means it wanted less. The count alone conflates them.
+        n_hi = sum(1 for d in witness.get('leash_detail', ())
+                   if d['side'] == 'hi')
+        if n_hi:
+            tokens.append(f"leashhi={n_hi}")
     if witness.get('target_refit_x_cat') is not None:
         tokens.append(f"refit={witness['target_refit_x_cat']:.2f}")
     solve = witness.get('solve')
