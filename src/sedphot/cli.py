@@ -378,6 +378,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
         registry_path=args.registry,
         registry_update=args.registry_update,
         spherex_model=args.spherex,
+        spherex_bkg_size=args.spherex_bkg_size,
+        spherex_mjd_range=args.spherex_mjd_range,
+        spherex_timeout=args.spherex_timeout,
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
@@ -395,6 +398,18 @@ def _cmd_batch(args: argparse.Namespace) -> None:
     from .batch import run_sweep
 
     _check_measure_args(args, 'batch')
+    # IRSA runs at most two spectrophotometry jobs at a time. Whether a
+    # third queues or is refused is not established, and a sweep is the
+    # wrong place to find out: each job is a 20-60 minute server-side
+    # extraction, so a refusal wastes an hour per target and a silent
+    # queue makes --workers meaningless for this stage either way.
+    if args.spherex != 'off' and args.workers > SPHEREX_MAX_WORKERS:
+        sys.exit(f"sedphot batch: --spherex {args.spherex} with "
+                 f"--workers {args.workers} would submit up to "
+                 f"{args.workers} concurrent IRSA extractions; the service "
+                 f"admits {SPHEREX_MAX_WORKERS}. Re-run with --workers "
+                 f"{SPHEREX_MAX_WORKERS} or fewer, or sweep the photometry "
+                 f"with --spherex off and fetch the extractions separately.")
     with open(args.plan, encoding='utf-8') as handle:
         plan = json.load(handle)
 
@@ -415,6 +430,9 @@ def _cmd_batch(args: argparse.Namespace) -> None:
         sersic_from=args.sersic_from,
         sersic_seeing=args.sersic_seeing,
         spherex_model=args.spherex,
+        spherex_bkg_size=args.spherex_bkg_size,
+        spherex_mjd_range=args.spherex_mjd_range,
+        spherex_timeout=args.spherex_timeout,
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
@@ -516,6 +534,33 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
 # ------------------------------------
 # Parser
 # ------------------------------------
+# IRSA admits two concurrent spectrophotometry jobs. Behavior past that
+# is unverified -- they may queue or be refused -- so the batch verb caps
+# rather than discovering it mid-sweep.
+SPHEREX_MAX_WORKERS = 2
+
+
+def _add_spherex_job_args(parser_obj) -> None:
+    """The SPHEREx extraction knobs shared by `run` and `batch`.
+
+    run_all owns one SPHEREx stage, so every verb that drives it must be
+    able to set the same extraction configuration -- a sweep that cannot
+    set an MJD window cannot avoid the bad-epoch failure mode.
+    """
+    parser_obj.add_argument('--spherex-bkg-size', type=float, default=15.0,
+                            help="SPHEREx background region, pixels "
+                                 "[default: 15]")
+    parser_obj.add_argument('--spherex-mjd-range', nargs=2, type=float,
+                            default=None, metavar=('START', 'END'),
+                            help="SPHEREx visit window (MJD). Epochs with "
+                                 "broken file metadata kill jobs server-side; "
+                                 "restricting to a known-good window is the "
+                                 "IRSA-documented workaround")
+    parser_obj.add_argument('--spherex-timeout', type=float, default=10800.0,
+                            help="SPHEREx job timeout, seconds "
+                                 "[default: 10800]")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the argparse tree: one subparser per verb."""
     parser = argparse.ArgumentParser(
@@ -712,6 +757,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--spherex', type=str, default='off',
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")
+    _add_spherex_job_args(p_run)
     p_run.set_defaults(func=_cmd_run)
 
     p_batch = subparsers.add_parser(
@@ -753,6 +799,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument('--spherex', type=str, default='off',
                          choices=('off', 'psf', 'sersic'),
                          help="SPHEREx extraction [default: off]")
+    _add_spherex_job_args(p_batch)
     _add_measure_args(p_batch, registry_args=False)
     p_batch.set_defaults(func=_cmd_batch)
 

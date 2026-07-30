@@ -996,6 +996,9 @@ def run_all(
         registry_path: str | None = None,
         registry_update: bool = False,
         spherex_model: str = 'off',
+        spherex_bkg_size: float = 15.0,
+        spherex_mjd_range: list[float] | None = None,
+        spherex_timeout: float = 10800.0,
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
@@ -1022,6 +1025,15 @@ def run_all(
         names where they overlap).
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
+    spherex_bkg_size : float
+        Background estimation region, pixels. [default: 15.0]
+    spherex_mjd_range : list of float, optional
+        Visit window for the extraction. Epochs with broken file metadata
+        kill jobs server-side, and restricting to a known-good window is
+        the IRSA-documented workaround -- a sweep that cannot set one
+        cannot avoid that failure. [default: None]
+    spherex_timeout : float
+        Extraction job timeout, seconds. [default: 10800.0]
     sersic_params, sersic_from, sersic_seeing
         The shape declaration, shared by the measurement stage's sersic
         mode and the SPHEREx extraction -- one shape per galaxy, not two.
@@ -1091,6 +1103,9 @@ def run_all(
                                  sersic_params=sersic_params,
                                  sersic_from=sersic_from,
                                  sersic_seeing=sersic_seeing,
+                                 bkg_size=spherex_bkg_size,
+                                 mjd_range=spherex_mjd_range,
+                                 timeout=spherex_timeout,
                                  cutout_arcsec=cutout_arcsec,
                                  legacy_dr=legacy_dr,
                                  target_name=target_name)
