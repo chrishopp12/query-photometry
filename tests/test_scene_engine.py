@@ -1188,7 +1188,7 @@ def test_witness_row_and_flags_tokens():
               coefs=[0.01, 0.001, -0.001], n_rej=3, n_bins=500)
     witness = witness_row(enc, model, 98.0, stamp, stamp.good,
                           np.zeros((200, 200), bool), 0.5,
-                          np.zeros((200, 200)), np.zeros((200, 200)),
+                          np.zeros((200, 200)),
                           bg, [0.012, 0.01], 1.5, 1.3, 'test',
                           rgrid=rgrid, aperture_arcsec=12.0)
     assert witness['f_ap_uJy'] == 100.0

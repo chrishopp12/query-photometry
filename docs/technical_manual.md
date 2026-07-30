@@ -118,7 +118,7 @@ The package carries a large private vocabulary. Read this before the deep sectio
 | **shred** | `measure/components.py` `drop_target_shreds` | A catalog row inside the science aperture whose `fracflux_r` exceeds `recipe.SHRED_FRACFLUX` — the catalog's rendering of the target's own substructure, not an independent source. Such rows **leave the scene entirely** and their light is measured as target flux. Scoped to the aperture; patch-named positions are exempt. |
 | **plateau** | `measure/aperture.py` `plateau_hold` | The first curve-of-growth radius where the increments go quiet for `PLATEAU_RUN` consecutive steps **and hold** to the grid end. `-1` when the curve never certifies. Reported as `conv=`. |
 | **star zone** | `measure/recipe.py` `STAR_ZONE_BUFFER_AS` | The disk of radius `aperture + 3″` around the target. A star whose profile measurement failed inside it gets **no design column** (a free point-source column there absorbs target light); its predicted footprint is masked and twin-filled instead. |
-| **reverted star** | `measure/stars.py` | A confirmed star whose measured profile came back starved (< `STAR_PROFILE_MIN_FRAC` of expected) or contaminated (> `STAR_PROFILE_MAX_FRAC`). Inside the star zone it is *masked* (`mode: masked`); outside it keeps its catalog component with a leashed amplitude and `star_reverted=True` (`mode: leashed`), which makes `build_mask` use its full uncapped model isophote. |
+| **treated star** | `measure/stars.py` | A confirmed star routed by geometry alone. Inside the star zone it is *masked* and twin-filled with no design column (`mode: masked`); outside it keeps its catalog component with a leashed amplitude and `star_reverted=True` (`mode: leashed`), which makes `build_mask` use its full uncapped model isophote. A star is never subtracted from the data: both routes bound the damage a wrong star model can do. |
 | **demote** | `measure/stamp.py` `check_coverage` | Refusing a band as `no_coverage` rather than reporting a biased flux. Three triggers: aperture coverage below `COVERAGE_MIN = 0.95`, any dead pixel inside `PEAK_PROTECT_AS = 0.5″`, or seeing-core mask fraction above `CORE_MASKFRAC_MAX = 0.10`. |
 
 ### Ambiguous words, resolved
@@ -210,9 +210,8 @@ apply_registry            consume frozen shapes (sidecar snapshot first, else th
 _pin_target               (forced mode only) replace the target profile
 find_artifacts            catastrophic pixels -> out of `good`; a component whose
                           claim is majority-masked is voided; coverage re-judged
-subtract_stars            confirmed stars -> measured profiles, pre-subtracted;
-                          failures revert (masked in-zone / leashed out-of-zone)
-                          -> image = raw - star_img
+treat_stars               confirmed stars -> masked in-zone (no column) or
+                          leashed out-of-zone; nothing is subtracted
 build_seats               (reference band only) gated cores, patch free seats,
                           the standard target refit; transfer bands reuse ref['seats']
 joint_fit                 {shapes + amplitudes} <-> background, block coordinate
@@ -585,7 +584,6 @@ Selected constants, grouped as the file groups them:
 | `MARGIN_AS` / `MARGIN_MIN_UJY` | 25 / 1.0 | Off-stamp admission and its in-stamp flux floor |
 | `BRIGHT_PSF_UJY` | 100 | Off-stamp point sources keeping analytic Moffat wings |
 | `STAR_ASTROM_SIG` | 3.0 | Gaia parallax/PM significance for star confirmation |
-| `STAR_PROFILE_MIN_FRAC` / `MAX_FRAC` | 0.8 / 1.3 | Starved / contaminated profile bounds |
 | `STAR_ZONE_BUFFER_AS` | 3.0 | Star zone = aperture + this |
 | `BIN_AS` / `BIN_MIN_FRAC` / `BG_REJ_SIGMA` | 5.0 / 0.5 / 3.0 | Background bins and rejection |
 | **`BG_RMIN_AS`** | **15.0** | **The one target/sky boundary; six stages read it** |
@@ -725,15 +723,12 @@ The component dict schema is in the module docstring and in [§2](#2-glossary).
   argument is what excludes the target, which is why `engine._target_gates` passes a
   deliberately non-self distance.
 
-#### `stars.py` — Stage 4: the measured-star stage
+#### `stars.py` — Stage 4: the star stage
 
 ```python
 confirm_stars(gaia) -> pd.DataFrame
-measure_star_profile(raw, good, others_img, level, sx, sy, pixscale, rr, sigma,
-                     *, extra_exclude=None) -> np.ndarray
-subtract_stars(stamp, raw, good, comps, stars, level, *, colors=None,
-               aperture_arcsec=None, tag='')
-    -> (star_img, star_masks, comps, star_log)
+treat_stars(stamp, comps, stars, *, colors=None, aperture_arcsec=None, tag='')
+    -> (star_masks, comps, star_log)
 ```
 
 Confirmation is **astrometric, not positional**: a Gaia row counts as a star only
@@ -752,15 +747,15 @@ measured stars **leave the component list** and their light is pre-subtracted.
   (`flux0`), never its catalog total: amplitudes are in-stamp flux in this design,
   and for an off-stamp star a total-flux leash would force that much wing light onto
   the stamp.
-- Rings never see the target region (`rr < BG_RMIN_AS`) or another component's
-  dilated bright footprint.
-- A reverted star inside the star zone gets **no design column** — a free
-  point-source column there can absorb target light wholesale, and its
-  over-subtraction cannot be masked after the fact.
-- `measure_star_profile`'s ring statistic is a sigma-clipped **median**, and it is the
-  one median that feeds subtracted flux (contrast `background.py`, where the clipped
-  mean is mandatory). It is honest for a monotone profile at high ring S/N, and it is
-  the first place to look if star subtraction ever reads biased.
+- A star inside the star zone gets **no design column** — a free point-source
+  column there can absorb target light wholesale, and its over-subtraction
+  cannot be masked after the fact. Its predicted footprint is masked and the
+  twin fill reconstructs beneath it.
+- **No star is ever subtracted from the data.** The route is decided by
+  geometry alone, so it cannot depend on how well any model happens to fit.
+  Both routes bound the damage a wrong star model can do: the leash caps the
+  amplitude, and the mask removes the region rather than trusting a model over
+  it. Neither can excavate light that was never the star's.
 
 #### `seats.py` — Stage 5: seats and the cross-field registry
 
@@ -896,7 +891,7 @@ enclosed_at(rgrid, enc, radius) -> float
 ped_fit(enc, rgrid) -> (F, b, rms)
 plateau_hold(enc, flux_ap, rgrid) -> float
 witness_row(enc, model_cog, m_ap_cat, stamp, good, mask, twin_frac, neighbors,
-            star_img, bg, track, flood_ujy, seeing_arcsec, seeing_src, *,
+            bg, track, flood_ujy, seeing_arcsec, seeing_src, *,
             rgrid, aperture_arcsec, solve_info=None, solve_free=None,
             shapes=None) -> dict
 empap_error(resid, vote, stamp, *, aperture_arcsec) -> (err_ujy, n_placed)
@@ -1332,9 +1327,9 @@ Each `witness` (built by `aperture.witness_row`, extended by `engine.measure_ban
 | Group | Keys |
 |---|---|
 | flux and growth | `f_ap_uJy`, `aperture_as`, `excess_growth_uJy`, `model_own_growth_uJy`, `m_ap_fit_uJy`, `m_ap_cat_uJy` |
-| coverage and masks | `cov`, `maskfrac_ap`, `twinfrac`, `nbsub_ap_uJy`, `starsub_ap_uJy`, `flood_uJy` |
+| coverage and masks | `cov`, `maskfrac_ap`, `twinfrac`, `nbsub_ap_uJy`, `flood_uJy` |
 | background | `bg_sb`, `bg_tilt_sb`, `bg_rej_bins`, `farfield_sb`, `alt_track_sb`, `ped_b_sb`, `ped_rms_uJy`, `mesh_ap_uJy` |
-| convergence | `r_conv_as`, `leash_bound` |
+| convergence | `r_conv_as`, `leash_bound`, `leash_detail` |
 | PSF | `seeing_as`, `seeing_src` |
 | scene | `n_comps`, `gated`, `seat_owners`, `stars`, `registry_consumed`, `artifact_as2`, `artifact_uJy`, `artifact_flood_as2` |
 | attribution | `resid_unmasked_ap_uJy`, `fill_vs_model_ap_uJy`, `target_model_uJy`, `target_model_free_uJy`, `target_refit_x_cat` |

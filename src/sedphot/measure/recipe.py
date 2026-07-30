@@ -164,28 +164,18 @@ BRIGHT_PSF_UJY = 100.0
 STAR_ASTROM_SIG = 3.0
 
 STAR_MIN_UJY = 100.0      # fainter confirmed stars keep their catalog component
-STAR_PROF_MAX_AS = 45.0   # measured stellar-profile terminus
-STAR_RING_MIN_PX = 40     # a profile ring votes only with this many pixels
 
-# A measured profile recovering less than MIN_FRAC of the (color-
-# scaled) in-stamp render flux (flux0) is a FAILED measurement (rings
-# starved by the target-region and bright-neighbor exclusions -- or the
-# "star" is a galaxy with spurious Gaia astrometry). One recovering more
-# than MAX_FRAC is a CONTAMINATED measurement (rings sitting in another
-# source's light; subtracting it would excavate). Either way the
-# source reverts: light must never leave the scene without something
-# accounting for it. Thresholds are judged against the render's in-stamp
-# flux scaled to the band through BAND_COLOR_COL, so a red star's honest
-# faintness in g cannot read as failure.
-STAR_PROFILE_MIN_FRAC = 0.8
-STAR_PROFILE_MAX_FRAC = 1.3
-
-# A reverted star inside the aperture zone gets NO design column: a
-# free point-source column there can absorb target light wholesale
-# (and its over-subtraction cannot be masked after the fact). Its
-# predicted catalog-amplitude footprint is masked and twin-filled
-# instead. Beyond the zone the component stays, with its amplitude
-# leashed to the color-scaled catalog expectation.
+# A star inside the aperture zone gets NO design column: a free
+# point-source column there can absorb target light wholesale (and its
+# over-subtraction cannot be masked after the fact). Its predicted
+# catalog-amplitude footprint is masked and twin-filled instead. Beyond
+# the zone the component stays, with its amplitude leashed to the
+# color-scaled catalog expectation.
+#
+# No star is ever subtracted from the data. Both routes BOUND the damage
+# a wrong star model can do -- the leash caps the amplitude, the mask
+# removes the region rather than trusting a model over it -- and neither
+# can excavate light that was never the star's.
 #
 # The floor is ZERO: the expectation is a catalog prediction, and data
 # showing no light where the catalog predicts some must be able to say

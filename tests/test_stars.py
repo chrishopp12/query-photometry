@@ -1,4 +1,4 @@
-"""Offline tests for star confirmation and the measured-star stage."""
+"""Offline tests for star confirmation and the star stage."""
 from __future__ import annotations
 
 import numpy as np
@@ -9,11 +9,9 @@ from astropy.wcs import WCS
 
 from sedphot.measure import recipe
 from sedphot.measure.stamp import Stamp, radii_arcsec
-from sedphot.measure.stars import (confirm_stars, measure_star_profile,
-                                   subtract_stars)
+from sedphot.measure.stars import confirm_stars, treat_stars
 
-# Synthetic pixel scale (arcsec/px), fine enough that even the
-# innermost 1-arcsec profile ring clears STAR_RING_MIN_PX.
+# Synthetic pixel scale (arcsec/px).
 PIX = 0.25
 MOFFAT_BETA = 3.0
 
@@ -83,33 +81,9 @@ def test_confirm_stars_truth_table():
     assert list(out.index) == [0, 1]
 
 
-def test_profile_recovers_synthetic_star():
-    rng = np.random.default_rng(1)
-    shape = (480, 480)
-    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
-    sx, sy = cx + 120.0, cy      # 30 arcsec east of the frame center
-    blob = moffat_blob(shape, sx, sy, 2000.0, 6.0, PIX)
-    data = rng.normal(0.0, 0.05, size=shape) + blob
-    stamp = make_stamp(data, pixscale=PIX)
-
-    profile_img = measure_star_profile(
-        stamp.data, stamp.good, np.zeros(shape), 0.0, sx, sy,
-        PIX, stamp.rr, 0.05)
-
-    # Integrates to the injected flux
-    assert profile_img.sum() == pytest.approx(blob.sum(), rel=0.05)
-
-    # Monotone decreasing along radius
-    yy, xx = np.indices(shape)
-    r_star = np.hypot(yy - sy, xx - sx) * PIX
-    order = np.argsort(r_star.ravel())
-    assert np.all(np.diff(profile_img.ravel()[order]) <= 1e-9)
-
-    # Zero beyond the terminus
-    assert np.all(profile_img[r_star > recipe.STAR_PROF_MAX_AS] == 0.0)
-
-
-def test_subtract_stars_brightest_first_and_gates():
+def test_treat_stars_matches_brightest_first_and_skips_the_target():
+    """Treatment order comes from the component catalog flux, not the Gaia
+    row order; the target and sub-threshold components are left alone."""
     rng = np.random.default_rng(2)
     shape = (480, 480)
     cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
@@ -128,45 +102,39 @@ def test_subtract_stars_brightest_first_and_gates():
              make_comp('src1', 3000.0, x1, y1, blob1),
              make_comp('src2', 400.0, x2, y2, blob2),
              make_comp('src3', 50.0, x3, y3, blob3)]
-    # Faint star's Gaia row first: treatment order must come from the
-    # component catalog flux, not the row order. Rows also land on the
-    # too-faint component and on the target -- both must be left alone.
+    # Faint star's Gaia row first; rows also land on the too-faint
+    # component and on the target -- both must be left alone.
     stars = star_rows(stamp, [(x2, y2, 17.5),
                               (x1, y1, 15.5),
                               (x3, y3, 18.5),
                               (cx, cy, 16.5)])
 
-    star_img, star_masks, pruned, star_log = subtract_stars(
-        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+    star_masks, pruned, star_log = treat_stars(stamp, comps, stars)
 
-    # Brightest first; target and the faint component keep their seats
     assert [rec['comp'] for rec in star_log] == ['src1', 'src2']
     assert [rec['gmag'] for rec in star_log] == [15.5, 17.5]
-    assert [name for name, _ in star_masks] == ['src1', 'src2']
-    assert [c['name'] for c in pruned] == ['target', 'src3']
-
-    # The measured profiles carry the injected star flux...
-    assert star_log[0]['profile_uJy'] == pytest.approx(3000.0, rel=0.1)
-    assert star_log[1]['profile_uJy'] == pytest.approx(400.0, rel=0.1)
-    assert star_img.sum() * stamp.cf == pytest.approx(3400.0, rel=0.1)
-
-    # ...and the subtraction removes most of each star from the frame
-    residual = stamp.data - star_img
-    yy, xx = np.indices(shape)
-    near1 = np.hypot(yy - y1, xx - x1) * PIX < 10.0
-    near2 = np.hypot(yy - y2, xx - x2) * PIX < 10.0
-    assert abs(residual[near1].sum()) < 0.1 * blob1[near1].sum()
-    assert abs(residual[near2].sum()) < 0.1 * blob2[near2].sum()
+    # No aperture given -> nothing is in-zone -> every star is leashed,
+    # keeps its column, and nothing is masked.
+    assert all(rec['mode'] == 'leashed' for rec in star_log)
+    assert star_masks == []
+    assert [c['name'] for c in pruned] == ['target', 'src1', 'src2', 'src3']
+    for name in ('src1', 'src2'):
+        comp = next(c for c in pruned if c['name'] == name)
+        assert comp['star_reverted'] and not comp['gate']
+    # the sub-threshold component is untouched
+    assert 'star_reverted' not in next(c for c in pruned
+                                       if c['name'] == 'src3')
+    # nothing in the star stage reports a subtracted flux any more
+    assert all('profile_uJy' not in rec for rec in star_log)
 
 
-def test_failed_profile_reverts_to_the_catalog_component():
-    """A confirmed star too close to the target for its rings to vote
-    must KEEP its catalog component -- deleting it would leave its
-    light in the data with nothing accounting for it."""
+def test_star_outside_the_zone_keeps_a_leashed_component():
+    """Outside the aperture zone the catalog component stays, bounded --
+    deleting it would leave its light with nothing accounting for it."""
     rng = np.random.default_rng(5)
     shape = (480, 480)
     cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
-    xs, ys = cx + 32.0, cy            # 8" east: inside the ring exclusion
+    xs, ys = cx + 120.0, cy           # 30" east: well outside the zone
     target_blob = moffat_blob(shape, cx, cy, 500.0, 4.0, PIX)
     star_blob = moffat_blob(shape, xs, ys, 800.0, 6.0, PIX)
     data = rng.normal(0.0, 0.05, size=shape) + target_blob + star_blob
@@ -175,15 +143,12 @@ def test_failed_profile_reverts_to_the_catalog_component():
              make_comp('src1', 800.0, xs, ys, star_blob)]
     stars = star_rows(stamp, [(xs, ys, 16.0)])
 
-    star_img, star_masks, pruned, star_log = subtract_stars(
-        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+    star_masks, pruned, star_log = treat_stars(stamp, comps, stars,
+                                               aperture_arcsec=12.0)
 
     assert star_masks == []
-    assert float(star_img.sum()) == 0.0
     assert [c['name'] for c in pruned] == ['target', 'src1']
-    assert star_log[0]['reverted'] == 'starved'
     assert star_log[0]['mode'] == 'leashed'
-    assert star_log[0]['profile_uJy'] < 0.8 * 800.0
     kept = next(c for c in pruned if c['name'] == 'src1')
     assert kept['star_reverted'] and not kept['gate']
     lo, hi = kept['amp_lohi']
@@ -196,68 +161,71 @@ def test_failed_profile_reverts_to_the_catalog_component():
     assert hi == pytest.approx(2.0 * kept['flux0'])
 
 
-def test_contaminated_profile_reverts_and_zone_masks_without_column():
-    """Above the ceiling = contaminated -> revert; and inside the
-    aperture zone the reverted star gets a footprint mask and NO
-    column, with nothing subtracted."""
+def test_star_inside_the_zone_is_masked_without_a_column():
+    """Inside the aperture zone a free point-source column would absorb
+    target light, so the star gets a footprint mask and NO column --
+    decided by geometry alone, with no measurement involved."""
     rng = np.random.default_rng(9)
     shape = (480, 480)
     cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
-    xs, ys = cx + 32.0, cy            # 8": inside aperture 12 + buffer
+    xs, ys = cx + 32.0, cy            # 8": inside aperture 12 + buffer 3
     target_blob = moffat_blob(shape, cx, cy, 500.0, 4.0, PIX)
     star_blob = moffat_blob(shape, xs, ys, 300.0, 6.0, PIX)
-    # a bright shelf under the star fattens its rings -> contamination
-    shelf = np.exp(-(((np.indices(shape)[1] - xs) * PIX / 30) ** 2
-                     + ((np.indices(shape)[0] - ys) * PIX / 30) ** 2))
-    data = (rng.normal(0.0, 0.05, size=shape) + target_blob + star_blob
-            + 2.0 * shelf)
+    data = rng.normal(0.0, 0.05, size=shape) + target_blob + star_blob
     stamp = make_stamp(data, pixscale=PIX)
     comps = [make_comp('target', 500.0, cx, cy, target_blob),
              make_comp('src1', 300.0, xs, ys, star_blob)]
     stars = star_rows(stamp, [(xs, ys, 16.5)])
 
-    star_img, star_masks, pruned, star_log = subtract_stars(
-        stamp, stamp.data, stamp.good, comps, stars, 0.0,
-        aperture_arcsec=12.0)
+    star_masks, pruned, star_log = treat_stars(stamp, comps, stars,
+                                               aperture_arcsec=12.0)
 
-    assert star_log[0]['reverted'] == 'contaminated'
     assert star_log[0]['mode'] == 'masked'
-    assert float(star_img.sum()) == 0.0            # nothing subtracted
-    assert [n for n, _ in star_masks] == ['src1']  # footprint mask
+    assert [n for n, _ in star_masks] == ['src1']      # footprint mask
     assert [c['name'] for c in pruned] == ['target']   # no column
 
 
-def test_color_scaled_threshold_passes_a_red_stars_blue_band():
-    """A profile at 40% of the r-band catalog passes when the color
-    says the star only emits 40% there -- reversion must fire on
-    failure, not on stellar color."""
-    rng = np.random.default_rng(3)
+def test_zone_routing_is_geometric_not_photometric():
+    """The route must not depend on how bright the star is or on how well
+    any model fits it -- only on distance from the target. This is the
+    invariant that makes the in-zone protection unconditional."""
+    shape = (480, 480)
+    cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
+    xs, ys = cx + 32.0, cy            # 8": inside the zone
+    target_blob = moffat_blob(shape, cx, cy, 500.0, 4.0, PIX)
+    for cat in (150.0, 5000.0):
+        star_blob = moffat_blob(shape, xs, ys, cat, 6.0, PIX)
+        stamp = make_stamp(target_blob + star_blob, pixscale=PIX)
+        comps = [make_comp('target', 500.0, cx, cy, target_blob),
+                 make_comp('src1', cat, xs, ys, star_blob)]
+        stars = star_rows(stamp, [(xs, ys, 16.0)])
+        _, pruned, log = treat_stars(stamp, comps, stars,
+                                     aperture_arcsec=12.0)
+        assert log[0]['mode'] == 'masked'
+        assert [c['name'] for c in pruned] == ['target']
+
+
+def test_color_scales_the_leash_and_the_masked_footprint():
+    """The color factor still sets the leash ceiling and the masked
+    footprint amplitude, even though nothing gates on it any more."""
     shape = (480, 480)
     cx, cy = (shape[1] - 1) / 2.0, (shape[0] - 1) / 2.0
     xs, ys = cx + 120.0, cy
-    # The component base renders at the r-band CATALOG amplitude (1000,
-    # so flux0 = cat), while the DATA holds the star's actual measured
-    # appearance in this band -- 400, its true 40%-of-r blue emission.
-    base_blob = moffat_blob(shape, xs, ys, 1000.0, 6.0, PIX)  # cat render
-    star_blob = moffat_blob(shape, xs, ys, 400.0, 6.0, PIX)   # true flux
-    data = rng.normal(0.0, 0.05, size=shape) + star_blob
-    stamp = make_stamp(data, pixscale=PIX)
+    base_blob = moffat_blob(shape, xs, ys, 1000.0, 6.0, PIX)
+    stamp = make_stamp(base_blob, pixscale=PIX)
     comps = [make_comp('target', 100.0, cx, cy,
                        moffat_blob(shape, cx, cy, 100.0, 4.0, PIX)),
-             make_comp('src1', 1000.0, xs, ys, base_blob)]  # cat = r flux
+             make_comp('src1', 1000.0, xs, ys, base_blob)]
     comps[1]['irow'] = 5
     stars = star_rows(stamp, [(xs, ys, 16.0)])
 
-    _, _, _, log_neutral = subtract_stars(
-        stamp, stamp.data, stamp.good,
-        [dict(c) for c in comps], stars, 0.0)
-    _, _, _, log_color = subtract_stars(
-        stamp, stamp.data, stamp.good,
-        [dict(c) for c in comps], stars, 0.0,
-        colors={comps[1]['irow']: 0.4})
+    _, neutral, _ = treat_stars(stamp, [dict(c) for c in comps], stars)
+    _, colored, _ = treat_stars(stamp, [dict(c) for c in comps], stars,
+                                colors={5: 0.4})
 
-    assert log_neutral[0].get('reverted') == 'starved'   # 400 vs 1000
-    assert log_color[0]['mode'] == 'measured'            # 400 vs 400
+    hi_neutral = next(c for c in neutral if c['name'] == 'src1')['amp_lohi'][1]
+    hi_colored = next(c for c in colored if c['name'] == 'src1')['amp_lohi'][1]
+    assert hi_colored == pytest.approx(0.4 * hi_neutral)
 
 
 def test_offstamp_star_leash_is_in_stamp_not_total():
@@ -281,8 +249,7 @@ def test_offstamp_star_leash_is_in_stamp_not_total():
              make_comp('src1', 4000.0, xs, ys, wings)]  # cat = total flux
     stars = star_rows(stamp, [(xs, ys, 15.0)])
 
-    _, _, pruned, log = subtract_stars(
-        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+    _, pruned, log = treat_stars(stamp, comps, stars)
 
     kept = next(c for c in pruned if c['name'] == 'src1')
     assert kept['star_reverted']
@@ -307,12 +274,13 @@ def test_two_gaia_rows_same_component_treated_once():
     # Two Gaia rows within the match radius of the same component
     stars = star_rows(stamp, [(sx, sy, 16.0), (sx + 2.0, sy, 16.2)])
 
-    star_img, star_masks, pruned, star_log = subtract_stars(
-        stamp, stamp.data, stamp.good, comps, stars, 0.0)
+    star_masks, pruned, star_log = treat_stars(stamp, comps, stars,
+                                               aperture_arcsec=12.0)
 
     assert len(star_log) == 1
-    assert len(star_masks) == 1
     assert star_log[0]['comp'] == 'src1'
     assert star_log[0]['gmag'] == pytest.approx(16.0)   # first row claims
-    assert [c['name'] for c in pruned] == ['target']
-    assert star_img.sum() > 0.0
+    # 20" from the target with a 12" aperture: outside the zone, leashed
+    assert star_log[0]['mode'] == 'leashed'
+    assert star_masks == []
+    assert [c['name'] for c in pruned] == ['target', 'src1']

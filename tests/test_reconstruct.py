@@ -215,7 +215,7 @@ def _witness(solve_info, solve_free=None, shapes=None):
     zeros = np.zeros(stamp.data.shape)
     return witness_row(np.zeros(3), np.zeros(3), None, stamp,
                        np.ones(stamp.data.shape, bool),
-                       np.zeros(stamp.data.shape, bool), 1.0, zeros, zeros,
+                       np.zeros(stamp.data.shape, bool), 1.0, zeros,
                        dict(const=0.0, coefs=[0.0, 0.0, 0.0], n_rej=0,
                             n_bins=4),
                        [0.0], 0.0, 1.0, 'test',
