@@ -44,7 +44,7 @@ from astropy.wcs import WCS
 from ..catalogs.legacy import LEGACY_DR_DEFAULT
 from ..results import STATUS_ERROR, STATUS_NO_COVERAGE, ImageProduct, ProviderResult
 from ..retry import retry_transient, try_services
-from .common import warn_undersized_cache
+from .common import mosaic_first_valid, warn_undersized_cache
 
 # ------------------------------------
 # Constants
@@ -124,6 +124,10 @@ def _fetch_cutouts(coord: SkyCoord, bands: tuple, size_arcsec: float,
                 header["BUNIT"] = "nanomaggy"
                 header["SURVEY"] = f"Legacy_{layer}"
                 header["FILTER"] = band
+                # Every route stamps its own name: an unstamped file would
+                # only be identifiable as "whichever route does not stamp",
+                # which stops being true the moment a route is added.
+                header["FETCHSRC"] = "viewer-cutout"
                 plane = cube_data[i] if cube_data.ndim == 3 else cube_data
                 fits.writeto(paths[bands.index(band)], plane.astype("f4"),
                              header, overwrite=True)
@@ -169,35 +173,74 @@ def _fetch_noirlab(coord: SkyCoord, bands: tuple, size_arcsec: float,
             return []      # no brick here -> genuine no coverage
         brick, _ = resolved
 
+    def _cut(brickname: str, band: str):
+        """One band from one brick; (data, wcs) or None."""
+        # A RAW comma in POS is essential: urlencoding it to %2C makes the
+        # cutout service ignore POS and return the whole ~50 MB brick.
+        url = (f"{NOIRLAB_CUTOUT_URL}?col=ls_{dr}"
+               f"&siaRef=legacysurvey-{brickname}-image-{band}.fits.fz&extn=1"
+               f"&POS={coord.ra.deg:.8f},{coord.dec.deg:.8f}"
+               f"&SIZE={size_deg:.6f}")
+        try:
+            response = requests.get(url, timeout=CUTOUT_TIMEOUT)
+            response.raise_for_status()
+            hdul = fits.open(io.BytesIO(response.content))
+            hdu = next((h for h in hdul if h.data is not None), None)
+        except Exception as e:
+            # A single absent/failed band must not drop the others; the
+            # brick already resolved, so this is not a full outage.
+            print(f"  [Legacy] NOIRLab {band} [{brickname}]: "
+                  f"{type(e).__name__}: {e}")
+            return None
+        if hdu is None or not float(abs(hdu.data).sum()) > 0:
+            print(f"  [Legacy] NOIRLab {band} [{brickname}]: blank cutout")
+            return None
+        return hdu.data, WCS(hdu.header).celestial
+
+    neighbors: list[str] | None = None
     products: list[ImageProduct] = []
     for band in bands:
         path = paths[band]
         if not path.exists():
-            # A RAW comma in POS is essential: urlencoding it to %2C makes the
-            # cutout service ignore POS and return the whole ~50 MB brick.
-            url = (f"{NOIRLAB_CUTOUT_URL}?col=ls_{dr}"
-                   f"&siaRef=legacysurvey-{brick}-image-{band}.fits.fz&extn=1"
-                   f"&POS={coord.ra.deg:.8f},{coord.dec.deg:.8f}"
-                   f"&SIZE={size_deg:.6f}")
-            try:
-                response = requests.get(url, timeout=CUTOUT_TIMEOUT)
-                response.raise_for_status()
-                hdul = fits.open(io.BytesIO(response.content))
-                hdu = next((h for h in hdul if h.data is not None), None)
-            except Exception as e:
-                # A single absent/failed band must not drop the others; the
-                # brick already resolved, so this is not a full outage.
-                print(f"  [Legacy] NOIRLab {band}: {type(e).__name__}: {e}")
+            cut = _cut(brick, band)
+            if cut is None:
                 continue
-            if hdu is None or not float(abs(hdu.data).sum()) > 0:
-                print(f"  [Legacy] NOIRLab {band}: blank cutout")
-                continue
-            header = WCS(hdu.header).celestial.to_header()
+            data, cut_wcs = cut
+
+            # The service cuts from ONE brick, so a box reaching past it
+            # comes back clipped -- silently, since the aperture stays
+            # covered and only the sky annulus is lost. Pay for the
+            # neighbors only when the owning brick actually came up short.
+            if not stamp_spans_request(data, cut_wcs, coord, size_arcsec):
+                if neighbors is None:
+                    neighbors = [b for b in _resolve_bricks(
+                        coord, dr, size_arcsec) if b != brick]
+                    if neighbors:
+                        print(f"  [Legacy] NOIRLab: {brick} is short of the "
+                              f"{size_arcsec:.0f}\" box; mosaicking "
+                              f"{len(neighbors)} neighbor brick(s)")
+                planes = [(data, cut_wcs)]
+                for other in neighbors:
+                    extra = _cut(other, band)
+                    if extra is not None:
+                        planes.append(extra)
+                if len(planes) > 1:
+                    merged, merged_wcs = mosaic_first_valid(
+                        planes, coord, size_arcsec, PIXSCALE)
+                    if merged is not None:
+                        data, cut_wcs = merged, merged_wcs
+                if not stamp_spans_request(data, cut_wcs, coord, size_arcsec):
+                    print(f"  WARNING [Legacy] NOIRLab {band}: stamp still "
+                          f"short of the {size_arcsec:.0f}\" box after "
+                          f"mosaicking; the sky annulus is clipped and the "
+                          f"background plane is fitted over less field")
+
+            header = cut_wcs.to_header()
             header["BUNIT"] = "nanomaggy"
             header["SURVEY"] = f"Legacy_{layer}"
             header["FILTER"] = band
             header["FETCHSRC"] = "noirlab-cutout"
-            fits.writeto(path, hdu.data.astype("f4"), header, overwrite=True)
+            fits.writeto(path, data.astype("f4"), header, overwrite=True)
         if path.exists():
             products.append(ImageProduct(
                 provider='legacy', instrument='Legacy', band=band,
@@ -250,6 +293,74 @@ def _resolve_brick(coord: SkyCoord, dr: str,
     closest = int(coord.separation(sources).argmin())
     brickname = str(result[closest]['brickname'])
     return brickname, _hemisphere(coord, dr)
+
+
+def _resolve_bricks(coord: SkyCoord, dr: str,
+                    radius_arcsec: float) -> list[str]:
+    """Every brick with a primary source within a radius, closest first.
+
+    The cutout service cuts from ONE brick, so a box reaching past that
+    brick comes back clipped. Recovering the clipped side needs the
+    neighbors, and a source's primary brick is the only handle on which
+    tiles are there. Ordered closest-first so a first-valid mosaic
+    prefers the brick that owns the target's own pixels.
+    """
+    import numpy as np
+    from astroquery.utils.tap.core import TapPlus
+    table = {'dr9': 'ls_dr9.tractor', 'dr10': 'ls_dr10.tractor'}[dr]
+    query = f"""
+    SELECT brickname, ra, dec FROM {table}
+    WHERE brick_primary = 1
+      AND 't' = q3c_radial_query(ra, dec, {coord.ra.deg:.8f}, {coord.dec.deg:.8f},
+                                 {radius_arcsec / 3600.0:.8f})
+    """
+    def _run():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return TapPlus(url=TAP_URL).launch_job(query).get_results()
+
+    try:
+        result = retry_transient(_run, "Legacy neighbor-brick TAP")
+    except Exception as e:
+        print(f"  [Legacy] neighbor-brick resolution failed: {e}")
+        return []
+    if len(result) == 0:
+        return []
+    sources = SkyCoord(np.asarray(result['ra'], dtype=float),
+                       np.asarray(result['dec'], dtype=float), unit='deg')
+    order = np.argsort(coord.separation(sources).arcsec)
+    ordered = []
+    for i in order:
+        name = str(result[int(i)]['brickname'])
+        if name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
+def stamp_spans_request(data, wcs, coord: SkyCoord, size_arcsec: float,
+                        tol_arcsec: float = 2.0) -> bool:
+    """Whether a returned stamp covers the requested box about the target.
+
+    A short return is otherwise invisible: the science aperture sits well
+    inside the box, so the coverage gate still reads 1.000 while the SKY
+    annulus is the part that was clipped, and the background plane simply
+    refits over whatever arrived.
+
+    Parameters
+    ----------
+    tol_arcsec : float
+        Slack for the service's own rounding. [default: 2.0]
+    """
+    import numpy as np
+    ny, nx = data.shape
+    half = size_arcsec / 2.0 - tol_arcsec
+    corners = wcs.pixel_to_world(
+        [0, nx - 1, 0, nx - 1], [0, 0, ny - 1, ny - 1])
+    d_ra = (corners.ra.deg - coord.ra.deg) * np.cos(np.radians(coord.dec.deg))
+    d_dec = corners.dec.deg - coord.dec.deg
+    return (np.max(d_ra) * 3600 >= half and np.min(d_ra) * 3600 <= -half
+            and np.max(d_dec) * 3600 >= half
+            and np.min(d_dec) * 3600 <= -half)
 
 
 def _fetch_bricks(coord: SkyCoord, bands: tuple, cache_dir: Path,
