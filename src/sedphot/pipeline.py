@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
@@ -251,6 +252,24 @@ def _resolve_shape(
     return shape_sky, origin
 
 
+def image_fetch_sources(products) -> dict[str, str]:
+    """Each band's FETCHSRC stamp, read back from the image it measured.
+
+    Read from the file rather than tracked through the call, so a cached
+    image reports the route that actually produced it and not the route
+    this run would have taken.
+    """
+    sources = {}
+    for product in products or []:
+        try:
+            with fits.open(product.path) as hdul:
+                stamp = hdul[0].header.get('FETCHSRC')
+        except Exception:
+            stamp = None
+        sources[f"{product.instrument}_{product.band}"] = stamp
+    return sources
+
+
 def measure_sidecar_payload(
         *,
         coord: SkyCoord,
@@ -270,6 +289,7 @@ def measure_sidecar_payload(
         legacy_bricks: bool,
         hst_proposal_id: str | None,
         measurements: list[dict],
+        image_sources: dict[str, str] | None = None,
 ) -> dict:
     """Caller-supplied half of the _measured.csv sidecar.
 
@@ -304,6 +324,12 @@ def measure_sidecar_payload(
         },
         "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
                   if 'legacy' in instruments else None,
+        # Which service served each band's pixels. A provider can have
+        # several routes whose framing differs, and the rotation picks by
+        # what was reachable at fetch time -- so without this the record
+        # cannot say what a published flux was measured on, and once the
+        # image cache is cleared the question is unanswerable.
+        "image_sources": image_sources or {},
         # remeasure.reconstruct replays the fetch options so a rebuild
         # reads the same pixels the fit solved on; an unrecorded program
         # restriction would silently refetch a different HST mosaic.
@@ -644,7 +670,9 @@ def run_measure(
             recipe_snapshot=recipe.snapshot(),
             legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
             hst_proposal_id=hst_proposal_id,
-            measurements=measurements))
+            measurements=measurements,
+            image_sources=image_fetch_sources(
+                [p for _, fetched in fetched_products for p in fetched])))
         print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
         print(measured_df.to_string(index=False))
 
