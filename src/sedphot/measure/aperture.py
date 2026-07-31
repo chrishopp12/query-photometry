@@ -61,9 +61,9 @@ def build_mask(
        shape, or the registry's stored shape for a consumed component --
        floored at seeing. Faint shreds mask little, bright sources stay
        geometrically bounded.
-    2. Stars: each measured profile above its own isophote, no
-       geometric cap (a measured profile cannot claim light it does not
-       see).
+    2. Stars: each masked star's predicted footprint above its own
+       isophote, no geometric cap -- an in-zone star has no design
+       column, so nothing else accounts for its light.
     3. Flood: existing mask islands grown into contiguous pixels whose
        data departs from the local ambient surface -- catches glow the
        catalog never admitted (a shredded catalog row can leak several
@@ -78,8 +78,9 @@ def build_mask(
         Scene components.
     fitted_by : dict
         Per-component fitted neighbor images (owner name -> image).
-    star_masks : list of (name, profile image)
-        Measured star profiles (stars.subtract_stars).
+    star_masks : list of (name, footprint image)
+        Predicted footprints of the masked (in-zone) stars
+        (stars.treat_stars).
     stamp : Stamp
         This band's stamp.
     seeing_arcsec : float
@@ -89,7 +90,7 @@ def build_mask(
     neighbors : np.ndarray
         Fitted neighbor light only, counts.
     image : np.ndarray
-        Star-subtracted data (counts).
+        Stamp data (counts).
     good : np.ndarray
         Usable-pixel map.
     tag : str
@@ -130,8 +131,8 @@ def build_mask(
             geo = z < max(recipe.GEO_REFF_FACTOR * shape['reff_px'],
                           recipe.GEO_SEEING_FLOOR * seeing_px)
         mask |= geo & (fitted_by[comp['name']] > recipe.K_ISO * sigma)
-    for _, star_profile in star_masks:
-        mask |= star_profile > recipe.K_ISO * sigma
+    for _, footprint in star_masks:
+        mask |= footprint > recipe.K_ISO * sigma
 
     # Flood channel: seeded only -- it cannot invent masks. The
     # ambient-relative threshold keeps coherent large-scale light from
@@ -198,7 +199,7 @@ def twin_fill(
     Parameters
     ----------
     image : np.ndarray
-        Star-subtracted data (counts).
+        Stamp data (counts).
     neighbors : np.ndarray
         Fitted neighbor light (counts); subtracted before filling.
     mask : np.ndarray
@@ -338,7 +339,6 @@ def witness_row(
         mask: np.ndarray,
         twin_frac: float,
         neighbors: np.ndarray,
-        star_img: np.ndarray,
         bg: dict,
         track: list,
         flood_ujy: float,
@@ -371,7 +371,7 @@ def witness_row(
         Usable-pixel and neighbor-mask maps.
     twin_frac : float
         Mirror-filled fraction of the masked aperture area.
-    neighbors, star_img : np.ndarray
+    neighbors : np.ndarray
         Subtracted neighbor and star light (counts).
     bg : dict
         The converged background (background.bin_plane).
@@ -429,7 +429,6 @@ def witness_row(
         maskfrac_ap=round(float(mask[ap].mean()), 3),
         twinfrac=round(twin_frac, 2),
         nbsub_ap_uJy=round(float(neighbors[ap].sum() * cf), 1),
-        starsub_ap_uJy=round(float(star_img[ap].sum() * cf), 1),
         flood_uJy=round(flood_ujy, 1),
         bg_sb=round(bg['const'] * sb, 4),
         bg_tilt_sb=round(max(abs(bg['coefs'][1]), abs(bg['coefs'][2]))

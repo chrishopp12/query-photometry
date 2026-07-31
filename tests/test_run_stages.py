@@ -2,6 +2,7 @@
 others) and run_sed's extinction-scale guard."""
 import json
 
+import pytest
 from astropy.coordinates import SkyCoord
 
 from sedphot import pipeline, qa
@@ -114,3 +115,65 @@ def test_run_sed_is_quiet_when_both_tables_are_as_measured(tmp_path,
                 measured_dered=False)
     pipeline.run_sed('t', tmp_path)
     assert 'extinction' not in capsys.readouterr().out
+
+
+# ------------------------------------
+# Stage and provider selection
+# ------------------------------------
+
+def test_selection_accepts_any_combination() -> None:
+    from sedphot.catalogs import CATALOG_PROVIDERS
+    from sedphot.images import IMAGE_PROVIDERS
+    from sedphot.pipeline import select_providers
+
+    # Unstated means every provider: an unstated selection must not
+    # silently drop a stage.
+    assert select_providers(CATALOG_PROVIDERS, None) == list(CATALOG_PROVIDERS)
+    assert select_providers(CATALOG_PROVIDERS, ['all']) == \
+        list(CATALOG_PROVIDERS)
+    assert select_providers(CATALOG_PROVIDERS, ['none']) == []
+    assert select_providers(IMAGE_PROVIDERS, ['legacy']) == ['legacy']
+
+    # Registry order, not the order they were typed, so a run's provider
+    # sequence never depends on how the command line was written.
+    typed = select_providers(IMAGE_PROVIDERS, ['sdss', 'legacy', 'cfht'])
+    assert typed == [n for n in IMAGE_PROVIDERS if n in typed]
+
+    # skip subtracts from either form.
+    assert 'hst' not in select_providers(CATALOG_PROVIDERS, None, skip=['hst'])
+    assert select_providers(CATALOG_PROVIDERS, ['legacy'],
+                            skip=['legacy']) == []
+
+    with pytest.raises(ValueError, match="unknown provider"):
+        select_providers(CATALOG_PROVIDERS, ['nope'])
+
+
+def test_a_stage_with_no_providers_is_skipped_not_run(tmp_path,
+                                                      monkeypatch) -> None:
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
+    from sedphot import pipeline
+
+    called = []
+    monkeypatch.setattr(pipeline, 'run_catalogs',
+                        lambda *a, **k: called.append('catalogs'))
+    monkeypatch.setattr(pipeline, 'run_measure',
+                        lambda *a, **k: called.append('measure'))
+    monkeypatch.setattr(pipeline, 'run_sed', lambda *a, **k: None)
+    coord = SkyCoord(210.0 * u.deg, 30.0 * u.deg)
+
+    # Catalog-only: the measurement stage must not run at all, rather
+    # than run with an empty provider list and fetch nothing.
+    failures = pipeline.run_all(coord, 'target_a', tmp_path, images=['none'])
+    assert called == ['catalogs']
+    assert failures == {}
+
+    called.clear()
+    pipeline.run_all(coord, 'target_a', tmp_path, catalogs=['none'])
+    assert called == ['measure']
+
+    called.clear()
+    pipeline.run_all(coord, 'target_a', tmp_path,
+                     catalogs=['none'], images=['none'])
+    assert called == []

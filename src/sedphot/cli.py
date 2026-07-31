@@ -29,6 +29,7 @@ Usage:
     sedphot batch    --plan PLAN.json --registry-dir DIR --report CSV
                      [--workers 4] [--pass {harvest,parallel,all}]
                      [--no-groups] [--no-resume] [--log-dir DIR]
+                     [--catalogs ... | all | none] [--images ... | all | none]
                      [the measurement group, minus --registry*]
     sedphot sed      --out-dir DIR [--label STEM]
     sedphot overlay  --out-dir DIR [--label STEM] [--zoom-size 5.0]
@@ -38,6 +39,7 @@ Usage:
                      [--shape {forced,fitted}] [--registry FILE]
                      [--write-qa] [--out CSV]
     sedphot run      (--name NAME | --ra DEG --dec DEG) --out-dir DIR
+                     [--catalogs ... | all | none] [--images ... | all | none]
                      [--skip ...] [--spherex {off,psf,sersic}]
                      [every flag in the measurement group -- see
                       `sedphot measure --help`; --dump-arrays is
@@ -365,6 +367,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     failures = run_all(
         coord, label, args.out_dir,
         skip=args.skip,
+        catalogs=args.catalogs,
+        images=args.images,
         radius_arcsec=args.radius,
         dered=args.dered,
         mode=args.mode,
@@ -404,6 +408,8 @@ def _cmd_batch(args: argparse.Namespace) -> None:
     # contradict the plan it is executing.
     run_options = dict(
         skip=args.skip,
+        catalogs=args.catalogs,
+        images=args.images,
         radius_arcsec=args.radius,
         dered=args.dered,
         mode=args.mode,
@@ -700,8 +706,19 @@ def build_parser() -> argparse.ArgumentParser:
         "run", help="Galaxy in, SED photometry out: catalogs + measurement "
                     "+ optional SPHEREx + SED plot")
     _add_target_args(p_run)
-    p_run.add_argument('--skip', nargs='+', default=None, choices=all_providers,
-                       help="Providers to leave out")
+    p_run.add_argument('--catalogs', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Catalog providers to query: names, or 'all' / "
+                             "'none'. 'none' skips the catalog stage "
+                             "entirely [default: all]")
+    p_run.add_argument('--images', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Image providers to measure: names, or 'all' / "
+                             "'none'. 'none' skips the images + measurement "
+                             "stage entirely [default: all]")
+    p_run.add_argument('--skip', nargs='+', default=None,
+                        choices=all_providers,
+                        help="Providers to remove from both selections")
     p_run.add_argument('--radius', type=float, default=2.0,
                        help="Catalog search radius, arcsec [default: 2.0]")
     p_run.add_argument('--dered', action='store_true',
@@ -741,9 +758,19 @@ def build_parser() -> argparse.ArgumentParser:
                          default=DEFAULT_STOP_AFTER_FAILURES,
                          help="Abandon the sweep after this many failures; "
                               f"0 disables [default: {DEFAULT_STOP_AFTER_FAILURES}]")
+    p_batch.add_argument('--catalogs', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Catalog providers to query: names, or 'all' / "
+                             "'none'. 'none' skips the catalog stage "
+                             "entirely [default: all]")
+    p_batch.add_argument('--images', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Image providers to measure: names, or 'all' / "
+                             "'none'. 'none' skips the images + measurement "
+                             "stage entirely [default: all]")
     p_batch.add_argument('--skip', nargs='+', default=None,
-                         choices=all_providers,
-                         help="Providers to leave out")
+                        choices=all_providers,
+                        help="Providers to remove from both selections")
     p_batch.add_argument('--radius', type=float, default=2.0,
                          help="Catalog match radius in arcsec [default: 2.0]")
     p_batch.add_argument('--dered', action='store_true',

@@ -362,14 +362,15 @@ def test_read_targets_accepts_the_shared_sample_catalog(tmp_path) -> None:
                     encoding="utf-8")
     targets = read_targets(path, out_root="/root")
     assert [t['name'] for t in targets] == ['M 87', 'b']
+    # An absolute dir is used as written; the relative case is covered
+    # by test_dir_resolves_under_out_root_like_the_fitter_does.
     assert targets[0]['dir'] == '/data/a'
     # A named label wins; an unnamed one falls back to the sanitized name,
     # because the label is the product filename stem an existing tree
     # already committed to.
     assert targets[0]['label'] == 'm87_deep'
     assert targets[1]['label'] == sanitize_label('b')
-    assert targets[1]['dir'] == str(tmp_path.parent / "root" / "b") \
-        or targets[1]['dir'].endswith("root/b")
+    assert targets[1]['dir'] == "/root/b"     # blank dir falls back to name
     assert targets[1]['priority'] == 5.0
     assert targets[0]['priority'] is None
 
@@ -385,10 +386,11 @@ def test_read_targets_rejects_a_list_it_cannot_use(tmp_path) -> None:
     with pytest.raises(ValueError, match="no ra_deg/dec_deg"):
         read_targets(no_position)
 
+    # Without an out_root a relative dir is used as given, so a catalog
+    # that names no directory still resolves against the caller's cwd.
     no_dir = tmp_path / "no_dir.csv"
     no_dir.write_text("name,ra_deg,dec_deg\na,210.0,30.0\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="no dir and no out-root"):
-        read_targets(no_dir)
+    assert read_targets(no_dir)[0]['dir'] == 'a'
 
 
 def test_write_plan_emits_json_and_an_ordered_csv(tmp_path) -> None:
@@ -406,3 +408,17 @@ def test_write_plan_emits_json_and_an_ordered_csv(tmp_path) -> None:
     assert [r['pass'] for r in rows] == [PASS_HARVEST, PASS_HARVEST,
                                          PASS_PARALLEL]
     assert [r['order'] for r in rows][:2] == ['0', '1']
+
+
+def test_dir_resolves_under_out_root_like_the_fitter_does(tmp_path) -> None:
+    # The seam this closes: sed_fitting resolves dir against a campaign's
+    # data_root, so sedphot must resolve it against out_root or one shared
+    # catalog cannot drive both tools.
+    path = tmp_path / "sample.csv"
+    path.write_text("name,ra_deg,dec_deg,dir\n"
+                    "a,210.0,30.0,Galaxies/gal_a\n"
+                    "b,210.1,30.0,/absolute/gal_b\n", encoding="utf-8")
+    targets = read_targets(path, out_root="/cluster")
+    assert targets[0]['dir'] == "/cluster/Galaxies/gal_a"
+    # An absolute dir still wins, so an existing absolute catalog keeps working.
+    assert targets[1]['dir'] == "/absolute/gal_b"

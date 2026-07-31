@@ -57,7 +57,7 @@ from .seats import apply_registry, build_seats, harvest_seats, load_registry
 from .sersic import theta_from_pa
 from .solve import joint_fit, pinned_fit
 from .stamp import check_coverage, load_stamp
-from .stars import confirm_stars, subtract_stars
+from .stars import confirm_stars, treat_stars
 
 
 # ------------------------------------
@@ -561,13 +561,13 @@ def measure_band(
             check_coverage(stamp, aperture_arcsec=aperture_arcsec,
                            seeing_arcsec=seeing, nodata=~good)
 
-    # Stars leave the problem here.
-    bg0 = bin_plane(raw, good, stamp.rr, stamp.pixscale)
-    star_img, star_masks, comps, star_log = subtract_stars(
-        stamp, raw, good, comps, stars, bg0['const'],
+    # Stars are routed here: masked and filled inside the aperture zone,
+    # a leashed component outside it. Nothing is subtracted from the data.
+    star_masks, comps, star_log = treat_stars(
+        stamp, comps, stars,
         colors=_band_colors(cat, product.band) if len(cat) else None,
         aperture_arcsec=scene_ap, tag=tag)
-    image = raw - star_img
+    image = raw
 
     # A masked-mode star (in-zone revert) has no column and nothing
     # subtracted: its light is still in the pixels, and an unmodeled
@@ -757,7 +757,7 @@ def measure_band(
         m_ap_cat = float((target_comp['base'] * in_ap).sum() * stamp.cf)
 
     witness = witness_row(enc, model_cog, m_ap_cat, stamp, good, mask,
-                          fill['twin_frac'], neighbors, star_img, bg,
+                          fill['twin_frac'], neighbors, bg,
                           track, flood_ujy, seeing, seeing_src,
                           rgrid=rgrid, aperture_arcsec=aperture_arcsec,
                           solve_info=solve_info,
@@ -865,7 +865,7 @@ def measure_band(
             target=target_img, bg=bg['img'], mask=mask,
             free_target=free_target, free_scene=free_scene,
             free_bg=src['bg']['img'],
-            filled=fill['filled'], good=good, star_img=star_img,
+            filled=fill['filled'], good=good,
             amps=np.asarray(fit['amps']),
             owners=np.array(base_owner), cx=stamp.cx, cy=stamp.cy,
             pix=stamp.pixscale, cf=stamp.cf, sigma=stamp.sigma,
