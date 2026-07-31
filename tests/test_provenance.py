@@ -74,15 +74,15 @@ RECONSTRUCT_READS = (
 def _payload(**overrides):
     """A measured payload with the scene-engine shape, minus a measurement."""
     kwargs = dict(
-        coord=SkyCoord(217.48948, 57.04403, unit='deg'),
-        label='control_20', target_name=None,
+        coord=SkyCoord(210.0, 30.0, unit='deg'),
+        label='target_a', target_name=None,
         instruments=['legacy', 'sdss'], mode='aperture',
         aperture_arcsec=12.0, cutout_arcsec=120.0,
         shape_sky=None, shape_origin=None,
         scene={'cat': [0] * 116, 'stars': [0] * 4, 'patches': {}},
         registry_path=None, registry_update=False,
         recipe_snapshot={'BG_RMIN_AS': 15.0},
-        legacy_dr='dr9', legacy_bricks=False,
+        legacy_dr='dr9', legacy_bricks=False, legacy_route='auto',
         hst_proposal_id=None,
         measurements=[{'instrument': 'Legacy', 'band': 'z',
                        'witness': {'flux_uJy': 1099.6}}],
@@ -107,7 +107,8 @@ def test_the_hst_program_is_null_when_hst_did_not_run():
 
 
 def test_the_legacy_block_tracks_the_instrument_list():
-    assert _payload()['legacy'] == {'dr': 'dr9', 'bricks': False}
+    assert _payload()['legacy'] == {'dr': 'dr9', 'bricks': False,
+                                    'route': 'auto'}
     assert _payload(instruments=['sdss'])['legacy'] is None
 
 
@@ -150,3 +151,59 @@ def test_the_payload_survives_the_round_trip_through_write_sidecar(tmp_path):
         assert key in record
     assert record['package'] == 'sedphot'      # automatic fields still land
     assert record['aperture_arcsec'] == 12.0   # caller fields survive
+
+
+# ------------------------------------
+# Which service served each image
+# ------------------------------------
+
+class _Product:
+    def __init__(self, instrument, band, path):
+        self.instrument, self.band, self.path = instrument, band, str(path)
+
+
+def test_the_sidecar_records_which_service_served_each_band(tmp_path) -> None:
+    import numpy as np
+    from astropy.io import fits
+
+    from sedphot.pipeline import image_fetch_sources
+
+    made = []
+    for band, src in (('g', 'viewer-cutout'), ('r', 'noirlab-cutout'),
+                      ('z', None)):
+        path = tmp_path / f"legacy_{band}.fits"
+        header = fits.Header()
+        if src is not None:
+            header['FETCHSRC'] = src
+        fits.writeto(path, np.zeros((4, 4), dtype="f4"), header)
+        made.append(_Product('Legacy', band, path))
+
+    assert image_fetch_sources(made) == {'Legacy_g': 'viewer-cutout',
+                                         'Legacy_r': 'noirlab-cutout',
+                                         'Legacy_z': None}
+
+
+def test_an_unreadable_image_reports_none_rather_than_raising(tmp_path) -> None:
+    from sedphot.pipeline import image_fetch_sources
+
+    path = tmp_path / "not_a_fits.fits"
+    path.write_text("garbage", encoding='utf-8')
+    assert image_fetch_sources([_Product('Legacy', 'g', path)]) == \
+        {'Legacy_g': None}
+    assert image_fetch_sources([]) == {}
+    assert image_fetch_sources(None) == {}
+
+
+def test_the_payload_separates_the_route_asked_from_the_one_served() -> None:
+    # Under 'auto' these differ exactly when a service was down, which is
+    # the case worth being able to find later.
+    payload = _payload(legacy_route='auto')
+    assert payload['legacy']['route'] == 'auto'
+    assert 'image_sources' in payload
+
+    pinned = _payload(legacy_route='noirlab')
+    assert pinned['legacy']['route'] == 'noirlab'
+
+
+def test_the_route_is_absent_when_legacy_was_not_measured() -> None:
+    assert _payload(instruments=['sdss'])['legacy'] is None

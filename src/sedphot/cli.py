@@ -21,8 +21,16 @@ Usage:
                      (--instruments legacy sdss cfht ... | --all)
                      [--mode {aperture,sersic}] [--aperture 12.0]
                      [--sky-rmin AS] [--registry FILE [--registry-update]]
+                     [--legacy-route {auto,viewer,noirlab}]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
+    sedphot plan     --targets CSV --out PLAN.json [--out-root DIR]
+                     [--cutout-size 120.0] [--link-margin AS]
+    sedphot batch    --plan PLAN.json --registry-dir DIR --report CSV
+                     [--workers 4] [--pass {harvest,parallel,all}]
+                     [--no-groups] [--no-resume] [--log-dir DIR]
+                     [--catalogs ... | all | none] [--images ... | all | none]
+                     [the measurement group, minus --registry*]
     sedphot sed      --out-dir DIR [--label STEM]
     sedphot overlay  --out-dir DIR [--label STEM] [--zoom-size 5.0]
                      [--context-size 15.0] [--wcs-from FITS]
@@ -31,6 +39,7 @@ Usage:
                      [--shape {forced,fitted}] [--registry FILE]
                      [--write-qa] [--out CSV]
     sedphot run      (--name NAME | --ra DEG --dec DEG) --out-dir DIR
+                     [--catalogs ... | all | none] [--images ... | all | none]
                      [--skip ...] [--spherex {off,psf,sersic}]
                      [every flag in the measurement group -- see
                       `sedphot measure --help`; --dump-arrays is
@@ -52,19 +61,31 @@ Examples:
     Uniform aperture photometry on every available image:
         sedphot measure --name "M87" --all --aperture 12 \\
             --out-dir Galaxies/M87
+
+    Pin the Legacy cutout service so a sample stays on one gridding.
+    The routes do not frame identically, so under the default 'auto' a
+    service outage silently splits a sample between them; pinning makes
+    the outage an error instead. The route asked for is recorded in the
+    sidecar's legacy.route, and the route that actually answered in its
+    image_sources:
+        sedphot measure --name "M87" --all --legacy-route noirlab \\
+            --out-dir Galaxies/M87
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
+from .batch import DEFAULT_STOP_AFTER_FAILURES
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .images import IMAGE_PROVIDERS
+from .images.legacy import LEGACY_ROUTES, ROUTE_AUTO
 from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
                        run_sed, run_spherex)
 from .resolve import resolve_target
 from .results import STATUS_OK
+from .schedule import DEFAULT_LINK_MARGIN_AS
 
 
 # ------------------------------------
@@ -103,11 +124,20 @@ def _resolve_from_args(args: argparse.Namespace):
         _usage_error(str(e))
 
 
-def _add_measure_args(parser: argparse.ArgumentParser) -> None:
-    """Every measurement option, shared by the measure and run verbs.
+def _add_measure_args(parser: argparse.ArgumentParser, *,
+                      registry_args: bool = True) -> None:
+    """Every measurement option, shared by the measure, run and batch verbs.
 
     Defined once so run always accepts the same set as measure; a flag run
     silently lacked would show up only as a wrong flux.
+
+    Parameters
+    ----------
+    registry_args : bool
+        Expose --registry/--registry-update. batch sets this False: the
+        sweep owns one registry per group during the harvest pass and a
+        frozen union afterward, so a caller-supplied pair would
+        contradict the plan being executed. [default: True]
     """
     group = parser.add_argument_group("measurement")
     group.add_argument('--mode', type=str, default='aperture',
@@ -130,6 +160,10 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                             "sized for survey galaxies; a compact HST target "
                             "wants a few arcsec "
                             "[default: recipe.BG_RMIN_AS = 15]")
+    if not registry_args:
+        parser.set_defaults(registry=None, registry_update=False)
+        _add_shape_args(group)
+        return
     group.add_argument('--registry', type=str, default=None,
                        help="Cross-field registry JSON to consume (solved "
                             "shared sources enter as frozen components). "
@@ -141,6 +175,11 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                        help="Also write this galaxy's solved seats back to "
                             "--registry (updates are last-writer-wins; run "
                             "sweeps serially)")
+    _add_shape_args(group)
+
+
+def _add_shape_args(group) -> None:
+    """The shape and provider options, on both sides of the registry pair."""
     group.add_argument('--sersic-from', type=str, default=None,
                        help="Sersic mode: pin the target shape to a fit on "
                             "this band ('z' or 'Legacy_z') [default: "
@@ -161,6 +200,15 @@ def _add_measure_args(parser: argparse.ArgumentParser) -> None:
                        help="Fetch NERSC brick coadds instead of viewer "
                             "cutouts: adds the inverse-variance map "
                             "(per-pixel errors), ~40 MB/file")
+    group.add_argument('--legacy-route', type=str, default=ROUTE_AUTO,
+                       choices=LEGACY_ROUTES,
+                       help="Which Legacy cutout service to use. 'auto' "
+                            "tries the NERSC viewer then falls back to "
+                            "NOIRLab; 'viewer' or 'noirlab' pins one and "
+                            "fails rather than substituting the other. The "
+                            "two do not frame identically, so under 'auto' "
+                            "an outage silently splits a sample across two "
+                            f"griddings [default: {ROUTE_AUTO}]")
     group.add_argument('--hst-proposal-id', type=str, default=None,
                        help="Restrict the HST provider to one program")
 
@@ -231,6 +279,58 @@ def _cmd_sed(args: argparse.Namespace) -> None:
     run_sed(args.label, args.out_dir)
 
 
+def _cmd_plan(args: argparse.Namespace) -> None:
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
+    from .measure import recipe
+    from .schedule import (build_plan, census_from_catalog, fetch_catalog,
+                           read_targets, write_plan)
+
+    targets = read_targets(args.targets, out_root=args.out_root)
+    print(f"{len(targets)} targets from {args.targets}")
+
+    census = []
+    for i, target in enumerate(targets, start=1):
+        coord = SkyCoord(target['ra_deg'] * u.deg, target['dec_deg'] * u.deg)
+        cat = fetch_catalog(coord, target['dir'],
+                            cutout_arcsec=args.cutout_size,
+                            legacy_dr=args.legacy_dr)
+        entry = census_from_catalog(coord, cat,
+                                    cutout_arcsec=args.cutout_size)
+        census.append(entry)
+        print(f"  [{i}/{len(targets)}] {target['name']}: "
+              f"{len(cat)} scene rows, {entry['n_gated']} gated"
+              + ("" if entry['matched'] else ", NO CATALOG MATCH")
+              + (", gates" if entry['gates'] else ""))
+
+    plan = build_plan(targets, census, cutout_arcsec=args.cutout_size,
+                      margin_arcsec=args.link_margin)
+    json_path, csv_path = write_plan(plan, args.out)
+
+    print(f"\nscene cone {plan['scene_radius_arcsec']}\", "
+          f"gate reach {plan['gate_reach_arcsec']}\", "
+          f"link {plan['link_radius_arcsec']}\" "
+          f"(margin {plan['link_margin_arcsec']}\")")
+    print(f"harvest pass: {plan['n_harvest']} targets in "
+          f"{plan['n_groups']} group(s), largest {plan['largest_group']}")
+    print(f"parallel pass: {plan['n_parallel']} targets")
+    if plan['n_unmatched']:
+        print(f"WARNING: {plan['n_unmatched']} target(s) have no catalog "
+              f"row within {recipe.TARGET_MATCH_AS}\"")
+    print(f"{json_path}\n{csv_path}")
+
+    if plan['n_violations']:
+        for v in plan['violations'][:10]:
+            print(f"  {v['ra_deg']:.6f} {v['dec_deg']:+.6f} written by "
+                  f"{v['written_by']} (group {v['written_group']}), read by "
+                  f"{v['read_by']} (group {v['read_group']})")
+        sys.exit(f"sedphot plan: {plan['n_violations']} record(s) cross a "
+                 f"group boundary, so running the groups concurrently would "
+                 f"not equal running them in sequence; raise --link-margin "
+                 f"above {plan['link_margin_arcsec']} and re-plan")
+
+
 def _cmd_overlay(args: argparse.Namespace) -> None:
     if run_overlay(args.label, args.out_dir,
                    zoom_arcsec=args.zoom_size,
@@ -267,6 +367,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     failures = run_all(
         coord, label, args.out_dir,
         skip=args.skip,
+        catalogs=args.catalogs,
+        images=args.images,
         radius_arcsec=args.radius,
         dered=args.dered,
         mode=args.mode,
@@ -280,13 +382,87 @@ def _cmd_run(args: argparse.Namespace) -> None:
         registry_path=args.registry,
         registry_update=args.registry_update,
         spherex_model=args.spherex,
+        spherex_bkg_size=args.spherex_bkg_size,
+        spherex_mjd_range=args.spherex_mjd_range,
+        spherex_timeout=args.spherex_timeout,
         sersic_params=args.sersic_params,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
         hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )
     if failures:
+        sys.exit(1)
+
+
+def _cmd_batch(args: argparse.Namespace) -> None:
+    import json
+
+    from .batch import run_sweep
+
+    _check_measure_args(args, 'batch')
+    # IRSA runs at most two spectrophotometry jobs at a time. Whether a
+    # third queues or is refused is not established, and a sweep is the
+    # wrong place to find out: each job is a 20-60 minute server-side
+    # extraction, so a refusal wastes an hour per target and a silent
+    # queue makes --workers meaningless for this stage either way.
+    if args.spherex != 'off' and args.workers > SPHEREX_MAX_WORKERS:
+        sys.exit(f"sedphot batch: --spherex {args.spherex} with "
+                 f"--workers {args.workers} would submit up to "
+                 f"{args.workers} concurrent IRSA extractions; the service "
+                 f"admits {SPHEREX_MAX_WORKERS}. Re-run with --workers "
+                 f"{SPHEREX_MAX_WORKERS} or fewer, or sweep the photometry "
+                 f"with --spherex off and fetch the extractions separately.")
+    with open(args.plan, encoding='utf-8') as handle:
+        plan = json.load(handle)
+
+    # registry_path and registry_update are the sweep's to set: the
+    # harvest pass owns one registry per group and the parallel pass
+    # runs against the frozen union, so a caller-supplied pair would
+    # contradict the plan it is executing.
+    run_options = dict(
+        skip=args.skip,
+        catalogs=args.catalogs,
+        images=args.images,
+        radius_arcsec=args.radius,
+        dered=args.dered,
+        mode=args.mode,
+        bands=args.bands,
+        aperture_arcsec=args.aperture,
+        cutout_arcsec=args.cutout_size,
+        sky_rmin_arcsec=args.sky_rmin,
+        rgrid=args.radii,
+        sersic_from=args.sersic_from,
+        sersic_seeing=args.sersic_seeing,
+        spherex_model=args.spherex,
+        spherex_bkg_size=args.spherex_bkg_size,
+        spherex_mjd_range=args.spherex_mjd_range,
+        spherex_timeout=args.spherex_timeout,
+        sersic_params=args.sersic_params,
+        legacy_dr=args.legacy_dr,
+        legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
+        hst_proposal_id=args.hst_proposal_id,
+    )
+    try:
+        summary = run_sweep(
+            plan, registry_dir=args.registry_dir, run_options=run_options,
+            which_pass=args.pass_, workers=args.workers,
+            resume=not args.no_resume, groups=not args.no_groups,
+            report_path=args.report, log_dir=args.log_dir,
+            stop_after_failures=args.stop_after_failures)
+    except ValueError as err:
+        sys.exit(f"sedphot batch: {err}")
+
+    for problem in summary['merge_problems'][:10]:
+        print(f"  shared key: {problem}")
+    for violation in summary['violations'][:10]:
+        print(f"  crossing: {violation['ra_deg']:.6f} "
+              f"{violation['dec_deg']:+.6f} written in group "
+              f"{violation['written_group']}, read by {violation['read_by']} "
+              f"in group {violation['read_group']}")
+    if summary['aborted'] or summary['n_failed']:
         sys.exit(1)
 
 
@@ -355,6 +531,7 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
         dump_arrays=args.dump_arrays,
         legacy_dr=args.legacy_dr,
         legacy_bricks=args.legacy_bricks,
+        legacy_route=args.legacy_route,
         hst_proposal_id=args.hst_proposal_id,
         target_name=args.name,
     )
@@ -363,6 +540,33 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
 # ------------------------------------
 # Parser
 # ------------------------------------
+# IRSA admits two concurrent spectrophotometry jobs. Behavior past that
+# is unverified -- they may queue or be refused -- so the batch verb caps
+# rather than discovering it mid-sweep.
+SPHEREX_MAX_WORKERS = 2
+
+
+def _add_spherex_job_args(parser_obj) -> None:
+    """The SPHEREx extraction knobs shared by `run` and `batch`.
+
+    run_all owns one SPHEREx stage, so every verb that drives it must be
+    able to set the same extraction configuration -- a sweep that cannot
+    set an MJD window cannot avoid the bad-epoch failure mode.
+    """
+    parser_obj.add_argument('--spherex-bkg-size', type=float, default=15.0,
+                            help="SPHEREx background region, pixels "
+                                 "[default: 15]")
+    parser_obj.add_argument('--spherex-mjd-range', nargs=2, type=float,
+                            default=None, metavar=('START', 'END'),
+                            help="SPHEREx visit window (MJD). Epochs with "
+                                 "broken file metadata kill jobs server-side; "
+                                 "restricting to a known-good window is the "
+                                 "IRSA-documented workaround")
+    parser_obj.add_argument('--spherex-timeout', type=float, default=10800.0,
+                            help="SPHEREx job timeout, seconds "
+                                 "[default: 10800]")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the argparse tree: one subparser per verb."""
     parser = argparse.ArgumentParser(
@@ -435,8 +639,10 @@ def build_parser() -> argparse.ArgumentParser:
                                 "workaround for broken-metadata epochs)")
     p_spherex.add_argument('--poll', type=float, default=5.0,
                            help="Job poll interval, seconds [default: 5]")
-    p_spherex.add_argument('--timeout', type=float, default=3600.0,
-                           help="Job timeout, seconds [default: 3600]")
+    p_spherex.add_argument('--timeout', type=float, default=10800.0,
+                           help="Job timeout, seconds. IRSA queues these"
+                                " for ~30 min and the extraction itself can"
+                                " run an hour [default: 10800]")
     p_spherex.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
                            choices=('dr10', 'dr9'),
                            help="Legacy Surveys data release for a shape-fit "
@@ -450,6 +656,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
     p_sed.set_defaults(func=_cmd_sed)
+
+    p_plan = subparsers.add_parser(
+        "plan", help="Plan a multi-target sweep: gate census, groups, order")
+    p_plan.add_argument('--targets', type=str, required=True,
+                        help="Target CSV: a name column, ra_deg/dec_deg, "
+                             "an optional dir and priority")
+    p_plan.add_argument('--out', type=str, required=True,
+                        help="Plan JSON to write; the flat CSV goes beside it")
+    p_plan.add_argument('--out-root', type=str, default=None,
+                        help="Parent directory for targets whose CSV row "
+                             "names no dir")
+    p_plan.add_argument('--cutout-size', type=float, default=120.0,
+                        help="Stamp width the sweep will use; both the scene "
+                             "cone and the gate reach derive from it "
+                             "[default: 120.0]")
+    p_plan.add_argument('--link-margin', type=float,
+                        default=DEFAULT_LINK_MARGIN_AS,
+                        help="Padding past the modeled write-plus-read span "
+                             "before two fields are called independent "
+                             f"[default: {DEFAULT_LINK_MARGIN_AS}]")
+    p_plan.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
+                        choices=['dr10', 'dr9'],
+                        help=f"Scene catalog release [default: {LEGACY_DR_DEFAULT}]")
+    p_plan.set_defaults(func=_cmd_plan)
 
     p_overlay = subparsers.add_parser(
         "overlay",
@@ -523,8 +753,19 @@ def build_parser() -> argparse.ArgumentParser:
         "run", help="Galaxy in, SED photometry out: catalogs + measurement "
                     "+ optional SPHEREx + SED plot")
     _add_target_args(p_run)
-    p_run.add_argument('--skip', nargs='+', default=None, choices=all_providers,
-                       help="Providers to leave out")
+    p_run.add_argument('--catalogs', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Catalog providers to query: names, or 'all' / "
+                             "'none'. 'none' skips the catalog stage "
+                             "entirely [default: all]")
+    p_run.add_argument('--images', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Image providers to measure: names, or 'all' / "
+                             "'none'. 'none' skips the images + measurement "
+                             "stage entirely [default: all]")
+    p_run.add_argument('--skip', nargs='+', default=None,
+                        choices=all_providers,
+                        help="Providers to remove from both selections")
     p_run.add_argument('--radius', type=float, default=2.0,
                        help="Catalog search radius, arcsec [default: 2.0]")
     p_run.add_argument('--dered', action='store_true',
@@ -533,7 +774,61 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--spherex', type=str, default='off',
                        choices=('off', 'psf', 'sersic'),
                        help="Also fetch SPHEREx spectrophotometry [default: off]")
+    _add_spherex_job_args(p_run)
     p_run.set_defaults(func=_cmd_run)
+
+    p_batch = subparsers.add_parser(
+        "batch", help="Execute a plan: the harvest pass, then the parallel one")
+    p_batch.add_argument('--plan', type=str, required=True,
+                         help="Plan JSON from `sedphot plan`")
+    p_batch.add_argument('--registry-dir', type=str, required=True,
+                         help="Per-group registries and the merged, frozen "
+                              "one land here")
+    p_batch.add_argument('--report', type=str, required=True,
+                         help="Per-target report CSV")
+    p_batch.add_argument('--log-dir', type=str, default=None,
+                         help="Per-target stdout logs [default: interleaved]")
+    p_batch.add_argument('--workers', type=int, default=4,
+                         help="Concurrent groups, then concurrent targets. "
+                              "The parallel pass is bounded by what the "
+                              "archives tolerate, not by cores [default: 4]")
+    p_batch.add_argument('--pass', dest='pass_', type=str, default='all',
+                         choices=('harvest', 'parallel', 'all'),
+                         help="Which pass to run [default: all]")
+    p_batch.add_argument('--no-groups', action='store_true',
+                         help="Run the harvest pass as one sequence against "
+                              "one registry: the reference the grouped path "
+                              "is judged against")
+    p_batch.add_argument('--no-resume', action='store_true',
+                         help="Re-measure targets that already have a "
+                              "measured table and a readable sidecar")
+    p_batch.add_argument('--stop-after-failures', type=int,
+                         default=DEFAULT_STOP_AFTER_FAILURES,
+                         help="Abandon the sweep after this many failures; "
+                              f"0 disables [default: {DEFAULT_STOP_AFTER_FAILURES}]")
+    p_batch.add_argument('--catalogs', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Catalog providers to query: names, or 'all' / "
+                             "'none'. 'none' skips the catalog stage "
+                             "entirely [default: all]")
+    p_batch.add_argument('--images', nargs='+', default=None,
+                        metavar='PROVIDER',
+                        help="Image providers to measure: names, or 'all' / "
+                             "'none'. 'none' skips the images + measurement "
+                             "stage entirely [default: all]")
+    p_batch.add_argument('--skip', nargs='+', default=None,
+                        choices=all_providers,
+                        help="Providers to remove from both selections")
+    p_batch.add_argument('--radius', type=float, default=2.0,
+                         help="Catalog match radius in arcsec [default: 2.0]")
+    p_batch.add_argument('--dered', action='store_true',
+                         help="Deredden the catalog table")
+    p_batch.add_argument('--spherex', type=str, default='off',
+                         choices=('off', 'psf', 'sersic'),
+                         help="SPHEREx extraction [default: off]")
+    _add_spherex_job_args(p_batch)
+    _add_measure_args(p_batch, registry_args=False)
+    p_batch.set_defaults(func=_cmd_batch)
 
     return parser
 

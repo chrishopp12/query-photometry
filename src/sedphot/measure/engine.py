@@ -57,7 +57,7 @@ from .seats import apply_registry, build_seats, harvest_seats, load_registry
 from .sersic import theta_from_pa
 from .solve import joint_fit, pinned_fit
 from .stamp import check_coverage, load_stamp
-from .stars import confirm_stars, subtract_stars
+from .stars import confirm_stars, treat_stars
 
 
 # ------------------------------------
@@ -214,6 +214,62 @@ def _system_names(comps: list[dict], patches: dict, stamp) -> set[str]:
             print(f"    target_system member at ({member['ra']:.5f},"
                   f"{member['dec']:.5f}) matches no component; ignored")
     return names
+
+
+def leash_witness(
+        owners: list[str],
+        amps,
+        amp_bounds: list,
+        amp_bound_kind: list,
+        *,
+        tol: float = 1e-3,
+    ) -> tuple[list[str], list[dict]]:
+    """Amplitudes sitting on a bound, with the side and family that bound.
+
+    An amplitude pinned at its bound is a WITNESS: the solve wanted a value
+    the bound forbade (a mis-scaled star leash, a registry anchor the data
+    contradict, a frozen seat whose shape the band disagrees with). Checked
+    over EVERY column, seats included -- a frozen seat is precisely the case
+    where the amplitude is the only freedom left.
+
+    A zero LOWER bound is the non-negativity floor every column carries, not
+    a leash: an amplitude solving to zero there is the data answering "no
+    light", which is an answer and not a constraint. Only a POSITIVE floor
+    forbids something the data wanted. The two directions mean opposite
+    things -- a ceiling hit says the stamp wanted MORE light than the
+    component can supply -- so the side and the family are recorded, not
+    just the owner name.
+
+    Returns
+    -------
+    names : list of str
+        Owner names, sorted; the count is the `leash=N` flag token.
+    detail : list of dict
+        owner, kind, side ('lo'/'hi'), amp_uJy, bound_uJy.
+    """
+    names, detail = [], []
+    for i, (owner, amp, band_lohi) in enumerate(
+            zip(owners, amps, amp_bounds)):
+        lo, hi = band_lohi
+        if lo is None or hi is None:
+            continue
+        span = hi - lo
+        if not span > 0:
+            continue
+        at_lo = lo > 0.0 and (amp - lo) < tol * span
+        at_hi = (hi - amp) < tol * span
+        if not (at_lo or at_hi):
+            continue
+        names.append(owner)
+        detail.append(dict(
+            owner=owner,
+            kind=(amp_bound_kind[i] if i < len(amp_bound_kind)
+                  else 'unknown'),
+            side='lo' if at_lo else 'hi',
+            amp_uJy=round(float(amp), 6),
+            bound_uJy=round(float(lo if at_lo else hi), 6)))
+    detail.sort(key=lambda d: (d['kind'], d['side'], d['owner']))
+    return sorted(names), detail
 
 
 def _band_colors(cat: pd.DataFrame, band: str) -> dict[int, float]:
@@ -505,13 +561,13 @@ def measure_band(
             check_coverage(stamp, aperture_arcsec=aperture_arcsec,
                            seeing_arcsec=seeing, nodata=~good)
 
-    # Stars leave the problem here.
-    bg0 = bin_plane(raw, good, stamp.rr, stamp.pixscale)
-    star_img, star_masks, comps, star_log = subtract_stars(
-        stamp, raw, good, comps, stars, bg0['const'],
+    # Stars are routed here: masked and filled inside the aperture zone,
+    # a leashed component outside it. Nothing is subtracted from the data.
+    star_masks, comps, star_log = treat_stars(
+        stamp, comps, stars,
         colors=_band_colors(cat, product.band) if len(cat) else None,
         aperture_arcsec=scene_ap, tag=tag)
-    image = raw - star_img
+    image = raw
 
     # A masked-mode star (in-zone revert) has no column and nothing
     # subtracted: its light is still in the pixels, and an unmodeled
@@ -630,16 +686,13 @@ def measure_band(
     # seats included -- a frozen seat is precisely the case where the
     # amplitude is the only freedom left, so it is the one that must not go
     # unwatched.
-    leashed_at_bound = []
-    for owner, amp, band_lohi in zip(base_owner, fit['amps'],
-                                     fit.get('amp_bounds') or []):
-        lo, hi = band_lohi
-        span = (hi - lo) if (lo is not None and hi is not None) else None
-        if span and span > 0 and (amp - lo < 1e-3 * span
-                                  or hi - amp < 1e-3 * span):
-            leashed_at_bound.append(owner)
-    if leashed_at_bound:
-        print(f"    {tag}leash-bound amps: {sorted(leashed_at_bound)}")
+    leashed_at_bound, leash_detail = leash_witness(
+        base_owner, fit['amps'], fit.get('amp_bounds') or [],
+        fit.get('amp_bound_kind') or [])
+    if leash_detail:
+        shown = ", ".join(f"{d['owner']}:{d['kind']}@{d['side']}"
+                          for d in leash_detail)
+        print(f"    {tag}leash-bound amps: {shown}")
     scene_img = np.zeros_like(image)
     neighbors = np.zeros_like(image)
     target_img = np.zeros_like(image)
@@ -704,7 +757,7 @@ def measure_band(
         m_ap_cat = float((target_comp['base'] * in_ap).sum() * stamp.cf)
 
     witness = witness_row(enc, model_cog, m_ap_cat, stamp, good, mask,
-                          fill['twin_frac'], neighbors, star_img, bg,
+                          fill['twin_frac'], neighbors, bg,
                           track, flood_ujy, seeing, seeing_src,
                           rgrid=rgrid, aperture_arcsec=aperture_arcsec,
                           solve_info=solve_info,
@@ -718,7 +771,12 @@ def measure_band(
     if artifact_as2 > 0:
         witness['artifact_flood_as2'] = round(flood_as2, 1)
     witness['mesh_ap_uJy'] = round(mesh_ap_ujy, 1)
-    witness['leash_bound'] = sorted(leashed_at_bound)
+    witness['leash_bound'] = leashed_at_bound
+    # The detail the owner-name list cannot carry: which bound family, which
+    # side, and how far. A hit at a ceiling and a hit at a floor mean
+    # opposite things, and neither is recoverable from a name.
+    if leash_detail:
+        witness['leash_detail'] = leash_detail
     # The fit state: everything a re-derivation needs without a solver
     # -- a new aperture reads the enclosed curve, a scene rebuild takes
     # the amplitudes + solve params + plane coefficients + mesh grid.
@@ -807,7 +865,7 @@ def measure_band(
             target=target_img, bg=bg['img'], mask=mask,
             free_target=free_target, free_scene=free_scene,
             free_bg=src['bg']['img'],
-            filled=fill['filled'], good=good, star_img=star_img,
+            filled=fill['filled'], good=good,
             amps=np.asarray(fit['amps']),
             owners=np.array(base_owner), cx=stamp.cx, cy=stamp.cy,
             pix=stamp.pixscale, cf=stamp.cf, sigma=stamp.sigma,

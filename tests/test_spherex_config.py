@@ -261,3 +261,92 @@ def test_manifest_write_is_atomic_and_accumulates(tmp_path):
     assert set(manifest["entries"]) == {"sersic-abc123", "psf-def456"}
     # write-then-replace leaves no sibling temp file behind
     assert [p.name for p in tmp_path.iterdir()] == ["extractions.json"]
+
+
+# ------------------------------------
+# Failure reporting
+# ------------------------------------
+# Verbatim from IRSA on a job that failed 2026-07-30: the detail lives in
+# the job document's errorSummary, and {job}/error is explicitly unused.
+IRSA_ERRORED_JOB = """<?xml version="1.0" encoding="UTF-8"?>
+<uws:job version="1.1" xmlns:uws="http://www.ivoa.net/xml/UWS/v1.0"
+         xmlns:xlink="http://www.w3.org/1999/xlink">
+<uws:jobId>j1</uws:jobId>
+<uws:phase>ERROR</uws:phase>
+<uws:results></uws:results>
+<uws:errorSummary type="fatal" hasDetail="false">
+<uws:message>Internal error; contact IRSA user support (Subprocess \
+executing one of the pipelines failed)</uws:message>
+</uws:errorSummary>
+</uws:job>"""
+
+IRSA_HEALTHY_JOB = """<?xml version="1.0" encoding="UTF-8"?>
+<uws:job version="1.1" xmlns:uws="http://www.ivoa.net/xml/UWS/v1.0">
+<uws:jobId>j1</uws:jobId>
+<uws:phase>EXECUTING</uws:phase>
+<uws:results></uws:results>
+</uws:job>"""
+
+IRSA_ERROR_ENDPOINT = ("Error details are included in the job's errorSummary "
+                       "element. This endpoint is not used.")
+
+UWS_URL = "https://irsa.ipac.caltech.edu/api/spherex/spectrophotometry/async/j1"
+
+
+class _Reply:
+    def __init__(self, status_code, text):
+        self.status_code = status_code
+        self.text = text
+
+
+class _Session:
+    """Answers the job document and /error separately, as UWS does."""
+
+    def __init__(self, job=None, error=None):
+        self._job = job
+        self._error = error
+        self.asked = []
+
+    def get(self, url, timeout=None):
+        self.asked.append(url)
+        if url.endswith("/error"):
+            return self._error or _Reply(404, IRSA_ERROR_ENDPOINT)
+        return self._job or _Reply(404, "no job")
+
+
+def test_uws_error_detail_reads_the_irsa_error_summary():
+    from sedphot.spherex import uws_error_detail
+    session = _Session(job=_Reply(200, IRSA_ERRORED_JOB))
+    detail = uws_error_detail(session, UWS_URL)
+    assert "Subprocess executing one of the pipelines failed" in detail
+    assert "[fatal]" in detail
+    # the job document answers it; /error is IRSA-unused and not needed
+    assert session.asked[0] == UWS_URL
+
+
+def test_uws_error_detail_is_none_for_a_healthy_job():
+    # No errorSummary, and IRSA's /error 404s -- neither may read as a
+    # message, or every healthy job would look like a failure.
+    from sedphot.spherex import uws_error_detail
+    session = _Session(job=_Reply(200, IRSA_HEALTHY_JOB))
+    assert uws_error_detail(session, UWS_URL) is None
+
+
+def test_uws_error_detail_falls_back_to_the_error_endpoint():
+    # Other UWS services do populate {job}/error; the fallback keeps this
+    # useful against them without assuming IRSA's convention.
+    from sedphot.spherex import uws_error_detail
+    session = _Session(job=_Reply(200, IRSA_HEALTHY_JOB),
+                       error=_Reply(200, json.dumps({"detail": "bad shape"})))
+    assert uws_error_detail(session, UWS_URL) == "bad shape"
+
+
+def test_uws_error_detail_survives_an_unreachable_service():
+    import requests as requests_mod
+    from sedphot.spherex import uws_error_detail
+
+    class _Dead:
+        def get(self, url, timeout=None):
+            raise requests_mod.exceptions.ReadTimeout("no route")
+
+    assert uws_error_detail(_Dead(), UWS_URL) is None

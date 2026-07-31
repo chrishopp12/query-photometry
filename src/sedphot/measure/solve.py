@@ -556,6 +556,7 @@ def joint_fit(
     solve_info, nfev_hist = None, []
     cols, owners, col_flux, bounds = [], [], [], None
     amp_bounds: list = []
+    amp_bound_kind: list = []
 
     solving = bool(seats) and ref is None
     transfer = (_transfer_setup(seats, ref, stamp, psf,
@@ -620,15 +621,27 @@ def joint_fit(
             # column can solve to an absurd amplitude on a near-zero
             # render and poison every sibling band's leash.
             fixed_bounds = [c.get('amp_lohi', (None, None)) for c in fixed]
+            fixed_kind = [('star' if c.get('star_reverted')
+                           else 'registry' if c.get('reg')
+                           else 'ceiling') for c in fixed]
             if bounds is None:
                 cat_by = {c['name']: c['cat'] for c in comps}
                 seat_bounds = [(0.0, recipe.AMP_MAX_X_CAT
                                 * max(cat_by.get(o, 1.0), 1.0))
                                for o in owners]
+                seat_kind = ['ceiling'] * len(owners)
             else:
                 seat_bounds = bounds
+                seat_kind = ['transfer'] * len(owners)
             amp_bounds = fixed_bounds + seat_bounds
+            amp_bound_kind = fixed_kind + seat_kind
             design = _design(bases, good, fixed_flux + col_flux, amp_bounds)
+            # Report the bounds the solve ACTUALLY enforced, not the ones
+            # requested: a component with no amp_lohi still carries the
+            # generic AMP_MAX_X_CAT ceiling, and a (None, None) entry hides
+            # it from every witness downstream.
+            amp_bounds = [(float(lo), float(hi))
+                          for lo, hi in zip(design[2], design[3])]
         scene = np.zeros_like(image)
         if design is not None:
             amps = _amp_solve(*design, (image - bg['img'])[good])
@@ -665,7 +678,7 @@ def joint_fit(
                 solve_info=solve_info, cols=cols, owners=owners,
                 fixed=fixed, col_flux=col_flux, seats_local=seats_local,
                 seat_params=seat_params, seat_amps=seat_amps,
-                amp_bounds=amp_bounds)
+                amp_bounds=amp_bounds, amp_bound_kind=amp_bound_kind)
 
 
 def pinned_fit(

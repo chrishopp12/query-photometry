@@ -34,11 +34,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .dered import apply_dereddening
 from .images import IMAGE_PROVIDERS
+from .images.legacy import ROUTE_AUTO
 from .measure import recipe
 from .measure.aperture import measurement_to_row
 from .measure.engine import measure_band, order_bands, prepare_scene
@@ -61,6 +63,40 @@ from .schema import rows_to_frame
 # Cache directory per image provider, under <out_dir>/Photometry/.
 INSTRUMENT_DIRS = {'legacy': 'Legacy', 'panstarrs': 'PanSTARRS',
                    'sdss': 'SDSS', 'cfht': 'CFHT', 'hst': 'HST'}
+
+
+def select_providers(registry, requested, skip=None) -> list[str]:
+    """Resolve a provider selection against a registry.
+
+    Parameters
+    ----------
+    registry : mapping
+        The provider registry to select from.
+    requested : list[str] or None
+        Explicit provider names, or the literal ['all'] / ['none'].
+        None means every provider, so an unstated selection keeps the
+        stage running rather than silently dropping it.
+    skip : iterable[str], optional
+        Names to remove after selection, applied to either form.
+
+    Returns
+    -------
+    selected : list[str]
+        Registry order, so a run's provider sequence never depends on
+        the order they were typed.
+    """
+    skip = set(skip or [])
+    if requested is None or [r.lower() for r in requested] == ['all']:
+        chosen = set(registry)
+    elif [r.lower() for r in requested] == ['none']:
+        chosen = set()
+    else:
+        unknown = [r for r in requested if r not in registry]
+        if unknown:
+            raise ValueError(f"unknown provider(s) {unknown}; "
+                             f"known: {sorted(registry)} (or all/none)")
+        chosen = set(requested)
+    return [name for name in registry if name in chosen and name not in skip]
 
 
 # ------------------------------------
@@ -251,6 +287,24 @@ def _resolve_shape(
     return shape_sky, origin
 
 
+def image_fetch_sources(products) -> dict[str, str]:
+    """Each band's FETCHSRC stamp, read back from the image it measured.
+
+    Read from the file rather than tracked through the call, so a cached
+    image reports the route that actually produced it and not the route
+    this run would have taken.
+    """
+    sources = {}
+    for product in products or []:
+        try:
+            with fits.open(product.path) as hdul:
+                stamp = hdul[0].header.get('FETCHSRC')
+        except Exception:
+            stamp = None
+        sources[f"{product.instrument}_{product.band}"] = stamp
+    return sources
+
+
 def measure_sidecar_payload(
         *,
         coord: SkyCoord,
@@ -268,8 +322,10 @@ def measure_sidecar_payload(
         recipe_snapshot: dict,
         legacy_dr: str,
         legacy_bricks: bool,
+        legacy_route: str,
         hst_proposal_id: str | None,
         measurements: list[dict],
+        image_sources: dict[str, str] | None = None,
 ) -> dict:
     """Caller-supplied half of the _measured.csv sidecar.
 
@@ -302,8 +358,18 @@ def measure_sidecar_payload(
             "registry_updated": bool(registry_update),
             "recipe": recipe_snapshot,
         },
-        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks}
+        # 'route' is what was ASKED for; image_sources below is what
+        # actually answered. Under 'auto' those differ exactly when a
+        # service was down, which is the case worth being able to find.
+        "legacy": {"dr": legacy_dr, "bricks": legacy_bricks,
+                   "route": legacy_route}
                   if 'legacy' in instruments else None,
+        # Which service served each band's pixels. A provider can have
+        # several routes whose framing differs, and the rotation picks by
+        # what was reachable at fetch time -- so without this the record
+        # cannot say what a published flux was measured on, and once the
+        # image cache is cleared the question is unanswerable.
+        "image_sources": image_sources or {},
         # remeasure.reconstruct replays the fetch options so a rebuild
         # reads the same pixels the fit solved on; an unrecorded program
         # restriction would silently refetch a different HST mosaic.
@@ -337,6 +403,7 @@ def run_measure(
         dump_arrays: bool = False,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        legacy_route: str = ROUTE_AUTO,
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> pd.DataFrame:
@@ -463,7 +530,8 @@ def run_measure(
             options: dict = {'bands': bands, 'size_arcsec': cutout_arcsec,
                              'cache_dir': cache_dir}
             if name == 'legacy':
-                options.update(dr=legacy_dr, use_bricks=legacy_bricks)
+                options.update(dr=legacy_dr, use_bricks=legacy_bricks,
+                               route=legacy_route)
             if name == 'cfht':
                 options.update(aperture_arcsec=aperture_arcsec)
             if name == 'hst' and hst_proposal_id:
@@ -643,8 +711,11 @@ def run_measure(
             registry_path=registry_path, registry_update=registry_update,
             recipe_snapshot=recipe.snapshot(),
             legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+            legacy_route=legacy_route,
             hst_proposal_id=hst_proposal_id,
-            measurements=measurements))
+            measurements=measurements,
+            image_sources=image_fetch_sources(
+                [p for _, fetched in fetched_products for p in fetched])))
         print(f"\nSaved {len(measured_df)} measured bands to: {out_csv}")
         print(measured_df.to_string(index=False))
 
@@ -666,7 +737,7 @@ def run_spherex(
         bkg_size: float = 15.0,
         mjd_range: list[float] | None = None,
         poll: float = 5.0,
-        timeout: float = 3600.0,
+        timeout: float = 10800.0,
         cutout_arcsec: float = 120.0,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         target_name: str | None = None,
@@ -703,7 +774,10 @@ def run_spherex(
     poll : float
         Job poll interval in seconds. [default: 5.0]
     timeout : float
-        Job timeout in seconds. [default: 3600.0]
+        Job timeout in seconds. IRSA queues a spectrophotometry job for
+        ~30 minutes and the extraction itself can run an hour, so the
+        default is deliberately far above a healthy job's wall time --
+        it is a backstop, not a schedule. [default: 10800.0]
     cutout_arcsec : float
         Stamp width for a --sersic-from shape fit. [default: 120]
     legacy_dr : str
@@ -943,6 +1017,8 @@ def run_all(
         out_dir: str | Path,
         *,
         skip: list[str] | None = None,
+        catalogs: list[str] | None = None,
+        images: list[str] | None = None,
         radius_arcsec: float = 2.0,
         dered: bool = False,
         mode: str = 'aperture',
@@ -956,9 +1032,13 @@ def run_all(
         registry_path: str | None = None,
         registry_update: bool = False,
         spherex_model: str = 'off',
+        spherex_bkg_size: float = 15.0,
+        spherex_mjd_range: list[float] | None = None,
+        spherex_timeout: float = 10800.0,
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
+        legacy_route: str = ROUTE_AUTO,
         hst_proposal_id: str | None = None,
         target_name: str | None = None,
 ) -> dict[str, str]:
@@ -981,6 +1061,15 @@ def run_all(
         names where they overlap).
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
+    spherex_bkg_size : float
+        Background estimation region, pixels. [default: 15.0]
+    spherex_mjd_range : list of float, optional
+        Visit window for the extraction. Epochs with broken file metadata
+        kill jobs server-side, and restricting to a known-good window is
+        the IRSA-documented workaround -- a sweep that cannot set one
+        cannot avoid that failure. [default: None]
+    spherex_timeout : float
+        Extraction job timeout, seconds. [default: 10800.0]
     sersic_params, sersic_from, sersic_seeing
         The shape declaration, shared by the measurement stage's sersic
         mode and the SPHEREx extraction -- one shape per galaxy, not two.
@@ -999,48 +1088,54 @@ def run_all(
         or a SPHEREx error status); empty when everything succeeded.
         The run verb exits nonzero on a non-empty return.
     """
-    skip = set(skip or [])
-    catalog_set = [name for name in CATALOG_PROVIDERS if name not in skip]
-    image_set = [name for name in IMAGE_PROVIDERS if name not in skip]
+    catalog_set = select_providers(CATALOG_PROVIDERS, catalogs, skip)
+    image_set = select_providers(IMAGE_PROVIDERS, images, skip)
     failures: dict[str, str] = {}
 
     print("\n===== catalogs =====")
-    try:
-        run_catalogs(coord, label, out_dir, instruments=catalog_set,
-                     radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
-                     dered=dered, target_name=target_name)
-    except Exception as e:
-        failures['catalogs'] = f"{type(e).__name__}: {e}"
-        print(f"catalogs stage FAILED: {failures['catalogs']}")
+    if not catalog_set:
+        print("no catalog providers selected; stage skipped")
+    else:
+        try:
+            run_catalogs(coord, label, out_dir, instruments=catalog_set,
+                         radius_arcsec=radius_arcsec, legacy_dr=legacy_dr,
+                         dered=dered, target_name=target_name)
+        except Exception as e:
+            failures['catalogs'] = f"{type(e).__name__}: {e}"
+            print(f"catalogs stage FAILED: {failures['catalogs']}")
 
     print("\n===== images + measurement =====")
     coverage_path = Path(out_dir) / "Photometry" / "coverage_measure.json"
     before = coverage_path.stat().st_mtime if coverage_path.exists() else None
-    try:
-        run_measure(coord, label, out_dir, instruments=image_set,
-                    mode=mode, bands=bands,
-                    aperture_arcsec=aperture_arcsec,
-                    cutout_arcsec=cutout_arcsec,
-                    sky_rmin_arcsec=sky_rmin_arcsec,
-                    rgrid=rgrid,
-                    sersic_from=sersic_from,
-                    sersic_params=sersic_params,
-                    sersic_seeing=sersic_seeing,
-                    registry_path=registry_path,
-                    registry_update=registry_update,
-                    legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
-                    hst_proposal_id=hst_proposal_id,
-                    target_name=target_name)
-    except Exception as e:
-        failures['measure'] = f"{type(e).__name__}: {e}"
-        print(f"measure stage FAILED: {failures['measure']}")
-        after = (coverage_path.stat().st_mtime if coverage_path.exists()
-                 else None)
-        if after == before:
-            coverage_path.parent.mkdir(parents=True, exist_ok=True)
-            write_coverage_report([ProviderResult(
-                provider='measure', status=STATUS_ERROR,
-                message=failures['measure'])], coverage_path)
+    if not image_set:
+        print("no image providers selected; stage skipped")
+    else:
+        try:
+            run_measure(coord, label, out_dir, instruments=image_set,
+                        mode=mode, bands=bands,
+                        aperture_arcsec=aperture_arcsec,
+                        cutout_arcsec=cutout_arcsec,
+                        sky_rmin_arcsec=sky_rmin_arcsec,
+                        rgrid=rgrid,
+                        sersic_from=sersic_from,
+                        sersic_params=sersic_params,
+                        sersic_seeing=sersic_seeing,
+                        registry_path=registry_path,
+                        registry_update=registry_update,
+                        legacy_dr=legacy_dr, legacy_bricks=legacy_bricks,
+                        legacy_route=legacy_route,
+                        hst_proposal_id=hst_proposal_id,
+                        target_name=target_name)
+        except Exception as e:
+            failures['measure'] = f"{type(e).__name__}: {e}"
+            print(f"measure stage FAILED: {failures['measure']}")
+            after = (coverage_path.stat().st_mtime if coverage_path.exists()
+                     else None)
+            if after == before:
+                coverage_path.parent.mkdir(parents=True, exist_ok=True)
+                write_coverage_report([ProviderResult(
+                    provider='measure', status=STATUS_ERROR,
+                    message=failures['measure'])], coverage_path)
 
     if spherex_model != 'off':
         print("\n===== SPHEREx =====")
@@ -1049,6 +1144,9 @@ def run_all(
                                  sersic_params=sersic_params,
                                  sersic_from=sersic_from,
                                  sersic_seeing=sersic_seeing,
+                                 bkg_size=spherex_bkg_size,
+                                 mjd_range=spherex_mjd_range,
+                                 timeout=spherex_timeout,
                                  cutout_arcsec=cutout_arcsec,
                                  legacy_dr=legacy_dr,
                                  target_name=target_name)
