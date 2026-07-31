@@ -737,7 +737,7 @@ def run_spherex(
         bkg_size: float = 15.0,
         mjd_range: list[float] | None = None,
         poll: float = 5.0,
-        timeout: float = 3600.0,
+        timeout: float = 10800.0,
         cutout_arcsec: float = 120.0,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         target_name: str | None = None,
@@ -774,7 +774,10 @@ def run_spherex(
     poll : float
         Job poll interval in seconds. [default: 5.0]
     timeout : float
-        Job timeout in seconds. [default: 3600.0]
+        Job timeout in seconds. IRSA queues a spectrophotometry job for
+        ~30 minutes and the extraction itself can run an hour, so the
+        default is deliberately far above a healthy job's wall time --
+        it is a backstop, not a schedule. [default: 10800.0]
     cutout_arcsec : float
         Stamp width for a --sersic-from shape fit. [default: 120]
     legacy_dr : str
@@ -1029,6 +1032,9 @@ def run_all(
         registry_path: str | None = None,
         registry_update: bool = False,
         spherex_model: str = 'off',
+        spherex_bkg_size: float = 15.0,
+        spherex_mjd_range: list[float] | None = None,
+        spherex_timeout: float = 10800.0,
         sersic_params: list[float] | None = None,
         legacy_dr: str = LEGACY_DR_DEFAULT,
         legacy_bricks: bool = False,
@@ -1055,6 +1061,15 @@ def run_all(
         names where they overlap).
     spherex_model : str
         'off' (default), 'psf', or 'sersic' (with sersic_params).
+    spherex_bkg_size : float
+        Background estimation region, pixels. [default: 15.0]
+    spherex_mjd_range : list of float, optional
+        Visit window for the extraction. Epochs with broken file metadata
+        kill jobs server-side, and restricting to a known-good window is
+        the IRSA-documented workaround -- a sweep that cannot set one
+        cannot avoid that failure. [default: None]
+    spherex_timeout : float
+        Extraction job timeout, seconds. [default: 10800.0]
     sersic_params, sersic_from, sersic_seeing
         The shape declaration, shared by the measurement stage's sersic
         mode and the SPHEREx extraction -- one shape per galaxy, not two.
@@ -1129,6 +1144,9 @@ def run_all(
                                  sersic_params=sersic_params,
                                  sersic_from=sersic_from,
                                  sersic_seeing=sersic_seeing,
+                                 bkg_size=spherex_bkg_size,
+                                 mjd_range=spherex_mjd_range,
+                                 timeout=spherex_timeout,
                                  cutout_arcsec=cutout_arcsec,
                                  legacy_dr=legacy_dr,
                                  target_name=target_name)

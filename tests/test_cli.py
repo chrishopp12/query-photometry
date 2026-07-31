@@ -206,3 +206,76 @@ def test_spherex_sersic_keeps_its_shape_flag_under_aperture_mode(monkeypatch):
         '--mode', 'aperture', '--spherex', 'sersic',
         '--sersic-params', '2', '1.5', '30', '3'])
     assert cli.main() is None
+
+
+# ------------------------------------
+# SPHEREx extraction config reaches run_all
+# ------------------------------------
+def _capture_run_all(seen):
+    def fake(*args, **kwargs):
+        seen.update(kwargs)
+        return {}
+    return fake
+
+
+def test_run_forwards_the_spherex_extraction_config(monkeypatch):
+    """run_all owns the SPHEREx stage, so every knob that defines the
+    extraction has to reach it -- an MJD window most of all, since epochs
+    with broken metadata kill jobs server-side."""
+    seen = {}
+    monkeypatch.setattr(cli, 'run_all', _capture_run_all(seen))
+    monkeypatch.setattr(sys, 'argv', ['sedphot', 'run'] + TARGET + [
+        '--spherex', 'sersic',
+        '--spherex-mjd-range', '60676.0001273', '61174.5063773',
+        '--spherex-bkg-size', '27',
+        '--spherex-timeout', '7200'])
+    assert cli.main() is None
+    assert seen['spherex_model'] == 'sersic'
+    assert seen['spherex_mjd_range'] == [60676.0001273, 61174.5063773]
+    assert seen['spherex_bkg_size'] == 27.0
+    assert seen['spherex_timeout'] == 7200.0
+
+
+def test_run_spherex_config_defaults_are_explicit(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, 'run_all', _capture_run_all(seen))
+    monkeypatch.setattr(sys, 'argv', ['sedphot', 'run'] + TARGET)
+    assert cli.main() is None
+    assert seen['spherex_mjd_range'] is None
+    assert seen['spherex_bkg_size'] == 15.0
+    assert seen['spherex_timeout'] == 10800.0
+
+
+def test_batch_refuses_more_workers_than_irsa_admits(monkeypatch, tmp_path):
+    """IRSA runs two spectrophotometry jobs at a time. Whether a third
+    queues or is refused is unverified, and a sweep is the wrong place to
+    find out: each job is a 20-60 minute server-side extraction."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text('{"harvest": [], "parallel": []}')
+    monkeypatch.setattr(sys, 'argv', [
+        'sedphot', 'batch', '--plan', str(plan),
+        '--registry-dir', str(tmp_path / 'reg'),
+        '--report', str(tmp_path / 'report.json'),
+        '--spherex', 'sersic', '--workers', '4'])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert 'concurrent IRSA extractions' in str(exc.value.code)
+
+
+def test_batch_worker_cap_only_applies_when_spherex_is_on(monkeypatch,
+                                                          tmp_path):
+    """The cap is about IRSA, not about the measurement stage: with the
+    extraction off, worker count is the archive's business alone."""
+    import sedphot.batch as batch_mod
+    monkeypatch.setattr(batch_mod, 'run_sweep',
+                        lambda *a, **k: {'merge_problems': [],
+                                         'violations': [],
+                                         'aborted': False, 'n_failed': 0})
+    plan = tmp_path / 'plan.json'
+    plan.write_text('{"harvest": [], "parallel": []}')
+    monkeypatch.setattr(sys, 'argv', [
+        'sedphot', 'batch', '--plan', str(plan),
+        '--registry-dir', str(tmp_path / 'reg'),
+        '--report', str(tmp_path / 'report.json'),
+        '--spherex', 'off', '--workers', '8'])
+    cli.main()          # no SystemExit: 8 workers is fine without SPHEREx
