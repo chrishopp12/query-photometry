@@ -1595,7 +1595,7 @@ renamed — cached filenames are a downstream stability contract.
 python -m pytest tests/
 ```
 
-297 tests, **entirely offline**. No test performs network I/O: TAP clients, MAST
+416 tests, **entirely offline**. No test performs network I/O: TAP clients, MAST
 `Observations`, `requests`, and `astroquery` entry points are monkeypatched, and image
 fixtures are synthesized in `tmp_path`. There is no `conftest.py` and no pytest
 configuration — the suite runs from a bare invocation.
