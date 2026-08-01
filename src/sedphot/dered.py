@@ -42,8 +42,12 @@ from .units import ujy_to_mag
 
 
 # ------------------------------------
-# A_band / E(B-V) coefficients (tier 2)
+# A_band / E(B-V)_SFD coefficients (tier 2)
 # ------------------------------------
+# Normalized per UNCORRECTED SFD E(B-V): the Schlafly & Finkbeiner
+# recalibration (~0.86) is already folded into each coefficient. That is
+# the convention the surveys use for the tier-1 native transmissions too,
+# so both tiers land on one extinction scale.
 EXT_COEFF = {
     # SDSS ugriz (SF11 Table 6, R_V=3.1)
     'SDSS_u': 4.239, 'SDSS_g': 3.303, 'SDSS_r': 2.285, 'SDSS_i': 1.698, 'SDSS_z': 1.263,
@@ -60,7 +64,16 @@ EXT_COEFF = {
 # E(B-V) lookup (one query per target)
 # ------------------------------------
 def fetch_ebv_sfd(coord: SkyCoord) -> float:
-    """Schlafly & Finkbeiner-recalibrated SFD E(B-V) at the target position.
+    """Uncorrected SFD E(B-V) at the target position, from IRSA.
+
+    IRSA serves two flavors of the same quantity: ``ext SFD mean`` is the
+    Schlegel, Finkbeiner & Davis value, and ``ext SandF mean`` is that
+    value already multiplied by the Schlafly & Finkbeiner recalibration
+    (~0.86). EXT_COEFF carries the recalibration inside each coefficient,
+    so the SFD column is the one that pairs with it -- reading SandF here
+    would apply the recalibration twice and leave every tier-2 A_band
+    ~14% low. A curve-based correction wants the opposite column, because
+    a physical A_lambda/E(B-V) is defined against the recalibrated value.
 
     The IRSA call backs off and retries; a failure that outlives the
     retries returns NaN (tier-2 rows then fall through to tier 3).
@@ -70,7 +83,7 @@ def fetch_ebv_sfd(coord: SkyCoord) -> float:
         table = retry_transient(
             lambda: IrsaDust.get_query_table(coord, section='ebv'),
             "IRSA dust")
-        return float(table['ext SandF mean'][0])
+        return float(table['ext SFD mean'][0])
     except Exception as e:
         print(f"  [dered] IRSA dust query failed: {e}")
         return np.nan
