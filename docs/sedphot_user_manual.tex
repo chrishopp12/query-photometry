@@ -1149,11 +1149,11 @@ A full run of one galaxy produces:
 \mbox{}~~~~+-{}- <label>\_overlay.png~~~~~~~~~~~~~~~~~~~~~position check figure\\
 \mbox{}~~~~+-{}- coverage\_catalogs.json~~~~~~~~~~~~~~~~~~per-archive outcome\\
 \mbox{}~~~~+-{}- coverage\_measure.json~~~~~~~~~~~~~~~~~~~per-archive outcome\\
-\mbox{}~~~~+-{}- Legacy/~~~~~~~cached images + QA/<band>.png\\
-\mbox{}~~~~+-{}- SDSS/~~~~~~~~~cached images + QA/<band>.png\\
-\mbox{}~~~~+-{}- PanSTARRS/~~~~cached images + QA/<band>.png\\
-\mbox{}~~~~+-{}- CFHT/~~~~~~~~~cached images + QA/<band>.png\\
-\mbox{}~~~~+-{}- HST/~~~~~~~~~~cached mosaics + QA/<band>.png\\
+\mbox{}~~~~+-{}- Legacy/~~~~~~~cached images + QA/Legacy\_<band>.png\\
+\mbox{}~~~~+-{}- SDSS/~~~~~~~~~cached images + QA/SDSS\_<band>.png\\
+\mbox{}~~~~+-{}- PanSTARRS/~~~~cached images + QA/PS1\_<band>.png\\
+\mbox{}~~~~+-{}- CFHT/~~~~~~~~~cached images + QA/CFHT\_<band>.png\\
+\mbox{}~~~~+-{}- HST/~~~~~~~~~~cached mosaics + QA/HST\_<band>.png\\
 \mbox{}~~~~+-{}- QA/\\
 \mbox{}~~~~|~~~+-{}- growth\_curves.png~~~~~~~~~~~~~~~~~~~all bands, one figure\\
 \mbox{}~~~~+-{}- scene/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~cached catalog queries\\
@@ -1189,8 +1189,10 @@ coverage\_catalogs.json,\newline coverage\_measure.json & Per-archive
   \texttt{error}, with a message and the number of rows. \\[2pt]
 <Instrument>/*.fits & The downloaded images, cached. Deleting one forces a
   re-download on the next run. \\[2pt]
-<Instrument>/QA/<band>.png & The per-band diagnostic figure
-  (section 9). \\[2pt]
+<Instrument>/QA/\newline <Inst>\_<band>.png & The per-band diagnostic
+  figure (section 9). \texttt{<Inst>} is the instrument's short name,
+  which matches the directory everywhere except \texttt{PanSTARRS/},
+  whose figures are named \texttt{PS1\_<band>.png}. \\[2pt]
 QA/growth\_curves.png & Enclosed flux against radius for every measured
   band on one axis. \\[2pt]
 scene/*.csv & Cached catalog queries describing the neighboring sources.
@@ -1212,7 +1214,7 @@ share this layout.
 \textbf{\normalfont Column} & \textbf{Meaning} & \textbf{Units} \\
 \midrule
 \endhead
-band & Band label, \texttt{<Instrument>\_<filter>} --- e.g.\
+band & Band label, \texttt{<Inst>\_<filter>} --- e.g.\
   \texttt{Legacy\_g}, \texttt{SDSS\_u}, \texttt{PS1\_z},
   \texttt{CFHT\_r}, \texttt{GALEX\_FUV}, \texttt{WISE\_W1},
   \texttt{JPLUS\_uJAVA}, \texttt{HST\_F475W}. & --- \\[2pt]
@@ -1313,7 +1315,10 @@ Two figures per measurement run, plus one per band.
 
 \subsection{The per-band figure}
 
-\texttt{<Instrument>/QA/<Instrument>\_<band>.png} --- five panels in a row.
+\texttt{<Instrument>/QA/<Inst>\_<band>.png} --- five panels in a row.
+The prefix is the instrument's short name, which matches the directory
+everywhere except \texttt{PanSTARRS/}, whose figures are
+\texttt{PS1\_<band>.png}.
 
 \begin{enumerate}
   \item \textbf{data} --- the image, with stars already subtracted. The
