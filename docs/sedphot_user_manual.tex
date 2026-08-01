@@ -1091,8 +1091,10 @@ The first argument is positional: the path to a
   bands without one fall back to \texttt{forced} and say so. &
   \texttt{forced} \\[2pt]
 -{}-registry & path & Registry file to fall back on when rebuilding past
-  the stored radius grid. & a \texttt{registry.json} beside the galaxy
-  directory, if present \\[2pt]
+  the stored radius grid. Unlike \texttt{measure}, \texttt{remeasure}
+  finds one on its own when you do not name it (section 11.2). & a
+  \texttt{registry.json} beside the galaxy directory, if present
+  \\[2pt]
 -{}-write-qa & (switch) & When rebuilding past the grid, write per-band
   figures to \texttt{QA/remeasure\_R<N>as/}. & off \\[2pt]
 -{}-out & path & Write the result to this CSV instead of printing it. &
@@ -1579,7 +1581,7 @@ sedphot measure -{}-name "M87" -{}-all -{}-out-dir M87 \textbackslash\\
 \mbox{}~~~~-{}-registry registry.json -{}-registry-update
 \end{cmd}
 
-Two things to know before using it:
+Three things to know before using it:
 
 \begin{itemize}
   \item \textbf{Run galaxies one at a time.} Updates are last-writer-wins
@@ -1590,6 +1592,16 @@ Two things to know before using it:
         frozen in rather than fitted fresh. Once every galaxy in a field
         has been measured once, a second pass over the same file is
         uniform.
+  \item \textbf{\texttt{remeasure} finds a registry on its own; every
+        other verb waits to be told.} \texttt{measure} uses a registry
+        only when you pass \texttt{-{}-registry}, because consuming one
+        changes the fluxes and a fresh measurement should not do that
+        unasked. \texttt{remeasure} is the exception: when it has to
+        rebuild the scene past the stored radius grid, it picks up a
+        \texttt{registry.json} sitting beside the galaxy directory
+        without being asked, so that a rebuild reuses the shapes the
+        original measurement was built against. It prints the file it
+        found; pass \texttt{-{}-registry} to name a different one.
 \end{itemize}
 
 Use it when you are measuring several galaxies in one field and want their
