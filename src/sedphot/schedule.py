@@ -288,8 +288,15 @@ def read_targets(path: str | Path,
     targets, seen = [], set()
     for row in rows:
         name = (row.get(name_col) or "").strip()
-        if not name or name in seen:
+        if not name:
             continue
+        # Read before anything runs, so this is the cheap place to fail.
+        # Silently keeping the first of two rows lost a target to a
+        # duplicate name with nothing said -- and a generated list makes
+        # a duplicate a bug in the generator, not an operator's shorthand.
+        if name in seen:
+            raise ValueError(f"{path}: duplicate target {name!r} under "
+                             f"column {name_col!r}")
         seen.add(name)
         # dir is RELATIVE to out_root, the same way sed_fitting resolves it
         # against a campaign's data_root -- so one shared catalog serves

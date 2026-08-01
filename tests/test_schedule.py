@@ -357,8 +357,7 @@ def test_read_targets_accepts_the_shared_sample_catalog(tmp_path, capsys) -> Non
 
     path.write_text("name,ra_deg,dec_deg,z_ref_kind,dir,label,priority\n"
                     "M 87,210.0,30.0,cluster,/data/a,m87_deep,\n"
-                    "b,210.1,30.0,spec,,,5\n"
-                    "M 87,210.0,30.0,cluster,/data/a,m87_deep,\n",
+                    "b,210.1,30.0,spec,,,5\n",
                     encoding="utf-8")
     targets = read_targets(path, out_root="/root")
     assert [t['name'] for t in targets] == ['M 87', 'b']
@@ -397,6 +396,15 @@ def test_read_targets_rejects_a_list_it_cannot_use(tmp_path) -> None:
     no_dir = tmp_path / "no_dir.csv"
     no_dir.write_text("name,ra_deg,dec_deg\na,210.0,30.0\n", encoding="utf-8")
     assert read_targets(no_dir)[0]['dir'] == 'a'
+
+    # A duplicate is caught before any target runs, where it costs
+    # nothing; keeping the first row silently dropped the second.
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text("name,ra_deg,dec_deg\n"
+                         "a,210.0,30.0\n"
+                         "a,210.0,30.0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate target"):
+        read_targets(duplicate)
 
 
 def test_write_plan_emits_json_and_an_ordered_csv(tmp_path) -> None:
