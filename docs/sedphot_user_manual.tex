@@ -16,6 +16,18 @@
 % ----------------------------------------------------------------
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
+\usepackage{textcomp}
+\usepackage{csquotes}
+
+% Straight quotes in monospace, curly apostrophes in prose, so a command
+% copied out of a code block pastes back into a shell unchanged.
+% Typewriter faces have zero interword stretch; that is the test.
+\begingroup
+  \catcode`\'=\active
+  \protected\gdef'{\ifdim\fontdimen3\font=0pt
+                      \textquotesingle\else\char39\relax\fi}
+\endgroup
+\AtBeginDocument{\catcode`\'=\active}
 \usepackage[a4paper,margin=1in]{geometry}
 \usepackage{fancyhdr}
 \usepackage[dvipsnames]{xcolor}
@@ -240,7 +252,7 @@ Then, on any platform:
 
 \cmdline{pip install -e .}
 
-\subsection{What ``editable'' means}
+\subsection{What \enquote{editable} means}
 
 \texttt{pip install -e .} installs the package \textbf{in place}: Python
 runs the source files in the folder you cloned, rather than a copy hidden
@@ -712,7 +724,7 @@ moved together, or the measurement will treat the galaxy itself as sky.
 \end{tabular}
 \end{center}
 
-\texttt{-{}-sky-rmin} is the boundary between ``target'' and ``sky''. Sky
+\texttt{-{}-sky-rmin} is the boundary between \enquote{target} and \enquote{sky}. Sky
 is measured only outside it, and no pixel inside it is allowed to vote on
 the background level. At the 15-arcsecond default, a compact HST target
 would have most of the visit excluded from the sky estimate.
@@ -1412,7 +1424,7 @@ ValueError: -{}-aperture 60" lies outside the curve-of-growth grid
   Nothing to do. Fewer bands is the correct answer. \\[2pt]
 {\normalfont A \textbf{catalog} archive reports} no\_match & Either the
   field genuinely holds no catalogued source within the expanded search
-  radius (including ``this position is outside that survey's footprint''),
+  radius (including \enquote{this position is outside that survey's footprint}),
   \textbf{or} the archive was down. The two are indistinguishable: a
   failed query returns no rows, and the radius expansion then reports
   \texttt{no\_match}. Catalog archives never report
