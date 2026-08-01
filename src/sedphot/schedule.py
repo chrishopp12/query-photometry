@@ -67,6 +67,12 @@ DEFAULT_LINK_MARGIN_AS = 120.0
 
 TARGET_COLUMN_ALIASES = ("name", "target")
 POSITION_COLUMNS = (("ra_deg", "dec_deg"), ("ra", "dec"))
+# Every column this reader consumes. A target list may serve other
+# tools too, so anything else is reported rather than refused -- but a
+# typo in an optional column silently takes a default, which is what
+# naming the ignored set makes visible.
+TARGET_COLUMNS = ("name", "target", "ra_deg", "dec_deg", "ra", "dec",
+                  "dir", "label", "priority")
 
 PASS_HARVEST = "harvest"
 PASS_PARALLEL = "parallel"
@@ -274,6 +280,10 @@ def read_targets(path: str | Path,
     if position is None:
         raise ValueError(f"{path}: no ra_deg/dec_deg column pair "
                          f"(found: {fields})")
+    used = [c for c in fields if c in TARGET_COLUMNS]
+    ignored = [c for c in fields if c not in TARGET_COLUMNS]
+    print(f"{path.name}: {len(rows)} rows; using {', '.join(used)}"
+          + (f"; ignoring {', '.join(ignored)}" if ignored else ""))
 
     targets, seen = [], set()
     for row in rows:

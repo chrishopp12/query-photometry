@@ -351,7 +351,7 @@ def test_build_plan_rejects_a_misaligned_census() -> None:
 # Target list and output
 # ------------------------------------
 
-def test_read_targets_accepts_the_shared_sample_catalog(tmp_path) -> None:
+def test_read_targets_accepts_the_shared_sample_catalog(tmp_path, capsys) -> None:
     path = tmp_path / "sample.csv"
     from sedphot.resolve import sanitize_label
 
@@ -362,6 +362,12 @@ def test_read_targets_accepts_the_shared_sample_catalog(tmp_path) -> None:
                     encoding="utf-8")
     targets = read_targets(path, out_root="/root")
     assert [t['name'] for t in targets] == ['M 87', 'b']
+    # The fitter's columns ride along unrecognized. Reporting the split
+    # is what keeps a typo in an optional column from taking a default
+    # in silence, without this tool knowing the fitter's schema.
+    line = capsys.readouterr().out
+    assert "using name, ra_deg, dec_deg, dir, label, priority" in line
+    assert "ignoring z_ref_kind" in line
     # An absolute dir is used as written; the relative case is covered
     # by test_dir_resolves_under_out_root_like_the_fitter_does.
     assert targets[0]['dir'] == '/data/a'
