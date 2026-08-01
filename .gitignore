@@ -51,3 +51,14 @@ dist/
 # carry the same private context as the original but match no bare filename.
 CLAUDE*.md
 session_log*.md
+
+# -----------------------
+# Documentation
+# -----------------------
+# LaTeX build products
+*.aux
+*.out
+*.toc
+docs/*.log
+# The user manual ships built, so it is exempt from the *.pdf rule above.
+!docs/sedphot_user_manual.pdf

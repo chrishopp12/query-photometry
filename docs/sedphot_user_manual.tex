@@ -1,0 +1,1585 @@
+% sedphot User Manual
+% Build with:  pdflatex sedphot_user_manual.tex   (run twice for the TOC)
+%
+% The format block below is shared verbatim with the sedfit manual.
+
+\documentclass[11pt]{article}
+
+\newcommand{\manualname}{sedphot}
+\newcommand{\manualtagline}{Galaxy in, SED photometry out}
+\newcommand{\manualversion}{0.3.0}
+
+% ----------------------------------------------------------------
+% FORMAT. This block is shared verbatim with the sibling user
+% manual in the other repository so the two are typeset
+% identically. Change it in both or in neither.
+% ----------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{fancyhdr}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[most]{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% --- Palette ---
+\definecolor{slate}{RGB}{47,72,88}          % headings
+\definecolor{boxrule}{RGB}{201,204,209}     % code-block border
+\definecolor{boxfill}{RGB}{250,250,251}     % code-block fill
+\definecolor{noteaccent}{RGB}{180,95,20}
+\definecolor{warnaccent}{RGB}{160,30,30}
+
+% --- Headings ---
+\titleformat{\section}{\Large\bfseries\color{slate}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{slate}}{\thesubsection}{1em}{}
+
+% --- Running head ---
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\manualname\ user manual}
+\rhead{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% --- Blocks ---
+% A shell/code block: light fill, thin grey border, monospaced.
+\newtcolorbox{cmd}{
+  colback=boxfill, colframe=boxrule, boxrule=0.4pt,
+  left=6pt, right=6pt, top=5pt, bottom=5pt,
+  before skip=8pt, after skip=8pt, breakable
+}
+
+\newtcolorbox{notebox}[1][Note]{
+  breakable, colback=noteaccent!5, colframe=noteaccent,
+  boxrule=0.8pt, title=#1, fonttitle=\bfseries\small
+}
+
+\newtcolorbox{warnbox}[1][Careful]{
+  breakable, colback=warnaccent!5, colframe=warnaccent,
+  boxrule=0.8pt, title=#1, fonttitle=\bfseries\small
+}
+
+% One-line command.
+\newcommand{\cmdline}[1]{\begin{cmd}\ttfamily #1\end{cmd}}
+
+\setlist[itemize]{itemsep=2pt, topsep=4pt}
+\setlist[enumerate]{itemsep=2pt, topsep=4pt}
+
+% Table helpers: booktabs rules, wrapped description columns.
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{T}[1]{>{\ttfamily\raggedright\arraybackslash}p{#1}}
+
+% --- Title page ---
+\newcommand{\manualtitlepage}{%
+  \thispagestyle{empty}
+  \vspace*{4cm}
+  \begin{center}
+    {\Huge\bfseries\manualname}\\[0.7cm]
+    {\Large User Manual}\\[1.3cm]
+    {\normalsize\manualtagline}
+  \end{center}
+  \vfill
+  \begin{center}\normalsize Version \manualversion\end{center}
+  \newpage
+  \tableofcontents
+  \newpage
+}
+
+\begin{document}
+
+\manualtitlepage
+
+% ==========================================================
+\section{What this does}
+% ==========================================================
+
+\texttt{sedphot} turns a galaxy into an SED-ready photometry table.
+
+You give it a galaxy name (or a position on the sky) and an output
+directory. It then does some or all of the following, depending on which
+command you run:
+
+\begin{itemize}\sloppy
+  \item Looks the galaxy up in the public catalog archives (GALEX, SDSS,
+        J-PLUS, Pan-STARRS, Legacy Surveys, AllWISE, HST) and records the
+        published flux of the nearest source in every band.
+  \item Downloads survey images (SDSS, Pan-STARRS, Legacy Surveys, CFHT,
+        HST) and measures the galaxy itself in every band through one
+        identical procedure, so the colors are internally consistent.
+  \item Optionally requests SPHEREx spectrophotometry from IRSA.
+  \item Writes a combined SED figure, quality-assurance figures, and a
+        JSON record of exactly how every number was produced.
+\end{itemize}
+
+Fluxes come out in microjansky on the AB system. Everything for one
+galaxy lands under one directory that you choose.
+
+% ==========================================================
+\section{Installing}
+% ==========================================================
+
+These instructions assume the machine has nothing set up yet.
+
+\subsection{Get Python}
+
+\texttt{sedphot} needs \textbf{Python 3.11 or newer} and a stack of
+scientific libraries (NumPy, SciPy, Astropy, Astroquery, Matplotlib, and
+others).
+
+Use \textbf{Miniconda}. Conda installs Python and the scientific
+libraries as pre-built binaries, which avoids the compiler toolchain that
+some of these packages otherwise require, and it keeps each project's
+libraries in a separate environment so one project cannot break another.
+
+\textbf{Windows}
+\begin{enumerate}\sloppy
+  \item Go to \url{https://www.anaconda.com/download/success} (or
+        \url{https://docs.conda.io/projects/miniconda/}) and download the
+        \textbf{Miniconda Windows 64-bit installer} (\texttt{.exe}).
+  \item Run the installer. Accept the defaults.
+  \item From the Start menu, open \textbf{Anaconda Prompt}. Every command
+        in this manual is typed there.
+\end{enumerate}
+
+\textbf{macOS}
+\begin{enumerate}
+  \item Download the \textbf{Miniconda macOS installer} for your chip
+        (Apple silicon = \texttt{arm64}, Intel = \texttt{x86\_64}) from
+        the same page.
+  \item Run the installer, then open \textbf{Terminal}.
+\end{enumerate}
+
+\textbf{Linux}
+\begin{enumerate}
+  \item Download the Miniconda Linux \texttt{x86\_64} installer script
+        from the same page.
+  \item Run it with \texttt{bash Miniconda3-latest-Linux-x86\_64.sh},
+        then open a new terminal.
+\end{enumerate}
+
+Check that conda is available:
+
+\cmdline{conda -{}-version}
+
+You should see something like \texttt{conda 24.9.2}.
+
+\subsection{Get the code}
+
+The source lives at \url{https://github.com/chrishopp12/query-photometry}.
+
+\textbf{With git.} On Windows, install Git for Windows from
+\url{https://git-scm.com/download/win} first; macOS and Linux usually
+have git already. Then:
+
+\cmdline{git clone https://github.com/chrishopp12/query-photometry.git}
+
+This creates a folder named \texttt{query-photometry} in the current
+directory. Move into it:
+
+\cmdline{cd query-photometry}
+
+\textbf{Without git.} Open
+\url{https://github.com/chrishopp12/query-photometry} in a browser, click
+the green \textbf{Code} button, choose \textbf{Download ZIP}, and unzip
+it. You get a folder named \texttt{query-photometry-main}. Move into it:
+
+\cmdline{cd query-photometry-main}
+
+You are in the right folder if it contains a file named
+\texttt{pyproject.toml}.
+
+\subsection{Create an environment and install}
+
+\textbf{Conda route (recommended, all platforms).}
+
+\cmdline{conda create -n sedphot python=3.12}
+
+Answer \texttt{y} when it asks. Then activate it:
+
+\cmdline{conda activate sedphot}
+
+Your prompt now starts with \texttt{(sedphot)}. Install the package:
+
+\cmdline{pip install -e .}
+
+That reads \texttt{pyproject.toml} and pulls in every dependency.
+
+If any dependency fails to build (rare, but \texttt{reproject} is the
+usual suspect), install the scientific stack from conda-forge first and
+then install \texttt{sedphot} without re-resolving them:
+
+\cmdline{conda install -c conda-forge numpy scipy pandas astropy}
+
+\cmdline{conda install -c conda-forge astroquery matplotlib pillow}
+
+\cmdline{conda install -c conda-forge reproject requests defusedxml}
+
+\cmdline{\frenchspacing pip install -e . -{}-no-deps}
+
+\textbf{pip / venv route (no conda).} Only use this if Python 3.11+ is
+already installed and on your PATH.
+
+Windows (Anaconda Prompt, PowerShell, or Command Prompt):
+
+\cmdline{python -m venv .venv}
+
+\cmdline{.venv\textbackslash Scripts\textbackslash activate}
+
+macOS / Linux:
+
+\cmdline{python3 -m venv .venv}
+
+\cmdline{source .venv/bin/activate}
+
+Then, on any platform:
+
+\cmdline{pip install -e .}
+
+\subsection{What ``editable'' means}
+
+\texttt{pip install -e .} installs the package \textbf{in place}: Python
+runs the source files in the folder you cloned, rather than a copy hidden
+away in the environment. If you \texttt{git pull} a newer version, the
+change takes effect immediately with no reinstall.
+
+\subsection{Verify the install}
+
+Three checks, in increasing strength.
+
+\textbf{Is the command there?}
+
+\cmdline{sedphot -{}-help}
+
+Correct output begins:
+
+\begin{cmd}\ttfamily\frenchspacing
+usage: sedphot [-h]\\
+\mbox{}~~~~~~~~~~~~~~~\{resolve,catalogs,measure,spherex,sed,overlay,remeasure,run\}\\
+\mbox{}~~~~~~~~~~~~~~~...\\
+\mbox{}\\
+Galaxy in, SED photometry out: multi-archive retrieval and measurement.
+\end{cmd}
+
+\textbf{Is the right version installed?}
+
+\cmdline{\frenchspacing python -c "import sedphot; print(sedphot.\_\_version\_\_)"}
+
+Correct output:
+
+\cmdline{0.3.0}
+
+\textbf{Can it reach the network?} This resolves a real galaxy name
+against the CDS Sesame service:
+
+\cmdline{sedphot resolve -{}-name "NGC 4889"}
+
+Correct output:
+
+\begin{cmd}\ttfamily\frenchspacing
+\mbox{}~~[resolve] 'NGC 4889' -> RA=195.033738, Dec=+27.977025~~(Sesame)\\
+RA~~= 195.03373750\\
+Dec = +27.97702500\\
+label = NGC\_4889
+\end{cmd}
+
+If all three work, the install is good.
+
+Every later session needs the environment activated first:
+
+\cmdline{conda activate sedphot}
+
+% ==========================================================
+\section{Before you start}
+% ==========================================================
+
+The mental model is small.
+
+\textbf{You pick a galaxy.} Either by name (\texttt{-{}-name "NGC 4889"},
+resolved through Sesame, then NED, then SIMBAD) or by explicit position
+(\texttt{-{}-ra 195.033738 -{}-dec 27.977025}). Give one or the other,
+never both.
+
+\textbf{You pick an output directory.} \texttt{-{}-out-dir} is required on
+every command that writes anything. Everything for that galaxy lands under
+it, inside a subdirectory called \texttt{Photometry/}: the tables, the
+figures, the downloaded images, and the JSON records. One galaxy, one
+directory.
+
+\textbf{Files are named after a label.} The label defaults to the
+sanitized name (\texttt{NGC 4889} becomes \texttt{NGC\_4889}) or, for a
+bare position, an IAU-style designation
+(\texttt{J130008.10+275837.3}). Override it with \texttt{-{}-label}. Output
+files are \texttt{<label>\_catalog.csv},
+\texttt{<label>\_measured.csv}, \texttt{<label>\_sed.png}, and so on.
+
+\textbf{Downloads are cached.} The first run of a galaxy downloads images
+and catalog queries; later runs on the same directory reuse them.
+Re-running a command is cheap.
+
+That is the whole model. A typical directory choice looks like:
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-out-dir NGC\_4889}
+
+or, if you keep galaxies together:
+
+Windows
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-out-dir galaxies\textbackslash NGC\_4889}
+
+macOS / Linux
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-out-dir galaxies/NGC\_4889}
+
+Path separators are the only difference between platforms in this manual.
+Everything else is identical.
+
+% ==========================================================
+\section{The verbs}
+% ==========================================================
+
+\texttt{sedphot} has eight commands.
+
+\begin{longtable}{T{2.2cm} L{4.6cm} L{7.2cm}}
+\toprule
+\textbf{\normalfont Verb} & \textbf{What it does} & \textbf{What it writes} \\
+\midrule
+\endhead
+resolve & Turns a name into coordinates and an output label. &
+  Nothing. Prints only. \\[2pt]
+catalogs & Asks each catalog archive for its published photometry of the
+  nearest source. & \texttt{<label>\_catalog.csv} + sidecar,
+  \texttt{coverage\_catalogs.json} \\[2pt]
+measure & Downloads survey images and measures the galaxy in every band.
+  & \texttt{<label>\_measured.csv} + sidecar,
+  \texttt{coverage\_measure.json}, cached images, per-band QA figures,
+  \texttt{QA/growth\_curves.png} \\[2pt]
+spherex & Requests a SPHEREx spectrophotometry table from IRSA. &
+  \texttt{SPHEREx/table\_photometry.<tag>.csv} + sidecar,
+  \texttt{SPHEREx/extractions.json} \\[2pt]
+sed & Draws the combined SED from tables already on disk. &
+  \texttt{<label>\_sed.png} \\[2pt]
+overlay & Draws every archive's matched position on the HST color image.
+  & \texttt{<label>\_overlay.png}, cached HST composite \\[2pt]
+remeasure & Re-reports fluxes from a finished measurement at a different
+  aperture. & Nothing, unless you pass \texttt{-{}-out} (a CSV) or
+  \texttt{-{}-write-qa} (figures). \\[2pt]
+run & \texttt{catalogs}, then \texttt{measure}, then optionally
+  \texttt{spherex}, then \texttt{sed}. & Everything the stages above
+  write. \\
+\bottomrule
+\end{longtable}
+
+\texttt{-{}-out-dir} is \textbf{required} on \texttt{catalogs},
+\texttt{measure}, \texttt{spherex}, \texttt{sed}, \texttt{overlay}, and
+\texttt{run}. \texttt{resolve} takes no output directory because it writes
+nothing. \texttt{remeasure} takes a path to a finished measurement's JSON
+record instead.
+
+% ==========================================================
+\section{Your first run}
+% ==========================================================
+
+This walks one galaxy from nothing to a measured table, using only the
+Legacy Surveys images so it finishes in a couple of minutes.
+
+\textbf{Step 1.} Activate the environment.
+
+\cmdline{conda activate sedphot}
+
+\textbf{Step 2.} Confirm the galaxy resolves.
+
+\cmdline{sedphot resolve -{}-name "NGC 4889"}
+
+\begin{cmd}\ttfamily\frenchspacing
+\mbox{}~~[resolve] 'NGC 4889' -> RA=195.033738, Dec=+27.977025~~(Sesame)\\
+RA~~= 195.03373750\\
+Dec = +27.97702500\\
+label = NGC\_4889
+\end{cmd}
+
+\textbf{Step 3.} Fetch the catalog photometry.
+
+\cmdline{sedphot catalogs -{}-name "NGC 4889" -{}-all -{}-out-dir NGC\_4889}
+
+The console shows one block per archive, then a summary:
+
+\begin{cmd}\ttfamily\frenchspacing
+\mbox{}~~[resolve] 'NGC 4889' -> RA=195.033738, Dec=+27.977025~~(Sesame)\\
+\mbox{}\\
+Target: RA=195.033738, Dec=+27.977025~~~(search radius=2.0")\\
+\mbox{}\\
+=== galex ===\\
+\mbox{}~~[GALEX GUVcat] Attempt 1/5, radius=2.0"\\
+\mbox{}~~[GALEX GUVcat] Found 1 match(es) at radius=2.0"\\
+\mbox{}\\
+=== sdss ===\\
+\mbox{}~~[SDSS] Attempt 1/5, radius=2.0"\\
+\mbox{}~~[SDSS] Found 1 match(es) at radius=2.0"\\
+\mbox{}\\
+...\\
+\mbox{}\\
+Provider summary:\\
+\mbox{}~~galex~~~~~~~~ok~~~~~~~~~~~~~~2 rows\\
+\mbox{}~~sdss~~~~~~~~~ok~~~~~~~~~~~~~~5 rows\\
+\mbox{}~~jplus~~~~~~~~no\_match~~~~~~~~0 rows -{}- no J-PLUS DR3 source found\\
+\mbox{}~~panstarrs~~~~ok~~~~~~~~~~~~~~5 rows\\
+\mbox{}~~legacy~~~~~~~ok~~~~~~~~~~~~~~7 rows\\
+\mbox{}~~allwise~~~~~~ok~~~~~~~~~~~~~~4 rows\\
+\mbox{}~~hst~~~~~~~~~~ok~~~~~~~~~~~~~~2 rows\\
+\mbox{}\\
+Saved 25 photometric points to: NGC\_4889/Photometry/NGC\_4889\_catalog.csv
+\end{cmd}
+
+followed by the table itself.
+
+\textbf{Step 4.} Measure the images.
+
+\cmdline{sedphot measure -{}-name "NGC 4889" -{}-instruments legacy -{}-out-dir NGC\_4889}
+
+\begin{cmd}\ttfamily\frenchspacing
+\mbox{}~~[resolve] 'NGC 4889' -> RA=195.033738, Dec=+27.977025~~(Sesame)\\
+\mbox{}\\
+Target: RA=195.033738, Dec=+27.977025~~~(aperture 12", scene engine)\\
+\mbox{}\\
+=== legacy images ===\\
+\mbox{}~~3 band image(s) ready\\
+\mbox{}\\
+\mbox{}~~(scene catalog and star queries report here on a first run)\\
+\mbox{}\\
+\mbox{}~~~~[Legacy\_r] seat solve [target:sersic]: nfev 168, 4.1s last, ...\\
+\mbox{}~~~~[Legacy\_r] background track: -0.0074 -> -0.0071 uJy/as2 (6/121 ...\\
+\mbox{}~~~~[Legacy\_r] fill: 4\% of aperture masked, 100\% twin-filled, ...\\
+\mbox{}~~~~[Legacy\_r] f\_ap = 30184.2 +- 41.6 uJy (empap), excess -22.4, ...\\
+\mbox{}~~Legacy r: 30184.2 +/- 41.6 uJy (empap; QA Legacy\_r.png)\\
+\mbox{}~~~~[Legacy\_z] ...\\
+\mbox{}~~Legacy z: 48120.7 +/- 63.9 uJy (empap; QA Legacy\_z.png)\\
+\mbox{}~~~~[Legacy\_g] ...\\
+\mbox{}~~Legacy g: 12507.5 +/- 27.3 uJy (empap; QA Legacy\_g.png)\\
+\mbox{}\\
+Provider summary:\\
+\mbox{}~~legacy~~~~~~~ok~~~~~~~~~~~~~~3 rows -{}- measured bands: r, z, g\\
+\mbox{}\\
+Saved 3 measured bands to: NGC\_4889/Photometry/NGC\_4889\_measured.csv
+\end{cmd}
+
+followed by the table. The numbers depend on the galaxy; the structure
+does not. The indented \texttt{[Legacy\_r]} lines are the engine's running
+commentary and are truncated above to fit the page; on screen they run to
+the end of the line.
+
+\textbf{Step 5.} Draw the SED.
+
+\cmdline{sedphot sed -{}-out-dir NGC\_4889}
+
+\cmdline{\frenchspacing \mbox{}~~[sed] wrote NGC\_4889/Photometry/NGC\_4889\_sed.png}
+
+\textbf{The resulting file tree.}
+
+\begin{cmd}\ttfamily\frenchspacing
+NGC\_4889/\\
++-{}- Photometry/\\
+\mbox{}~~~~+-{}- NGC\_4889\_catalog.csv\\
+\mbox{}~~~~+-{}- NGC\_4889\_catalog.provenance.json\\
+\mbox{}~~~~+-{}- NGC\_4889\_measured.csv\\
+\mbox{}~~~~+-{}- NGC\_4889\_measured.provenance.json\\
+\mbox{}~~~~+-{}- NGC\_4889\_sed.png\\
+\mbox{}~~~~+-{}- coverage\_catalogs.json\\
+\mbox{}~~~~+-{}- coverage\_measure.json\\
+\mbox{}~~~~+-{}- Legacy/\\
+\mbox{}~~~~|~~~+-{}- legacy\_ls-dr9\_g.fits\\
+\mbox{}~~~~|~~~+-{}- legacy\_ls-dr9\_r.fits\\
+\mbox{}~~~~|~~~+-{}- legacy\_ls-dr9\_z.fits\\
+\mbox{}~~~~|~~~+-{}- QA/\\
+\mbox{}~~~~|~~~~~~~+-{}- Legacy\_g.png\\
+\mbox{}~~~~|~~~~~~~+-{}- Legacy\_r.png\\
+\mbox{}~~~~|~~~~~~~+-{}- Legacy\_z.png\\
+\mbox{}~~~~+-{}- QA/\\
+\mbox{}~~~~|~~~+-{}- growth\_curves.png\\
+\mbox{}~~~~+-{}- scene/\\
+\mbox{}~~~~~~~~+-{}- gaia\_scene.csv\\
+\mbox{}~~~~~~~~+-{}- tractor\_scene\_dr9.csv
+\end{cmd}
+
+Steps 3, 4 and 5 together are exactly what the \texttt{run} verb does:
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-out-dir NGC\_4889}
+
+% ==========================================================
+\section{Common tasks}
+% ==========================================================
+
+Each entry gives when to use it and the exact command. Substitute your own
+galaxy name and output directory.
+
+\subsection{A note on long commands}
+
+A few commands below are too wide for one line and are shown broken across
+two, with a trailing \texttt{\textbackslash}. That is the continuation
+character for bash and zsh (macOS, Linux).
+
+\begin{center}
+\begin{tabular}{L{6.0cm} L{5.5cm}}
+\toprule
+\textbf{Shell} & \textbf{Continuation character} \\
+\midrule
+macOS / Linux (bash, zsh) & \texttt{\textbackslash} \\
+Windows Command Prompt / Anaconda Prompt & \texttt{\textasciicircum} \\
+Windows PowerShell & \texttt{\textasciigrave}\ (backtick) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+On Windows, either swap the trailing \texttt{\textbackslash} for the right
+character, or --- simplest and always correct --- delete the line break
+and paste the whole thing as one long line.
+
+\subsection{Look up a galaxy's coordinates from its name}
+
+Use this before anything else, to confirm the name resolves and to see
+what label the output files will use.
+
+\cmdline{sedphot resolve -{}-name "NGC 4889"}
+
+If the name does not resolve, look the position up yourself (NED or SIMBAD
+in a browser) and use \texttt{-{}-ra} / \texttt{-{}-dec} everywhere
+instead:
+
+\cmdline{sedphot resolve -{}-ra 195.033738 -{}-dec 27.977025}
+
+\subsection{Fetch catalog photometry from every archive}
+
+The normal starting point. Queries all seven catalog archives and writes
+one combined table.
+
+\cmdline{sedphot catalogs -{}-name "M87" -{}-all -{}-out-dir M87}
+
+Each archive starts with a 2-arcsecond search radius and doubles it up to
+five times if nothing is found. Raise the starting radius for a galaxy
+whose catalog position is offset:
+
+\cmdline{sedphot catalogs -{}-name "M87" -{}-all -{}-radius 5 -{}-out-dir M87}
+
+\subsection{Fetch catalog photometry from one archive}
+
+Use this when you only need one archive, or when one archive was down
+during an earlier run and you want to retry just that one. The valid names
+are \texttt{galex}, \texttt{sdss}, \texttt{jplus}, \texttt{panstarrs},
+\texttt{legacy}, \texttt{allwise}, \texttt{hst}.
+
+\cmdline{sedphot catalogs -{}-name "M87" -{}-instruments legacy -{}-out-dir M87}
+
+Several at once:
+
+\cmdline{sedphot catalogs -{}-name "M87" -{}-instruments legacy sdss -{}-out-dir M87}
+
+Note that the table is rewritten from scratch each time, so a run with one
+archive replaces a table that held all seven. Re-run with
+\texttt{-{}-all} to rebuild the full table.
+
+\subsection{Measure images from every survey}
+
+Downloads images from all five image archives and measures the galaxy in
+every band. This is the slow command: expect minutes per band on a first
+run, less afterwards because the images are cached.
+
+\cmdline{sedphot measure -{}-name "M87" -{}-all -{}-out-dir M87}
+
+\subsection{Measure images from specific surveys only}
+
+The valid names are \texttt{sdss}, \texttt{panstarrs}, \texttt{legacy},
+\texttt{cfht}, \texttt{hst}.
+
+\cmdline{sedphot measure -{}-name "M87" -{}-instruments legacy cfht -{}-out-dir M87}
+
+\subsection{Measure a subset of filters}
+
+\texttt{-{}-bands} applies the same filter list to every selected survey;
+a survey that does not have one of them simply skips it.
+
+\cmdline{sedphot measure -{}-name "M87" -{}-all -{}-bands g r z -{}-out-dir M87}
+
+The default filter sets are:
+
+\begin{center}
+\begin{tabular}{L{5.2cm} L{7.6cm}}
+\toprule
+\textbf{Survey} & \textbf{Default filters} \\
+\midrule
+SDSS & \texttt{ugriz} \\
+Pan-STARRS & \texttt{grizy} \\
+Legacy Surveys (dr9) & \texttt{grz} \\
+Legacy Surveys (dr10) & \texttt{griz} \\
+CFHT MegaCam & \texttt{ugriz} \\
+HST & every filter in the matched observation group \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For HST, filter names are flight-filter designations:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot measure -{}-name "M87" -{}-instruments hst \textbackslash\\
+\mbox{}~~~~-{}-bands F475W F814W -{}-out-dir M87
+\end{cmd}
+
+\subsection{Change the aperture size}
+
+The measurement aperture is a circle centered on the target. The default
+radius is \textbf{12 arcseconds}.
+
+\cmdline{sedphot measure -{}-name "M87" -{}-all -{}-aperture 15 -{}-out-dir M87}
+
+The aperture must fall inside the curve-of-growth radius grid, which by
+default runs from 2 to 40 arcseconds. To go outside that, move the grid
+too:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot measure -{}-name "M87" -{}-all -{}-aperture 50 \textbackslash\\
+\mbox{}~~~~-{}-radii 2 10 20 30 40 50 60 -{}-cutout-size 200 -{}-out-dir M87
+\end{cmd}
+
+\subsection{Re-report an existing measurement at a different aperture}
+
+This is the fast path. Every measurement stores the \emph{curve of growth}
+--- the enclosed flux at every radius from 2 to 40 arcseconds --- so
+changing the reported aperture is a lookup, not a re-measurement. It takes
+milliseconds and never touches the files on disk unless you ask it to.
+
+Point it at the measurement's JSON record:
+
+Windows
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot remeasure M87\textbackslash Photometry\textbackslash M87\_measured.provenance.json \textasciicircum\\
+\mbox{}~~~~-{}-mode aperture -{}-aperture 10
+\end{cmd}
+
+macOS / Linux
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
+\mbox{}~~~~-{}-mode aperture -{}-aperture 10
+\end{cmd}
+
+The result prints as a table. To save it, add \texttt{-{}-out}:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
+\mbox{}~~~~-{}-mode aperture -{}-aperture 10 -{}-out M87\_R10.csv
+\end{cmd}
+
+Two other useful forms. The total flux of the fitted model:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
+\mbox{}~~~~-{}-integrated
+\end{cmd}
+
+And the fitted model's flux inside a chosen radius
+(\texttt{-{}-mode sersic} is the default):
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
+\mbox{}~~~~-{}-aperture 20
+\end{cmd}
+
+Asking for an aperture \textbf{past} the stored grid in
+\texttt{-{}-mode aperture} is different: there is no stored value to look
+up, so the command rebuilds the scene from the saved fit and integrates.
+It says so, and it takes minutes rather than milliseconds.
+
+\subsection{Measure a small or compact target}
+
+The defaults are sized for survey-resolution images of ordinary galaxies.
+A compact target --- typically on an HST mosaic --- needs four things
+moved together, or the measurement will treat the galaxy itself as sky.
+
+\begin{center}
+\begin{tabular}{T{3.2cm} L{3.6cm} L{4.6cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Default} & \textbf{Compact-target value} \\
+\midrule
+-{}-aperture & 12 arcsec & 2 arcsec \\
+-{}-cutout-size & 120 arcsec & 20 arcsec \\
+-{}-sky-rmin & 15 arcsec & 4 arcsec \\
+-{}-radii & 2 to 40 arcsec & 0.5 to 8 arcsec \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{-{}-sky-rmin} is the boundary between ``target'' and ``sky''. Sky
+is measured only outside it, and no pixel inside it is allowed to vote on
+the background level. At the 15-arcsecond default, a compact HST target
+would have most of the visit excluded from the sky estimate.
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot measure -{}-name "M87" -{}-instruments hst -{}-aperture 2 \textbackslash\\
+\mbox{}~~~~-{}-cutout-size 20 -{}-sky-rmin 4 -{}-radii 0.5 1 1.5 2 3 4 6 8 \textbackslash\\
+\mbox{}~~~~-{}-out-dir M87
+\end{cmd}
+
+The aperture must lie within the \texttt{-{}-radii} grid; the grid's outer
+radius must be under half the cutout size.
+
+\subsection{Run everything for one galaxy in a single command}
+
+Catalogs, then images and measurement, then the SED plot. Every stage is
+isolated: if one fails, the failure is recorded and the rest still run,
+and the command exits with a nonzero status.
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-out-dir NGC\_4889}
+
+Add SPHEREx:
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-spherex sersic -{}-out-dir NGC\_4889}
+
+Leave out slow or irrelevant archives (\texttt{-{}-skip} accepts both
+catalog and image archive names):
+
+\cmdline{sedphot run -{}-name "NGC 4889" -{}-skip hst jplus -{}-out-dir NGC\_4889}
+
+\begin{sloppypar}
+\texttt{run} accepts every measurement flag \texttt{measure} does ---
+\texttt{-{}-aperture}, \texttt{-{}-bands}, \texttt{-{}-cutout-size},
+\texttt{-{}-sky-rmin}, \texttt{-{}-radii}, and the rest --- with one
+exception: \texttt{-{}-dump-arrays} is available only on
+\texttt{measure}.
+\end{sloppypar}
+
+\subsection{Make the SED plot from tables already on disk}
+
+Use this after editing a table by hand, or after re-running one stage. It
+reads whichever of \texttt{<label>\_catalog.csv} and
+\texttt{<label>\_measured.csv} exist and draws them on one axis.
+
+\cmdline{sedphot sed -{}-out-dir NGC\_4889}
+
+If the directory holds tables for more than one label, name the one you
+want:
+
+\cmdline{sedphot sed -{}-label NGC\_4889 -{}-out-dir NGC\_4889}
+
+\subsection{Check that the archives all matched the same object}
+
+This is the check the flux columns cannot make: two archives confidently
+reporting photometry for two different objects. It draws each archive's
+matched position on the HST color image of the field, so a mismatch is
+visible.
+
+\cmdline{sedphot overlay -{}-out-dir NGC\_4889}
+
+It only works where HST has imaged the field. The first run downloads a
+\textbf{\textasciitilde380 MB} file (the HST detection mosaic, needed only
+for its coordinate grid) and caches it. If you already have a FITS file on
+the same grid, point at it and skip the download:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot overlay -{}-out-dir NGC\_4889 \textbackslash\\
+\mbox{}~~~~-{}-wcs-from NGC\_4889/Photometry/HST/hst\_F814W\_sci.fits
+\end{cmd}
+
+The file must be on the same pixel grid as the color composite; the
+dimensions are checked, and a mismatch refuses rather than misplacing
+every marker.
+
+Adjust the panel sizes (both are half-widths in arcseconds):
+
+\cmdline{sedphot overlay -{}-zoom-size 3 -{}-context-size 30 -{}-out-dir NGC\_4889}
+
+\subsection{Fetch SPHEREx spectrophotometry}
+
+Submits a forced-photometry job to the IRSA SPHEREx tool and writes the
+raw per-visit table. The job runs on IRSA's servers; the command polls
+until it finishes (up to an hour by default).
+
+The default source model is an elliptical S\'ersic profile whose shape is
+looked up in the Legacy Surveys Tractor catalog:
+
+\cmdline{sedphot spherex -{}-name "NGC 4889" -{}-out-dir NGC\_4889}
+
+If the shape lookup fails or returns nothing usable, the command
+\textbf{stops} rather than guessing. Three ways forward:
+
+Give the shape yourself, as n, axis ratio (a/b, at least 1), position
+angle in degrees east of north, and effective radius in arcseconds:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot spherex -{}-name "NGC 4889" -{}-out-dir NGC\_4889 \textbackslash\\
+\mbox{}~~~~-{}-sersic-params 4 1.3 65 12
+\end{cmd}
+
+Fit the shape on an image instead:
+
+\cmdline{sedphot spherex -{}-name "NGC 4889" -{}-sersic-from z -{}-out-dir NGC\_4889}
+
+Or treat the target as a point source (this biases an extended source, in
+a wavelength-dependent way):
+
+\cmdline{sedphot spherex -{}-name "NGC 4889" -{}-model psf -{}-out-dir NGC\_4889}
+
+Each distinct configuration gets its own tagged output file, so a PSF run
+and a S\'ersic run coexist. Nothing is ever overwritten.
+
+\subsection{Process a list of galaxies one after another}
+
+Put one galaxy name per line in a plain text file,
+\texttt{galaxies.txt}:
+
+\begin{cmd}\ttfamily\frenchspacing
+NGC 4889\\
+NGC 4874\\
+M87
+\end{cmd}
+
+\begin{sloppypar}
+\textbf{Windows --- Command Prompt or Anaconda Prompt batch file.} Save as
+\texttt{run\_all.bat} next to \texttt{galaxies.txt}, then double-click it
+or type \texttt{run\_all.bat}:
+\end{sloppypar}
+
+\begin{cmd}\ttfamily\frenchspacing
+@echo off\\
+for /f "usebackq delims=" \%\%G in ("galaxies.txt") do (\\
+\mbox{}~~echo === \%\%G ===\\
+\mbox{}~~sedphot run -{}-name "\%\%G" -{}-out-dir "galaxies\textbackslash\%\%G"\\
+)
+\end{cmd}
+
+\textbf{Windows --- PowerShell.} Type this at a PowerShell prompt, or save
+it as \texttt{run\_all.ps1}:
+
+\begin{cmd}\ttfamily\frenchspacing
+Get-Content galaxies.txt | ForEach-Object \{\\
+\mbox{}~~Write-Host "=== \$\_ ==="\\
+\mbox{}~~sedphot run -{}-name "\$\_" -{}-out-dir "galaxies\textbackslash\$(\$\_ -replace ' ','\_')"\\
+\}
+\end{cmd}
+
+\textbf{macOS / Linux --- bash or zsh.} Save as \texttt{run\_all.sh}, make
+it executable with \texttt{chmod +x run\_all.sh}, then run
+\texttt{./run\_all.sh}:
+
+\begin{cmd}\ttfamily\frenchspacing
+\#!/usr/bin/env bash\\
+while IFS= read -r name; do\\
+\mbox{}~~[ -z "\$name" ] \&\& continue\\
+\mbox{}~~echo "=== \$name ==="\\
+\mbox{}~~sedphot run -{}-name "\$name" -{}-out-dir "galaxies/\$\{name// /\_\}"\\
+done < galaxies.txt
+\end{cmd}
+
+\begin{warnbox}
+Run these one galaxy at a time, not in parallel. If you are also using
+\texttt{-{}-registry-update} (see section 11), running in parallel will
+corrupt the shared file.
+\end{warnbox}
+
+% ==========================================================
+\section{Every flag, explained}
+% ==========================================================
+
+\subsection{Shared by \texttt{resolve}, \texttt{catalogs},
+\texttt{measure}, \texttt{spherex}, \texttt{run}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-name & text & Resolvable object name; tried against Sesame, then NED,
+  then SIMBAD. Use instead of \texttt{-{}-ra}/\texttt{-{}-dec}. & none \\[2pt]
+-{}-ra & number & Right ascension in decimal degrees. Requires
+  \texttt{-{}-dec}. & none \\[2pt]
+-{}-dec & number & Declination in decimal degrees. Requires
+  \texttt{-{}-ra}. & none \\[2pt]
+-{}-out-dir & path & Directory everything lands under. \textbf{Required}
+  on every verb except \texttt{resolve} and \texttt{remeasure}. & none \\[2pt]
+-{}-label & text & Output filename stem. & sanitized name, or an IAU
+  designation for a bare position \\
+\bottomrule
+\end{longtable}
+
+Give exactly one of \texttt{-{}-name} or the
+\texttt{-{}-ra}/\texttt{-{}-dec} pair.
+
+\subsection{\texttt{catalogs}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-instruments & one or more names & Archives to query: \texttt{allwise},
+  \texttt{galex}, \texttt{hst}, \texttt{jplus}, \texttt{legacy},
+  \texttt{panstarrs}, \texttt{sdss}. & none \\[2pt]
+-{}-all & (switch) & Query every archive. Use this or
+  \texttt{-{}-instruments}. & off \\[2pt]
+-{}-radius & arcsec & Starting cone-search radius. Doubles up to five
+  times if nothing is found. & 2.0 \\[2pt]
+-{}-legacy-dr & \texttt{dr9} or \texttt{dr10} & Legacy Surveys data
+  release. \texttt{dr10} adds i-band in the south. & \texttt{dr9} \\[2pt]
+-{}-dered & (switch) & Correct fluxes for Milky Way extinction. Off means
+  as-measured, with the correction factor recorded per row. & off \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{measure}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-instruments & one or more names & Image archives: \texttt{cfht},
+  \texttt{hst}, \texttt{legacy}, \texttt{panstarrs}, \texttt{sdss}. &
+  none \\[2pt]
+-{}-all & (switch) & Every image archive. Use this or
+  \texttt{-{}-instruments}. & off \\[2pt]
+-{}-mode & \texttt{aperture} or \texttt{sersic} & \texttt{aperture}
+  reports the flux inside the circular aperture. \texttt{sersic} reports
+  the fitted galaxy model's flux instead. & \texttt{aperture} \\[2pt]
+-{}-bands & one or more filters & Filter subset applied to every archive.
+  & each archive's own default set \\[2pt]
+-{}-aperture & arcsec & Aperture radius. Must lie inside the
+  \texttt{-{}-radii} grid. & \textbf{12.0} \\[2pt]
+-{}-radii & one or more arcsec & Radii at which the curve of growth is
+  stored. & 2 to 40 in 1-arcsec steps \\[2pt]
+-{}-cutout-size & arcsec & Width of the image cutout. Half of this is the
+  largest usable radius. & 120 \\[2pt]
+-{}-sky-rmin & arcsec & Boundary between target and sky. Sky is measured
+  only outside it. Lower it for compact targets. & 15 \\[2pt]
+-{}-registry & path & JSON file of shared neighbor shapes to reuse
+  (section 11). & none \\[2pt]
+-{}-registry-\newline update & (switch) & Also write this galaxy's results
+  back into \texttt{-{}-registry}. Requires \texttt{-{}-registry}. &
+  off \\[2pt]
+-{}-sersic-from & band & With \texttt{-{}-mode sersic}: fit the galaxy's
+  shape on this band (\texttt{z} or \texttt{Legacy\_z}) and use it for all
+  bands. & per-archive refit \\[2pt]
+-{}-sersic-\newline params & 4 numbers & With \texttt{-{}-mode sersic}: state the
+  shape explicitly as n, axis ratio (a/b >= 1), position angle (deg E of
+  N), effective radius (arcsec). & none \\[2pt]
+-{}-sersic-\newline seeing & arcsec & PSF full width at half maximum assumed by a
+  \texttt{-{}-sersic-from} fit. The fitted index and radius are sensitive
+  to it. & a typical value for that survey, not a measured one; the run
+  prints a warning saying so \\[2pt]
+-{}-legacy-dr & \texttt{dr9} or \texttt{dr10} & Legacy Surveys release for
+  both images and the scene catalog. & \texttt{dr9} \\[2pt]
+-{}-legacy-\newline bricks & (switch) & Download full Legacy brick coadds instead
+  of small cutouts. Adds real per-pixel errors; roughly 40 MB per file. &
+  off \\[2pt]
+-{}-hst-\newline proposal-id & text & Restrict HST to one observing
+  program. & none \\[2pt]
+-{}-dump-arrays & (switch) & Write raw per-band arrays under
+  \texttt{<Instrument>/QA/} for debugging. & off \\
+\bottomrule
+\end{longtable}
+
+\begin{sloppypar}
+\texttt{-{}-sersic-from}, \texttt{-{}-sersic-params} and
+\texttt{-{}-sersic-seeing} are refused under
+\texttt{-{}-mode aperture}; the command tells you so rather than ignoring
+them.
+\end{sloppypar}
+
+\subsection{\texttt{spherex}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-model & \texttt{psf} or \texttt{sersic} & Source model for the forced
+  photometry. \texttt{psf} biases extended sources. & \texttt{sersic} \\[2pt]
+-{}-sersic-\newline params & 4 numbers & Explicit shape: n (<= 6), axis ratio
+  (a/b >= 1), position angle (deg E of N), effective radius (arcsec). &
+  Tractor catalog lookup \\[2pt]
+-{}-sersic-from & band & Fit the shape on this band's image instead of the
+  catalog lookup. & none \\[2pt]
+-{}-sersic-\newline seeing & arcsec & PSF full width at half maximum of the
+  shape-fit band. & a typical value for that survey, not a measured
+  one \\[2pt]
+-{}-bkg-size & pixels & Size of the tool's background-estimation region. &
+  15 \\[2pt]
+-{}-mjd-range & 2 numbers & Restrict to visits inside this MJD window.
+  This is IRSA's documented workaround for epochs whose metadata breaks
+  the job. & none \\[2pt]
+-{}-poll & seconds & How often to ask IRSA whether the job is done. & 5 \\[2pt]
+-{}-timeout & seconds & Give up after this long. & 3600 \\[2pt]
+-{}-legacy-dr & \texttt{dr9} or \texttt{dr10} & Legacy release for the
+  shape lookup or shape-fit image. & \texttt{dr9} \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{sed}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-out-dir & path & Directory holding the tables. Required. & none \\[2pt]
+-{}-label & text & Which table family to plot. & inferred when the
+  directory holds exactly one \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{overlay}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-out-dir & path & Directory holding the tables. Required. & none \\[2pt]
+-{}-label & text & Which table family to plot. & inferred when
+  unambiguous \\[2pt]
+-{}-zoom-size & arcsec & Half-width of the zoom panel. & 5 \\[2pt]
+-{}-context-size & arcsec & Half-width of the context panel. & 15 \\[2pt]
+-{}-wcs-from & path & A local FITS file already on the composite's grid,
+  used instead of downloading the \textasciitilde380 MB detection mosaic.
+  Refuses if the path names no file, or if the grid does not match. &
+  none \\[2pt]
+-{}-dpi & number & Figure resolution. & 200 \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{remeasure}}
+
+The first argument is positional: the path to a
+\texttt{<label>\_measured.provenance.json}.
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-mode & \texttt{sersic} or \texttt{aperture} & \texttt{sersic} reports
+  the fitted model's flux; \texttt{aperture} reports the measured,
+  neighbor-subtracted flux. & \texttt{sersic} \\[2pt]
+-{}-aperture & arcsec & Radius to report at. Matches the
+  \texttt{measure} default, so a bare \texttt{remeasure} re-reports at the
+  radius the measurement used. & 12 \\[2pt]
+-{}-integrated & (switch) & Report the total instead of an aperture. In
+  \texttt{sersic} mode that is the model's total; in \texttt{aperture}
+  mode it is the outermost stored radius. Overrides
+  \texttt{-{}-aperture}. & off \\[2pt]
+-{}-shape & \texttt{forced} or \texttt{fitted} & Which galaxy shape the
+  report is built on. \texttt{forced} uses the archive's reference-band
+  shape. \texttt{fitted} uses each band's own shape where one was stored;
+  bands without one fall back to \texttt{forced} and say so. &
+  \texttt{forced} \\[2pt]
+-{}-registry & path & Registry file to fall back on when rebuilding past
+  the stored radius grid. & a \texttt{registry.json} beside the galaxy
+  directory, if present \\[2pt]
+-{}-write-qa & (switch) & When rebuilding past the grid, write per-band
+  figures to \texttt{QA/remeasure\_R<N>as/}. & off \\[2pt]
+-{}-out & path & Write the result to this CSV instead of printing it. &
+  print \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{run}}
+
+\texttt{run} takes every flag from \texttt{catalogs}
+(\texttt{-{}-radius}, \texttt{-{}-dered}, \texttt{-{}-legacy-dr}) and
+every flag from \texttt{measure} \textbf{except}
+\texttt{-{}-instruments}, \texttt{-{}-all} and
+\texttt{-{}-dump-arrays}, plus:
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-skip & one or more names & Archives to leave out. Accepts both catalog
+  and image archive names. & none \\[2pt]
+-{}-spherex & \texttt{off}, \texttt{psf}, \texttt{sersic} & Also fetch
+  SPHEREx, with this source model. & off \\
+\bottomrule
+\end{longtable}
+
+\texttt{run} uses every archive that is not skipped, which is why it has
+no \texttt{-{}-instruments}.
+
+One special case: \texttt{-{}-sersic-params} is normally refused under
+\texttt{-{}-mode aperture}, but under \texttt{run} with
+\texttt{-{}-spherex psf} or \texttt{-{}-spherex sersic} it is accepted,
+because there it also declares the shape SPHEREx extracts with. One shape
+per galaxy, shared by both stages.
+
+% ==========================================================
+\section{What comes out}
+% ==========================================================
+
+\subsection{The directory tree}
+
+A full run of one galaxy produces:
+
+\begin{cmd}\ttfamily\frenchspacing
+<out-dir>/\\
++-{}- patches.json~~~~~~~~~~~~~~~~~~~~(optional, you create it)\\
++-{}- Photometry/\\
+\mbox{}~~~~+-{}- <label>\_catalog.csv~~~~~~~~~~~~~~~~~~~~~archive photometry\\
+\mbox{}~~~~+-{}- <label>\_catalog.provenance.json\\
+\mbox{}~~~~+-{}- <label>\_measured.csv~~~~~~~~~~~~~~~~~~~~measured photometry\\
+\mbox{}~~~~+-{}- <label>\_measured.provenance.json\\
+\mbox{}~~~~+-{}- <label>\_sed.png~~~~~~~~~~~~~~~~~~~~~~~~~combined SED figure\\
+\mbox{}~~~~+-{}- <label>\_overlay.png~~~~~~~~~~~~~~~~~~~~~position check figure\\
+\mbox{}~~~~+-{}- coverage\_catalogs.json~~~~~~~~~~~~~~~~~~per-archive outcome\\
+\mbox{}~~~~+-{}- coverage\_measure.json~~~~~~~~~~~~~~~~~~~per-archive outcome\\
+\mbox{}~~~~+-{}- Legacy/~~~~~~~cached images + QA/<band>.png\\
+\mbox{}~~~~+-{}- SDSS/~~~~~~~~~cached images + QA/<band>.png\\
+\mbox{}~~~~+-{}- PanSTARRS/~~~~cached images + QA/<band>.png\\
+\mbox{}~~~~+-{}- CFHT/~~~~~~~~~cached images + QA/<band>.png\\
+\mbox{}~~~~+-{}- HST/~~~~~~~~~~cached mosaics + QA/<band>.png\\
+\mbox{}~~~~+-{}- QA/\\
+\mbox{}~~~~|~~~+-{}- growth\_curves.png~~~~~~~~~~~~~~~~~~~all bands, one figure\\
+\mbox{}~~~~+-{}- scene/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~cached catalog queries\\
+\mbox{}~~~~+-{}- SPHEREx/\\
+\mbox{}~~~~~~~~+-{}- table\_photometry.<tag>.csv\\
+\mbox{}~~~~~~~~+-{}- table\_photometry.<tag>.provenance.json\\
+\mbox{}~~~~~~~~+-{}- extractions.json
+\end{cmd}
+
+\subsection{What each file is}
+
+\begin{longtable}{T{5.4cm} L{8.8cm}}
+\toprule
+\textbf{\normalfont File} & \textbf{What it is} \\
+\midrule
+\endhead
+<label>\_catalog.csv & One row per band, from the published archive
+  catalogs. The nearest source to the requested position in each
+  archive. \\[2pt]
+<label>\_measured.csv & One row per band, measured by \texttt{sedphot}
+  from the images. Same column layout as the catalog table. \\[2pt]
+*.provenance.json & The complete record of how the neighboring file was
+  made: every setting, the code revision, a checksum of the file, and for
+  measurements the full fit. This is what \texttt{remeasure} reads. Do not
+  edit it. \\[2pt]
+<label>\_sed.png & Flux against wavelength, both tables together. Catalog
+  points are filled, measured points are open. Marker shape identifies the
+  instrument, color tracks wavelength. \\[2pt]
+<label>\_overlay.png & Two panels of the HST color image with each
+  archive's matched position marked. \\[2pt]
+coverage\_catalogs.json,\newline coverage\_measure.json & Per-archive
+  outcome: \texttt{ok}, \texttt{no\_coverage}, \texttt{no\_match}, or
+  \texttt{error}, with a message and the number of rows. \\[2pt]
+<Instrument>/*.fits & The downloaded images, cached. Deleting one forces a
+  re-download on the next run. \\[2pt]
+<Instrument>/QA/<band>.png & The per-band diagnostic figure
+  (section 9). \\[2pt]
+QA/growth\_curves.png & Enclosed flux against radius for every measured
+  band on one axis. \\[2pt]
+scene/*.csv & Cached catalog queries describing the neighboring sources.
+  Deleting these forces a re-query. \\[2pt]
+SPHEREx/table\_photometry.\newline <tag>.csv & The raw per-visit SPHEREx
+  table, exactly as IRSA returned it. Never overwritten. \\[2pt]
+SPHEREx/extractions.json & An index mapping each tag to the configuration
+  that produced it. \\
+\bottomrule
+\end{longtable}
+
+\subsection{The output table columns}
+
+Both \texttt{<label>\_catalog.csv} and \texttt{<label>\_measured.csv}
+share this layout.
+
+\begin{longtable}{T{3.1cm} L{8.1cm} L{3.2cm}}
+\toprule
+\textbf{\normalfont Column} & \textbf{Meaning} & \textbf{Units} \\
+\midrule
+\endhead
+band & Band label, \texttt{<Instrument>\_<filter>} --- e.g.\
+  \texttt{Legacy\_g}, \texttt{SDSS\_u}, \texttt{PS1\_z},
+  \texttt{CFHT\_r}, \texttt{GALEX\_FUV}, \texttt{WISE\_W1},
+  \texttt{JPLUS\_uJAVA}, \texttt{HST\_F475W}. & --- \\[2pt]
+flux\_uJy & The flux. & microjansky (AB) \\[2pt]
+flux\_err\_uJy & Uncertainty on the flux. & microjansky \\[2pt]
+mag\_AB & The same measurement as an AB magnitude. Empty when the flux is
+  zero or negative. & mag \\[2pt]
+mag\_err & Uncertainty on the magnitude. & mag \\[2pt]
+target\_ra & The position you asked for. & degrees \\[2pt]
+target\_dec & The position you asked for. & degrees \\[2pt]
+match\_ra & Where the archive's matched source actually is. For measured
+  rows this equals \texttt{target\_ra}. & degrees \\[2pt]
+match\_dec & Where the archive's matched source actually is. & degrees \\[2pt]
+sep\_arcsec & Distance from the requested position to the match. 0 for
+  measured rows. & arcsec \\[2pt]
+flags & Quality tokens, \texttt{key=value} separated by semicolons (see
+  below). For catalog rows, whatever flags that archive publishes. &
+  --- \\[2pt]
+source & Where the number came from --- \texttt{Legacy\_DR9},
+  \texttt{SDSS\_DR17\_cModel}, \texttt{PanSTARRS\_DR1},
+  \texttt{GALEX\_GUVcat\_AIS}, \texttt{sedphot\_aperture\_scene\_empap},
+  and so on. & --- \\[2pt]
+retrieved & Date the value was pulled. & ISO date \\[2pt]
+mw\_transmission & Milky Way transmission in this band, where the archive
+  supplies it. Empty when unknown. & fraction \\[2pt]
+dered\_applied & \texttt{True} if the flux has been corrected for Milky
+  Way extinction. Measured rows are always \texttt{False}. & --- \\
+\bottomrule
+\end{longtable}
+
+\textbf{Three things to know about the numbers.}
+
+\begin{itemize}
+  \item \textbf{Fluxes are microjansky on the AB system.} Convert to AB
+        magnitude with \texttt{mag = 23.9 - 2.5 log10(flux)}.
+  \item \textbf{The errors are statistical only.} They describe the noise
+        in the measurement and nothing else --- no calibration
+        uncertainty, no error floor, no model uncertainty. Adding those is
+        the SED fitter's job, not this table's.
+  \item \textbf{Negative fluxes are real.} A non-detection in a faint band
+        gives a small negative number after background subtraction. That
+        is the honest measurement and it is preserved deliberately; it is
+        not an error, and it must not be clipped to zero. Its
+        \texttt{mag\_AB} cell is simply empty.
+\end{itemize}
+
+\textbf{The \texttt{flags} tokens on measured rows.} These let you filter a
+table without opening a single figure.
+
+\begin{longtable}{T{2.6cm} L{5.4cm} L{6.4cm}}
+\toprule
+\textbf{\normalfont Token} & \textbf{Meaning} & \textbf{What to look for} \\
+\midrule
+\endhead
+cov & Fraction of aperture pixels with real data. & Should be 1.000. Below
+  0.95 the band is refused outright. \\[2pt]
+maskfrac & Fraction of the aperture masked because a neighboring source
+  sat there. & A few percent is normal. Above
+  \textasciitilde0.2 the flux leans heavily on reconstruction. \\[2pt]
+twinfrac & Fraction of masked pixels reconstructed from the galaxy's
+  mirror side rather than from the model. & 1.00 is best. \\[2pt]
+nbsub & Flux subtracted from the aperture as neighboring sources. &
+  Compare against the reported flux. Large values mean a crowded
+  field. \\[2pt]
+excess & Flux growing outside the aperture beyond what the galaxy's own
+  model predicts. & Near zero is good. Large positive means contamination
+  or an unmodeled envelope. \\[2pt]
+pedb & Residual uniform background left in the curve of growth. & Should
+  be near zero. \\[2pt]
+conv & Radius, in arcsec, at which the curve of growth flattened.
+  \texttt{0} means it never did. & Should be at or inside the
+  aperture. \\[2pt]
+bg & The fitted background level. & --- \\[2pt]
+far & An independent background level measured far from the target. &
+  Should broadly agree with \texttt{bg}. \\[2pt]
+mesh & Flux the smooth background surface removed from the aperture. &
+  Large values mean structured background. \\[2pt]
+art & Area, in square arcsec, flagged as a detector artifact (a bleed
+  trail, a streak). & Present only when one was found. \\[2pt]
+leash & How many neighboring sources hit their brightness limit. & Present
+  only when some did. \\[2pt]
+refit & The galaxy's fitted brightness relative to the catalog's. & Near 1
+  is unremarkable. \\[2pt]
+atbound & How many fitted shape parameters ended at a limit. & Present
+  only when some did. \\[2pt]
+reg & How many neighbors came from the shared registry. & --- \\[2pt]
+scene=none & No catalog of neighboring sources was available; the galaxy
+  was measured with no neighbor modeling at all. & Treat the flux with
+  care in a crowded field. \\
+\bottomrule
+\end{longtable}
+
+% ==========================================================
+\section{Reading the QA figures}
+% ==========================================================
+
+Two figures per measurement run, plus one per band.
+
+\subsection{The per-band figure}
+
+\texttt{<Instrument>/QA/<Instrument>\_<band>.png} --- five panels in a row.
+
+\begin{enumerate}
+  \item \textbf{data} --- the image, with stars already subtracted. The
+        blue circle is your aperture. Orange contours, if present, mark
+        detector artifacts. The title gives the fitted background level
+        and its tilt.
+  \item \textbf{fitted scene + background} --- the model: the galaxy, its
+        neighbors, and the background, as the fit believes them to be.
+  \item \textbf{residual - mesh} --- the data minus the model, and minus
+        the smooth background surface. This is the panel that tells you
+        whether the fit worked.
+  \item \textbf{masked + filled - mesh} --- the image the flux is actually
+        measured from: masked pixels replaced by reconstructed values.
+        Green contours outline the mask. The title gives the masked
+        fraction of the aperture.
+  \item \textbf{curve of growth} --- enclosed flux against radius. The red
+        line with dots is the measurement; the black dashed line is the
+        fitted galaxy model. The blue vertical line is your aperture; a
+        grey dotted line marks where the curve flattened. The title gives
+        the final flux, its error, and the excess growth.
+\end{enumerate}
+
+\textbf{A good figure.}
+
+\begin{itemize}
+  \item Panel 3 is flat noise. No bright leftover at the galaxy's center,
+        no dark hole where a neighbor was over-subtracted.
+  \item Panel 5's red curve rises and then flattens, and the flattening
+        happens at or inside the blue aperture line. The title says
+        \texttt{conv@14"} or similar rather than \texttt{no plateau}.
+  \item The red curve and the black dashed model track each other out to
+        the aperture.
+  \item \texttt{excess} in the title is small compared with the flux.
+  \item Green mask contours in panel 4 cover only a small part of the blue
+        circle.
+\end{itemize}
+
+\textbf{A suspicious figure.}
+
+\begin{longtable}{L{5.2cm} L{9.2cm}}
+\toprule
+\textbf{What you see} & \textbf{What it means} \\
+\midrule
+\endhead
+Title says \texttt{no plateau} & The curve of growth was still rising at
+  40 arcsec. Either the galaxy is genuinely large, or the background is
+  under-subtracted. Check \texttt{pedb} and the \texttt{far}
+  token. \\[2pt]
+Red curve turns over and falls & The background was over-subtracted. \\[2pt]
+Large positive \texttt{excess} & Light in the outskirts that the galaxy's
+  model does not account for --- a neighbor, or a real envelope. \\[2pt]
+Dark hole at a neighbor's position in panel 3 & That neighbor was
+  over-subtracted. \\[2pt]
+Bright residual core in panel 3 & The galaxy profile did not fit; the flux
+  may be biased. \\[2pt]
+Green contours across much of the blue circle & Most of the aperture is
+  reconstructed rather than measured. Check \texttt{twinfrac}. \\[2pt]
+Orange artifact contours crossing the aperture & A detector artifact sits
+  on the target. \\[2pt]
+Red and black curves diverge inside the aperture & The fitted model is a
+  poor description of the galaxy. Fine in \texttt{-{}-mode aperture} (the
+  model is only a cross-check there), serious in
+  \texttt{-{}-mode sersic} (the model \emph{is} the answer). \\
+\bottomrule
+\end{longtable}
+
+\subsection{The growth-curve figure}
+
+\texttt{QA/growth\_curves.png} --- every measured band on one axis,
+enclosed flux against radius, with a logarithmic vertical scale. Line style
+identifies the instrument, color tracks wavelength. The blue vertical line
+is the science aperture.
+
+Read it for consistency across bands. Curves should be roughly parallel
+and should flatten at similar radii. A single band that keeps climbing
+while its neighbors flatten, or one that crosses the others, is the band
+to open individually.
+
+% ==========================================================
+\section{When something goes wrong}
+% ==========================================================
+
+Every command reports failures rather than hiding them. Most messages name
+the fix. The recurring ones:
+
+\begin{longtable}{T{3.5cm} L{4.2cm} L{6.9cm}}
+\toprule
+\textbf{\normalfont Symptom} & \textbf{Cause} & \textbf{Fix} \\
+\midrule
+\endhead
+error: the following arguments are required: -{}-out-dir &
+  \texttt{-{}-out-dir} is required on every verb that writes. & Add
+  \texttt{-{}-out-dir <directory>}. \\[2pt]
+error: give -{}-instruments ... or -{}-all & \texttt{catalogs} and
+  \texttt{measure} need to be told which archives to use. & Add
+  \texttt{-{}-all}, or \texttt{-{}-instruments legacy sdss}. \\[2pt]
+Could not resolve 'X' with Sesame, NED, or SIMBAD & The name is not in any
+  resolver. & Look the position up yourself and use \texttt{-{}-ra} /
+  \texttt{-{}-dec}. \\[2pt]
+-{}-registry-update needs -{}-registry PATH & You asked to write to a
+  registry without naming one. & Add \texttt{-{}-registry <path>}, or drop
+  \texttt{-{}-registry-update}. \\[2pt]
+-{}-sersic-from only applies to -{}-mode sersic & A shape flag was given
+  under aperture mode, where it would have no effect. & Add
+  \texttt{-{}-mode sersic}, or drop the flag. \\[2pt]
+ValueError: -{}-aperture 60" lies outside the curve-of-growth grid
+  [2, 40]" & The aperture is outside the radius grid the run stores. &
+  Pass \texttt{-{}-radii} covering it, and a \texttt{-{}-cutout-size} at
+  least twice the largest radius. \\[2pt]
+{\normalfont An \textbf{image} archive reports} no\_coverage & That
+  survey's footprint does not include this position. Nothing is wrong. &
+  Nothing to do. Fewer bands is the correct answer. \\[2pt]
+{\normalfont A \textbf{catalog} archive reports} no\_match & Either the
+  field genuinely holds no catalogued source within the expanded search
+  radius (including ``this position is outside that survey's footprint''),
+  \textbf{or} the archive was down. The two are indistinguishable: a
+  failed query returns no rows, and the radius expansion then reports
+  \texttt{no\_match}. Catalog archives never report
+  \texttt{no\_coverage}. & Re-run just that archive later. If it still
+  says \texttt{no\_match}, try a larger \texttt{-{}-radius}. An unexpected
+  \texttt{no\_match} on a well-covered galaxy is almost always an
+  outage. \\[2pt]
+{\normalfont An archive reports} error & A service or parsing failure that
+  got past the provider's own retries. The message names it. & Read
+  \texttt{coverage\_catalogs.json} or \texttt{coverage\_measure.json},
+  then re-run that archive. \\[2pt]
+Legacy z: no\_coverage -{}- aperture coverage 0.83 < 0.95 & More than 5\%
+  of the aperture is off the image footprint, blank, or covered by an
+  artifact. The band is refused rather than reporting a silently biased
+  flux. & Use a smaller \texttt{-{}-aperture}, or a larger
+  \texttt{-{}-cutout-size} if the cutout was simply too small. Otherwise
+  accept the missing band. \\[2pt]
+blank pixels inside the 0.5" peak & Dead pixels at the very center of the
+  galaxy. No reconstruction can invent the peak. & The band cannot be
+  measured. \\[2pt]
+scene catalog is empty here; measuring blind, and scene=none in flags & No
+  catalog of neighboring sources covers this position, so nothing was
+  subtracted or masked. & The flux is still measured, but with no neighbor
+  handling. In an uncrowded field this is fine; in a crowded one, treat it
+  with care. \\[2pt]
+No images fetched from any provider; nothing to measure. & No archive
+  covered the position, or all of them failed. & Check
+  \texttt{coverage\_measure.json} for which and why. \\[2pt]
+{\normalfont \texttt{overlay} downloads \textasciitilde380 MB} & The HST
+  color composite carries no coordinate grid of its own, so the detection
+  mosaic is fetched for its grid. It is cached after the first time. &
+  Pass \texttt{-{}-wcs-from} with a local FITS file already on that
+  grid. \\[2pt]
+no HAP total/detection product at this position, {\normalfont or}
+  sedphot overlay: no figure written & HST has not imaged this field. &
+  The overlay is unavailable for this galaxy. \\[2pt]
+-{}-wcs-from names no file & The path is mistyped. It refuses rather than
+  falling back to the big download. & Correct the path. \\[2pt]
+[spherex] Tractor shape lookup failed ... aborting {\normalfont or}
+  no usable extended Tractor shape at this position & SPHEREx will not
+  guess a source shape. A raw table written under the wrong shape is
+  permanent and unmarked, so it stops instead. & Pass
+  \texttt{-{}-sersic-params N AXR PA RE}, or \texttt{-{}-sersic-from z} to
+  fit one, or \texttt{-{}-model psf}. \\[2pt]
+table\_photometry.\newline <tag>.csv exists but no sidecar vouches for
+  this configuration & A raw SPHEREx table is on disk that nothing
+  certifies. Nothing is ever overwritten. & Move the file aside
+  deliberately, then re-run. \\[2pt]
+[spherex] WARNING: reff 0.60" is below the tool's 1" point-source
+  threshold & The tool treats anything that small as a point source, so
+  the S\'ersic parameters do nothing. & Either accept it, or use
+  \texttt{-{}-model psf} and be explicit. \\[2pt]
+remeasure prints aperture 45" is past the stored curve of growth (ends at
+  40"); rebuilding the scene & Beyond the stored grid there is no value to
+  interpolate, so the scene is rebuilt and re-integrated. & Nothing wrong
+  --- just expect minutes rather than milliseconds. \\[2pt]
+sedphot remeasure: aperture 70" exceeds the stamp half-width (60") & The
+  requested radius runs off the cutout the fit was built on. & Re-measure
+  with a larger \texttt{-{}-cutout-size}. \\[2pt]
+remeasure says bands fell back to the forced shape under -{}-shape fitted
+  & Those bands have no per-band shape stored --- either an older
+  measurement, or a galaxy where the extra fit never ran. & Either accept
+  \texttt{forced}, or re-measure the galaxy. \\[2pt]
+cannot infer -{}-label in ...: found stems [...] & The directory holds
+  tables for more than one galaxy, so \texttt{sed} and \texttt{overlay}
+  cannot guess which. & Pass \texttt{-{}-label <stem>}. \\[2pt]
+[sed] WARNING ... the plotted fluxes are NOT on a common extinction scale
+  & You used \texttt{-{}-dered}, which corrects the catalog table only.
+  The measured table is always as-measured, so the figure mixes the two. &
+  Expected. Do not read colors off that figure; use the tables. \\
+\bottomrule
+\end{longtable}
+
+% ==========================================================
+\section{Getting more out of it}
+% ==========================================================
+
+Two features exist for cases the defaults do not cover. You will not need
+either at first.
+
+\subsection{\texttt{patches.json} --- correcting the scene by hand}
+
+Before measuring, \texttt{sedphot} builds a picture of the field from the
+Legacy Surveys catalog: which sources are there, how big and how bright.
+Occasionally that catalog is wrong in a way that matters --- most often it
+merges a close pair into a single entry, or splits one galaxy into
+several.
+
+You can correct it. Put a file named \texttt{patches.json} in the galaxy's
+\texttt{-{}-out-dir} (next to \texttt{Photometry/}, not inside it). It is
+read automatically and its keys are logged at the start of the run.
+
+The keys it accepts:
+
+\begin{longtable}{T{3.6cm} L{10.4cm}}
+\toprule
+\textbf{\normalfont Key} & \textbf{What it does} \\
+\midrule
+\endhead
+replace\_rows & Replace one catalog entry with one or more of your own.
+  The usual fix for a merged close pair. \\[2pt]
+free\_seats & Let the source at a given position have its shape fitted
+  rather than taken from the catalog. \\[2pt]
+target\_system & Declare that a nearby source belongs to the target ---
+  its light is counted with the galaxy rather than subtracted from
+  it. \\[2pt]
+target\_halo & Give the target an extended-envelope component, for a
+  brightest-cluster galaxy. \\[2pt]
+target\_refit & Turn the target's own shape refit on or off. \\[2pt]
+snap\_gated & Move fitted sources onto their nearest brightness peak. \\[2pt]
+harvest\_target & Record the target's own shape into the shared
+  registry. \\[2pt]
+comment & Free text. Ignored by the code; use it to say why the patch
+  exists. \\
+\bottomrule
+\end{longtable}
+
+Reach for this when a QA figure shows a clear over- or under-subtraction
+at a specific neighbor, and only then. An unnecessary patch is a way to
+bias a measurement.
+
+\subsection{The cross-field registry --- shared neighbors}
+
+When several galaxies in the same field are measured separately, a
+neighboring source may appear in more than one of them. Left alone, each
+measurement fits that source independently, and the fits disagree.
+
+The registry fixes that. It is one JSON file recording the fitted shape,
+position and per-band brightness of shared sources, in sky units so an
+entry works from any field.
+
+Consume it:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot measure -{}-name "M87" -{}-all -{}-out-dir M87 \textbackslash\\
+\mbox{}~~~~-{}-registry registry.json
+\end{cmd}
+
+Consume it and write this galaxy's results back into it:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot measure -{}-name "M87" -{}-all -{}-out-dir M87 \textbackslash\\
+\mbox{}~~~~-{}-registry registry.json -{}-registry-update
+\end{cmd}
+
+Two things to know before using it:
+
+\begin{itemize}
+  \item \textbf{Run galaxies one at a time.} Updates are last-writer-wins
+        with no file locking. Two runs writing at once will corrupt the
+        file.
+  \item \textbf{Order matters while the file fills.} A galaxy measured
+        after its neighbor was registered gets that neighbor's shape
+        frozen in rather than fitted fresh. Once every galaxy in a field
+        has been measured once, a second pass over the same file is
+        uniform.
+\end{itemize}
+
+Use it when you are measuring several galaxies in one field and want their
+shared neighbors treated identically. Skip it for a single galaxy; it buys
+nothing there.
+
+\begin{notebox}
+\emph{Every number this package writes is accompanied by a
+\textup{\texttt{.provenance.json}} file recording the settings, the code
+revision, and a checksum of the product. When a result needs defending,
+that file is the record.}
+\end{notebox}
+
+\end{document}
