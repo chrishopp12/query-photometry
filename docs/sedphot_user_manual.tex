@@ -22,6 +22,10 @@
 % Straight quotes in monospace, curly apostrophes in prose, so a command
 % copied out of a code block pastes back into a shell unchanged.
 % Typewriter faces have zero interword stretch; that is the test.
+%
+% Section titles must use \textquoteright rather than a bare ' --- the
+% kernel's math-active ' wins when a title is written to the .toc, and
+% the entry comes out as a math prime.
 \begingroup
   \catcode`\'=\active
   \protected\gdef'{\ifdim\fontdimen3\font=0pt
@@ -550,7 +554,7 @@ On Windows, either swap the trailing \texttt{\textbackslash} for the right
 character, or --- simplest and always correct --- delete the line break
 and paste the whole thing as one long line.
 
-\subsection{Look up a galaxy's coordinates from its name}
+\subsection{Look up a galaxy\textquoteright s coordinates from its name}
 
 Use this before anything else, to confirm the name resolves and to see
 what label the output files will use.
