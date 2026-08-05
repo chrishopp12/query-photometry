@@ -462,11 +462,11 @@ def _cmd_batch(args: argparse.Namespace) -> None:
     from .batch import run_sweep
 
     _check_measure_args(args, 'batch')
-    # IRSA runs at most two spectrophotometry jobs at a time. Whether a
-    # third queues or is refused is not established, and a sweep is the
-    # wrong place to find out: each job is a 20-60 minute server-side
-    # extraction, so a refusal wastes an hour per target and a silent
-    # queue makes --workers meaningless for this stage either way.
+    # IRSA runs two spectrophotometry jobs at a time and QUEUES the rest
+    # rather than refusing them, so this says so and continues. The
+    # caution that remains is not IRSA's: --workers here also sets the
+    # MEASUREMENT concurrency, which is bounded by what the image
+    # archives and the local filesystem tolerate.
     if args.spherex != 'off' and args.workers > SPHEREX_DOCUMENTED_JOBS:
         print(f"NOTE --spherex {args.spherex} with --workers {args.workers} "
               f"submits more than the {SPHEREX_DOCUMENTED_JOBS} extractions "
