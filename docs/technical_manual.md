@@ -28,10 +28,15 @@ two halves that share one table schema:
   curve-of-growth aperture flux or a forced-model flux.
 
 A third, independent path (`spherex.py`) submits an IRSA forced-photometry job and
-stores the raw per-visit spectrophotometry table verbatim.
+stores the raw per-visit spectrophotometry table verbatim, for a single position or
+for several fit jointly (`groups.py`).
 
-Everything is a subcommand of one CLI (`src/sedphot/cli.py`), and each verb maps to
-one driver in `src/sedphot/pipeline.py`:
+A fourth path schedules and executes work over many galaxies at once
+(`schedule.py` + `batch.py`).
+
+Everything is a subcommand of one CLI (`src/sedphot/cli.py`). The per-galaxy verbs
+map to a driver in `src/sedphot/pipeline.py`; the multi-target verbs drive their
+own modules:
 
 | Verb | Driver | Produces |
 |---|---|---|
@@ -39,22 +44,29 @@ one driver in `src/sedphot/pipeline.py`:
 | `catalogs` | `run_catalogs` | `<label>_catalog.csv` |
 | `measure` | `run_measure` | `<label>_measured.csv` + QA figures |
 | `spherex` | `run_spherex` | `SPHEREx/table_photometry.<tag>.csv` |
-| `sed` | `run_sed` | `<label>_sed.png` |
+| `sed` | `run_sed` | `<label>_sed.png`, or `<label>_spherex_sed.png` under `--spherex` |
 | `overlay` | `run_overlay` | `<label>_overlay.png` |
 | `remeasure` | `remeasure.remeasure` | re-reported fluxes from a stored fit |
 | `run` | `run_all` | catalogs → measure → SPHEREx (opt-in) → SED |
+| `plan` | `schedule.build_plan` | `<plan>.json` + `<plan>.csv` |
+| `batch` | `batch.run_sweep` | per-group registries, the merged registry, a report, per-target logs |
+| `spherex-plan` | `groups.plan_groups` | `<config>.json` + `<config>.csv` |
+| `spherex-batch` | `groups.run_config` | one joint table per science member, a report, per-group logs |
 
-Every product lands under `<out-dir>/Photometry/`, alongside a per-product JSON
-provenance sidecar and a per-provider `coverage_*.json` status report. Fluxes are
-microjansky, AB, statistical errors only, as-measured unless `--dered` is passed.
+Every per-galaxy product lands under `<out-dir>/Photometry/`, alongside a
+per-product JSON provenance sidecar and a per-provider `coverage_*.json` status
+report. The multi-target verbs write outside any one galaxy and name their outputs
+individually. Fluxes are microjansky, AB, statistical errors only, as-measured
+unless `--dered` is passed.
 
 The measurement path is where the complexity is. One band's flux is produced by:
 cutting a stamp, resolving a PSF, rendering every survey-catalog neighbor as a
-model component, replacing confirmed stars with their own measured profiles,
-solving all component amplitudes (and, where warranted, shapes) jointly against a
-background plane, masking whatever residual neighbor light remains, reconstructing
-the masked pixels from their mirror through the target, and integrating a curve of
-growth. Every step writes a machine-readable witness.
+model component, routing confirmed stars by geometry (masked inside the aperture
+zone, leashed outside it — never subtracted), solving all component amplitudes
+(and, where warranted, shapes) jointly against a background plane, masking whatever
+residual neighbor light remains, reconstructing the masked pixels from their mirror
+through the target, and integrating a curve of growth. Every step writes a
+machine-readable witness.
 
 ---
 
@@ -117,7 +129,7 @@ The package carries a large private vocabulary. Read this before the deep sectio
 | **twin fill** | `measure/aperture.py` `twin_fill` | Reconstruction of masked and blank aperture pixels from their **point reflection through the target center**, corrected by the odd part of the ambient surface, and clamped between the mirror value and the model fill (fitted target + background) so holes are impossible by construction. `twinfrac` is the fraction of masked aperture pixels that had a valid mirror. |
 | **shred** | `measure/components.py` `drop_target_shreds` | A catalog row inside the science aperture whose `fracflux_r` exceeds `recipe.SHRED_FRACFLUX` — the catalog's rendering of the target's own substructure, not an independent source. Such rows **leave the scene entirely** and their light is measured as target flux. Scoped to the aperture; patch-named positions are exempt. |
 | **plateau** | `measure/aperture.py` `plateau_hold` | The first curve-of-growth radius where the increments go quiet for `PLATEAU_RUN` consecutive steps **and hold** to the grid end. `-1` when the curve never certifies. Reported as `conv=`. |
-| **star zone** | `measure/recipe.py` `STAR_ZONE_BUFFER_AS` | The disk of radius `aperture + 3″` around the target. A star whose profile measurement failed inside it gets **no design column** (a free point-source column there absorbs target light); its predicted footprint is masked and twin-filled instead. |
+| **star zone** | `measure/recipe.py` `STAR_ZONE_BUFFER_AS` | The disk of radius `aperture + 3″` around the target. **Every** star inside it gets **no design column** (a free point-source column there absorbs target light); its predicted footprint is masked and twin-filled instead. The route is decided by geometry alone — nothing is measured, so nothing can fail. |
 | **treated star** | `measure/stars.py` | A confirmed star routed by geometry alone. Inside the star zone it is *masked* and twin-filled with no design column (`mode: masked`); outside it keeps its catalog component with a leashed amplitude and `star_reverted=True` (`mode: leashed`), which makes `build_mask` use its full uncapped model isophote. A star is never subtracted from the data: both routes bound the damage a wrong star model can do. |
 | **demote** | `measure/stamp.py` `check_coverage` | Refusing a band as `no_coverage` rather than reporting a biased flux. Three triggers: aperture coverage below `COVERAGE_MIN = 0.95`, any dead pixel inside `PEAK_PROTECT_AS = 0.5″`, or seeing-core mask fraction above `CORE_MASKFRAC_MAX = 0.10`. |
 
@@ -137,8 +149,32 @@ The package carries a large private vocabulary. Read this before the deep sectio
 | Term | Meaning |
 |---|---|
 | **patches** | An optional per-galaxy `patches.json` beside the galaxy directory. Custom knowledge the blind catalog rules cannot supply. No file means pure catalog behavior. See [§6](#6-extension-points). |
-| **extraction / tag** | SPHEREx only. An **extraction** is one distinct configuration (source model + background region + MJD window). Its **tag** is `<model>-<hash6>`, a deterministic hash over the canonically-normalized configuration, used as the table filename infix and indexed in `extractions.json`. |
+| **extraction / tag** | SPHEREx only. An **extraction** is one distinct configuration. For a single position that is the source model + background region + MJD window; for a **joint** extraction the whole membership is part of it too, because a joint fit divides the light between its members. Two tag families: `<model>-<hash6>` (`extraction_tag`) and `joint-<model>-<hash6>` (`group_extraction_tag`). The `joint-` token leads specifically so a glob written for solo tables (`table_photometry.sersic-*.csv`) cannot match a joint one — both coexist in a directory and a consumer selects deliberately. |
 | **HAP** | Hubble Advanced Products — the MAST pipeline producing single-visit drizzled mosaics, per-filter point/segment catalogs, and per-field color composites. The `hst` image provider, the `hst` catalog provider, and `overlay` all consume HAP products. |
+
+### Joint SPHEREx extraction
+
+| Term | Owner | Meaning |
+|---|---|---|
+| **joint extraction** | `spherex.py`, `groups.py` | One IRSA job fitting several positions **simultaneously**, so the light of a blended pair is divided between them instead of attributed wholly to one. A SPHEREx pixel is ~6.2″, so this is the difference between a deblended flux and a contaminated one. |
+| **group** | `groups.py` | The set of sources in one joint job, at most `GROUP_SOURCES_MAX = 20`. The unit of planning, of execution, and of extraction identity. |
+| **science member** | `spherex.py` `ROLE_SCIENCE` | A member whose spectrum is a product in its own right. Its table lands in its own galaxy directory, in exactly the shape a single-position extraction produces — which is what keeps a joint extraction consumable by anything reading one table per galaxy. Needs an `out_dir`. |
+| **ancillary member** | `spherex.py` `ROLE_ANCILLARY` | A member present only to absorb light that would otherwise land on a science member. Its spectrum is archived with the group, never in a galaxy directory; with no `group_dir` it is fit and then discarded, which is reported. |
+| **blend radius** | `groups.py` `DEFAULT_BLEND_RADIUS_AS` | 45″ (~7 SPHEREx pixels). Targets closer than this share a job. Linking is **transitive** (single-linkage): A near B near C is one group even when A and C are apart, because blending is transitive at the PSF scale. |
+| **companion** | `groups.py` `_companions_for` | A catalog neighbor that is not itself a target, seated as an ancillary member when its r flux is at least `DEFAULT_COMPANION_FLUX_RATIO` (0.1) of the science member's. Below that it cannot move the science flux past the noise and would cost one of twenty seats. |
+| **queue budget** | `spherex.py` `QUEUE_TIMEOUT` | The bound on how long a job may wait to **start**, kept separate from `timeout`, the bound on how long it may **run**. A single wall-clock budget makes the client's patience depend on how many jobs the caller submitted, so the tail of a deep queue would be killed for the service being busy. |
+
+### Scheduling a sweep
+
+| Term | Owner | Meaning |
+|---|---|---|
+| **plan** | `schedule.py` `build_plan` | The census and pass assignment for a whole target list, written as JSON plus a flat CSV. Produced by `plan`, consumed by `batch`. |
+| **harvest pass** | `schedule.py` `PASS_HARVEST` | The targets that both gate (so they harvest a shape) **and** have a consumer (so the shape is read by someone). These are the only fields writing a record another field reads. Run group-parallel, target-serial, each group writing its own registry file. |
+| **parallel pass** | `schedule.py` `PASS_PARALLEL` | Everything else, run against the frozen merged registry with updates off. Writes no shared state, so concurrency is bounded by archive tolerance rather than by correctness. |
+| **gate reach** | `schedule.py` `gate_reach_arcsec` | How far from its own center a field can **write** a registry entry: the stamp half-width less an edge margin. |
+| **scene cone** | `schedule.py` `scene_radius_arcsec` | How far from its own center a field can **read** an entry. |
+| **link radius** | `schedule.py` `link_radius_arcsec` | Gate reach + scene cone + `DEFAULT_LINK_MARGIN_AS`. Two fields closer than this may touch the same entry and must share a group; further apart they are independent. A margin costs concurrency, a shortfall costs reproducibility. |
+| **consumer** | `schedule.py` `consumer_counts` | A field that would read an entry some other field harvests. A gating target with no consumer harvests nothing anyone wants, so it stays in the parallel pass. |
 
 ---
 
@@ -315,15 +351,16 @@ run_measure(coord, label, out_dir, *, instruments, mode='aperture', bands=None,
             registry_path=None, registry_update=False,
             pin_by_band=None, write_outputs=True, qa_dir=None,
             dump_arrays=False, legacy_dr=LEGACY_DR_DEFAULT,
-            legacy_bricks=False, hst_proposal_id=None,
+            legacy_bricks=False, legacy_route=ROUTE_AUTO,
+            hst_proposal_id=None,
             target_name=None) -> pd.DataFrame
 
 run_spherex(coord, label, out_dir, *, model='sersic', sersic_params=None,
             sersic_from=None, sersic_seeing=None, bkg_size=15.0,
-            mjd_range=None, poll=5.0, timeout=3600.0, cutout_arcsec=120.0,
+            mjd_range=None, poll=5.0, timeout=10800.0, cutout_arcsec=120.0,
             legacy_dr=LEGACY_DR_DEFAULT, target_name=None) -> ProviderResult
 
-run_sed(label, out_dir) -> Path | None
+run_sed(label, out_dir, *, spherex=False) -> Path | None
 run_overlay(label, out_dir, *, zoom_arcsec=5.0, context_arcsec=15.0,
             wcs_from=None, dpi=200) -> Path | None
 run_all(coord, label, out_dir, *, skip=None, ...) -> dict[str, str]
@@ -446,7 +483,8 @@ Headless matplotlib (`Agg`).
 ```python
 qa_scene_figure(measurement, out_dir) -> Path   # <Inst>_<band>.png, 5 panels
 plot_growth_curves(measurements, out_dir) -> Path
-plot_sed(frames: dict[str, DataFrame], outpath, *, title='') -> Path
+plot_sed(frames: dict[str, DataFrame], outpath, *, title='',
+         spherex: DataFrame | None = None) -> Path
 ```
 
 `qa_scene_figure` draws data | fitted scene + background | residual − mesh |
@@ -531,18 +569,43 @@ open UWS endpoint is polled by job id.
 
 ```python
 @dataclass Sersic(n, axis_ratio, pa_deg, reff_arcsec)   # .reff_deg property
+@dataclass GroupSource(label, ra_deg, dec_deg, model=None, role='science',
+                       out_dir=None, name=None, shape_origin=None)
 sersic_from_shape(shape_sky: dict) -> Sersic
+check_shape(model, *, where='shape') -> list[str]
+find_table(spherex_dir) -> Path | None
+
+# one position
 fetch(coord, *, out_dir, model=None, bkg_region_size=15, mjd_range=None,
-      poll=5, timeout=3600, shape_origin=None, label=None,
+      poll=5, timeout=10800, shape_origin=None, label=None,
       target_name=None) -> ProviderResult
-fetch_spectrophotometry(ra, dec, model=None, ...) -> pd.DataFrame
+fetch_spectrophotometry(ra, dec, model=None, ..., on_job_url=None,
+                        queue_timeout=QUEUE_TIMEOUT) -> pd.DataFrame
 extraction_tag(model, bkg_region_size=15, mjd_range=None) -> str
 config_payload(model, bkg_region_size=15, mjd_range=None) -> dict
+
+# several positions, fit jointly
+build_upload_frame(sources) -> pd.DataFrame
+build_group_request(server_file, *, sersic, ...) -> dict
+upload_table(session, frame, ...) -> str
+submit_firefly_group(session, sources, ...) -> (job_id, uws_url)
+fetch_group_spectrophotometry(sources, ...) -> (blocks, frame, complaints)
+split_group_table(frame, sources, *, tol_arcsec=1.0) -> (blocks, complaints)
+verify_group_shapes(block, source, *, rtol=1e-3) -> list[str]
+fetch_group(sources, *, group_id, group_dir=None, ...) -> ProviderResult
+group_extraction_tag(sources, bkg_region_size=15, mjd_range=None) -> str
+group_config_payload(sources, bkg_region_size=15, mjd_range=None) -> dict
+group_table_path(out_dir, tag) -> Path
+group_is_complete(sources, payload, tag) -> (bool, list[str])
 ```
 
-**Unit trap:** Firefly's `ServerRequest` carries `effectiveRadius` in **degrees**;
-the UWS `ELLIPTICAL` string and every CLI surface use **arcsec**. The `Sersic`
-dataclass stores arcsec and converts.
+**Unit trap, and there are two of them.** Firefly's `ServerRequest` carries
+`effectiveRadius` in **degrees**; the UWS `ELLIPTICAL` string and every CLI surface
+use **arcsec**. The `Sersic` dataclass stores arcsec and converts. A joint job takes
+its radius from an **uploaded column** instead, whose unit is undocumented — so the
+upload is written in arcsec and `verify_group_shapes` asserts the value the tool
+echoes back (`shape_r`, in arcsec). The check exists because a silent factor of 3600
+would produce a plausible table of the wrong source model.
 
 **Invariants.**
 - Nothing on disk is ever overwritten or renamed. A configuration already on disk is
@@ -551,10 +614,143 @@ dataclass stores arcsec and converts.
 - `config_payload` holds everything that changes what the tool computes (model
   parameters, background region, MJD window) and nothing that does not (shape
   origin, fetch date), so the same numeric shape from two sources is one extraction.
+  `group_config_payload` adds the **whole membership**, because a joint fit divides
+  the light between its members: the same galaxy fit alone and fit beside a companion
+  are two extractions that coexist, and neither is ever reused for the other. Role,
+  output directory and label are excluded — they change nothing the tool computes.
 - The tool treats any source with `reff < 1″` as a point source; `fetch` warns that
-  the Sersic parameters are then cosmetic.
+  the Sersic parameters are then cosmetic. A joint job exploits this deliberately: a
+  point-like member of an elliptical job rides at a sub-threshold radius, since one
+  job is one model and the tool has no per-row switch.
+- **The tool does not validate an uploaded shape.** It attempts the fit and returns a
+  table that looks like any other. `check_shape` is therefore the only place an
+  unphysical member is refused, and it runs before submission so a bad config fails
+  before it reaches an irreplaceable raw product.
+- Rows are attributed to members **by position** — not by row order, not by the
+  tool's `source_id`. A requested member matching nothing, two members matching the
+  same spectrum, or a returned spectrum no member claims are all errors: an
+  unclaimed spectrum means the job did not fit the requested set.
+- On a shape-echo mismatch, `fetch_group` writes **no product**; the raw table is
+  quarantined as `joint_photometry.<tag>.unverified.csv` with no sidecar, so the
+  compute is kept for diagnosis without becoming something a consumer would trust.
+- The two time budgets are separate. `timeout` bounds how long a job may **run**;
+  `QUEUE_TIMEOUT` bounds how long it may wait to **start**, and the run budget only
+  begins when the job leaves a queued phase. A single wall-clock budget would make
+  the client's patience shrink as the caller submits more jobs, killing the tail of
+  its own queue.
 - On failure, `fetch` prints the manual Data Explorer recipe and writes no partial
   file.
+
+#### `groups.py`
+Planning and execution for joint SPHEREx extractions. A SPHEREx pixel is ~6.2″, so a
+companion within a few pixels puts its light in the target's aperture; the tool fits
+several positions simultaneously and divides the light between them.
+
+**Why a config file rather than flags.** A job's membership is a set of positions
+each carrying its own frozen shape, and membership changes the measurement. The
+config is therefore a *reviewable record*: planning writes one (plus a flat CSV,
+because JSON nesting hides exactly the thing under review), a human reads it,
+execution runs it.
+
+```python
+load_config(path) -> dict            # validates everything checkable offline
+sources_for(group, config) -> list[GroupSource]
+link_groups(coords, radius_arcsec) -> list[list[int]]
+plan_groups(targets, *, blend_radius_as=45.0, model='sersic',
+            companions=True, companion_flux_ratio=0.1, ...) -> dict
+write_config(config, path) -> (Path, Path)
+run_config(config, *, report_path, workers=1, resume=True,
+           only=None, log_dir=None) -> dict
+```
+
+Constants: `DEFAULT_BLEND_RADIUS_AS = 45.0`, `DEFAULT_COMPANION_FLUX_RATIO = 0.1`,
+`POINT_LIKE_REFF_AS = 0.5`, `DOCUMENTED_CONCURRENCY = 2`, `SCHEMA_VERSIONS = (1,)`.
+
+**Invariants.**
+- A group over `GROUP_SOURCES_MAX = 20` is refused here, because the tool keeps the
+  first 20 rows of an uploaded list and **drops the rest without an error**.
+- `load_config` refuses an unknown key by name rather than ignoring it: a typo'd
+  optional key silently takes a default, which for an extraction is a wrong
+  measurement rather than a missing one. It also builds every `GroupSource` for
+  every group, so a config that cannot execute fails before the first job runs.
+- Linking is single-linkage, because blending is transitive at the PSF scale.
+- Resume is keyed on the **extraction tag**, not on a filename: a group is skipped
+  only when every science member already carries that exact extraction. Change the
+  blend radius or a shape and the tag changes, so the group correctly re-runs.
+- Execution uses **threads, not processes** — a job is a long poll, so the work is
+  waiting on IRSA rather than on this machine.
+- `DOCUMENTED_CONCURRENCY` is what the service *runs* at once, not a ceiling: the
+  rest queue rather than being refused, so exceeding it prints a notice and proceeds.
+
+#### `schedule.py`
+The planning pass of a multi-target sweep, and the reason concurrent measurement is
+safe at all. The registry is mutable cross-field state; a field **writes** within its
+gate reach and **reads** within its scene cone, so two fields can share an entry only
+when their separation is under the sum of the two. Both radii derive from the stamp
+width rather than being assumed, and the link distance carries a margin on top: a
+margin costs concurrency, a shortfall costs reproducibility.
+
+```python
+scene_radius_arcsec(cutout_arcsec) -> float
+gate_reach_arcsec(cutout_arcsec) -> float
+link_radius_arcsec(cutout_arcsec, margin_arcsec) -> float
+connected_groups(coords, link_arcsec) -> list[list[int]]
+consumer_counts(...) -> ...
+census_from_catalog(coord, cat, *, cutout_arcsec) -> dict
+read_targets(path, out_root=None) -> list[dict]
+fetch_catalog(coord, target_dir, *, cutout_arcsec, legacy_dr) -> pd.DataFrame
+audit_groups(...) / audit_entries(...) -> list[dict]
+build_plan(targets, census, *, ...) -> dict
+write_plan(plan, path) -> (Path, Path)
+```
+
+`read_targets` reads a name column plus `ra_deg`/`dec_deg`, with optional `label`,
+`dir` and `priority`, and resolves `dir` against `out_root` the same way
+`sed_fitting` resolves it against a campaign's `data_root` — one target catalog
+drives both tools. It reports which columns it used and which it ignored, and refuses
+a duplicate name rather than silently keeping the first.
+
+The gating filter is what makes grouping useful: grouping on target positions alone
+collapses a dense field into one island and yields no concurrency at all. Only
+targets that both gate *and* have a consumer need serializing.
+
+#### `batch.py`
+Executes a plan in two passes.
+
+The **harvest pass** runs its groups concurrently and each group's targets in
+sequence, every group writing its **own** registry file. Two writers to one registry
+therefore never exist, and the whole-file rewrite that loses entries under
+concurrency cannot happen. The merge then unions those files — disjoint by
+construction, so a key in two of them is a contradiction rather than a conflict to
+resolve — audits the union against the group boundary, and freezes it.
+
+The **parallel pass** runs every remaining target concurrently against the frozen
+registry with updates off. It writes no shared state, so its concurrency is bounded
+by what the archives will tolerate rather than by correctness.
+
+```python
+run_sweep(plan, *, registry_dir, run_options, which_pass='all', workers=4,
+          resume=True, groups=True, report_path, log_dir=None,
+          stop_after_failures=20) -> dict
+merge_registries(paths) -> (dict, list[str])
+audit_merged(registries, rows, *, scene_arcsec) -> list[dict]
+is_complete(target) -> bool
+```
+
+**Invariants.**
+- Workers are **spawned, never forked**, so a worker's state is only what its
+  arguments carry.
+- The plan's stamp width is asserted against the sweep's: every radius in the
+  grouping derives from it, so running a different one would execute a grouping that
+  describes a different geometry.
+- A group is one unit of work, and its targets run in the plan's order — which is
+  what makes a shared record deterministic rather than a race between whichever
+  worker reached it first.
+- Merging zero group registries keeps whatever is already there and says so; it does
+  not replace a registry an earlier sweep built with an empty one.
+- `is_complete` is satisfied by any readable table plus sidecar, so a resumed sweep
+  skips every target that already has products. To redo one pass without redoing
+  another, use `--pass`, not resume.
 
 ### 4.2 The scene engine (`src/sedphot/measure/`)
 
@@ -736,11 +932,11 @@ with a five-parameter solution at parallax or proper-motion significance above
 `STAR_ASTROM_SIG`. Gaia membership alone is not enough — compact galaxy nuclei are
 in Gaia.
 
-Stars are treated brightest-first and sequentially: each profile is measured on data
-with brighter siblings already subtracted, with the treated stars' catalog bases
-removed from the reference scene, and with already-measured star light excluded above
-1σ. A component is treated once even when several Gaia rows land on it. Successfully
-measured stars **leave the component list** and their light is pre-subtracted.
+Stars are matched to components and treated brightest-first, so a bright star claims
+its component before a fainter one can; a component is treated once even when several
+Gaia rows land on it. Treatment is a **routing decision, not a measurement**: each
+star is either masked or leashed according to where it sits, and nothing about its
+light is measured to decide which.
 
 **Invariants.**
 - The expectation a profile is judged against is the star's **in-stamp** flux
@@ -807,8 +1003,11 @@ size its mask on.
   compact neighbor light, and a halo sized on `rb` would swallow the aperture of
   anything embedded in an envelope.
 - `save_registry` is atomic (write a sibling, then replace) — but atomicity is **not**
-  serialization. Two concurrent updates finish last-writer-wins, so
-  `--registry-update` sweeps must run one galaxy at a time.
+  serialization. Two concurrent updates finish last-writer-wins, so a *bare*
+  `measure` sweep with `--registry-update` must run one galaxy at a time.
+  `batch` removes that constraint properly rather than by serializing: each
+  harvest group writes its own registry file and the disjoint union is merged
+  afterward, so two writers to one file never exist.
 
 #### `solve.py` — Stage 6: the joint fit
 
@@ -905,10 +1104,12 @@ measurement_to_row(measurement, *, mode='aperture') -> dict
    own recorded geometry (catalog shape, or the registry's stored shape for a
    consumed component), capped at `GEO_REFF_FACTOR × reff` with a
    `GEO_SEEING_FLOOR × seeing` floor. A shapeless component falls back to a
-   seeing-sized disc.
-2. **Stars** — each measured profile above its own isophote, no geometric cap; a
-   measured profile cannot claim light it does not see. A *reverted* star gets its
-   full uncapped model isophote.
+   seeing-sized disc. A **leashed** (out-of-zone) star is the exception inside this
+   channel: it takes its full uncapped model isophote via an early exit, because its
+   amplitude is bounded and its wings are exactly what needs removing.
+2. **Stars** — each **masked** (in-zone) star's predicted footprint above its own
+   isophote, no geometric cap. These stars have no design column at all, so nothing
+   in the fit represents them and the mask is the whole treatment.
 3. **Flood** — seeded growth into pixels departing from the ambient surface that the
    scene does not claim. Symmetric: escaped glow and over-subtraction holes both
    flood. Pixels the fitted target model claims are protected.
@@ -1315,12 +1516,30 @@ target               {name, label, ra_deg, dec_deg}
 instruments          the provider list
 mode, aperture_arcsec, cutout_arcsec
 sersic_shape         the forced shape and its origin, or null
-legacy               {dr, bricks}   (null when Legacy was not requested)
+legacy               {dr, bricks, route}   (null when Legacy was not requested)
+                     -- 'route' is what was ASKED for
+image_sources        {band_key: FETCHSRC}  -- what actually ANSWERED, read back
+                     from each measured image's own header. Under --legacy-route
+                     auto these differ precisely when a service was down.
+hst_proposal_id      the program restriction the fit ran under, or null
 scene                {n_catalog_rows, n_confirmed_stars, patches,
                       registry_path, registry_updated,
                       recipe: recipe.snapshot()}
 per_band             {band_key: witness}     -- in engine.order_bands order
 ```
+
+A **joint SPHEREx** table's sidecar (`kind: spherex_spectrophotometry_joint`) carries
+the usual `target` / `model` / `bkg_region_size_px` / `mjd_range` block plus:
+
+```
+joint    {group_id, role, n_members,
+          members: [{label, name, role, ra_deg, dec_deg, model}, ...]}
+```
+
+The member list is what `_sidecar_payload` reads back to answer "is this exact
+configuration already on disk", so the reuse check compares like with like: a solo
+table can never satisfy a joint request, nor a joint table a request for a different
+membership.
 
 Each `witness` (built by `aperture.witness_row`, extended by `engine.measure_band`):
 
@@ -1371,6 +1590,7 @@ after other galaxies have rewritten the shared registry.
     <label>_catalog.csv        (+ .provenance.json)
     <label>_measured.csv       (+ .provenance.json)
     <label>_sed.png
+    <label>_spherex_sed.png    broadbands + raw SPHEREx (sed --spherex)
     <label>_overlay.png
     coverage_catalogs.json     per-provider status, catalog run
     coverage_measure.json      per-provider status, measurement run
@@ -1379,10 +1599,46 @@ after other galaxies have rewritten the shared registry.
     Legacy/ PanSTARRS/ SDSS/ CFHT/ HST/   cached images + QA/ per-band figures
     scene/                     cached scene inputs (Tractor, Gaia)
     SPHEREx/table_photometry.<tag>.csv   raw per-visit × channel table, verbatim
+                                         <tag> = <model>-<hash6> for one position,
+                                         joint-<model>-<hash6> for a joint job;
+                                         one file per SCIENCE member either way
     SPHEREx/extractions.json             the tag decoder ring
 ```
 
 `coverage_*.json` maps provider → `{status, n_rows, message, radius_used_arcsec}`.
+
+Products that do not belong to any one galaxy:
+
+```
+<group-dir>/joint_photometry.<tag>.csv            (+ .provenance.json)
+                                the joint table verbatim, every member, plus
+                                any ancillary member's spectrum
+<group-dir>/joint_photometry.<tag>.unverified.csv
+                                quarantine: the shape echo disagreed, so this
+                                is deliberately NOT a product and has no sidecar
+<config>.json + <config>.csv    spherex-plan
+<plan>.json + <plan>.csv        plan
+<registry-dir>/group_<n>.json   batch, one per harvest group
+<registry-dir>/registry.json    batch, the merged frozen registry
+<report>.csv                    either batch verb, one row per unit of work
+<log-dir>/<name>.log            either batch verb, line-buffered
+```
+
+Two contract rules make joint output consumable by everything that already reads
+single-position output:
+
+1. A **science** member's table lands in its own galaxy directory in exactly the
+   shape a single-position extraction produces — one table, one source. An
+   **ancillary** member's spectrum is archived with the group and never appears in a
+   galaxy directory; with no `group_dir` it is fit and then discarded, which is
+   reported rather than silent.
+2. Immutability is unchanged. A member whose table already exists but that no
+   sidecar vouches for is refused and left alone, and the run reports it by name
+   while still writing the members it could.
+
+`run` writes `<label>_sed.png` only — the SPHEREx figure is a deliberate second pass,
+so a missing `<label>_spherex_sed.png` means "not generated yet", never "SPHEREx is
+absent".
 
 ---
 
@@ -1437,8 +1693,11 @@ light twice.
 **Operational rules.** The registry is mutable state shared by every galaxy measured
 against it. `harvest_seats` updates the loaded dict in memory as each band solves; the
 file is rewritten once, at the end of a run, and only with `--registry-update`.
-Updates are last-writer-wins with no locking, so `--registry-update` sweeps must run
-**one galaxy at a time**.
+Updates are last-writer-wins with no locking. Driving `measure` directly, that means
+one galaxy at a time. `sedphot batch` is the supported way to sweep a sample: its
+harvest pass gives each group its own registry file so concurrent writers to one file
+never exist, then merges the disjoint union, audits it against the group boundary and
+freezes it for the parallel pass. See [§4.1 `batch.py`](#batchpy).
 
 ### 6.3 `recipe.py`
 
@@ -1542,6 +1801,31 @@ does not inspect the returned frame, so **a run can exit 0 with fewer bands than
 requested**. Check `coverage_measure.json` and the row count, not the exit status.
 (`run` exits nonzero only when a whole *stage* raised.)
 
+This propagates all the way up: a target that loses bands still reports `ok` in a
+`batch` report, because the target driver never raised either. **Verify a sweep by
+counting bands in every table and every sidecar, not by reading the report.** The
+loss is not uniform across bands, either — `REFERENCE_PREFERENCE` measures `r` first
+per instrument, so the reference band is the one most likely to absorb an I/O stall,
+and losing it means every surviving band of that instrument was solved against a
+different reference than the rest of the sample. That is a uniformity break, not
+just a missing datum.
+
+**Two time budgets on a SPHEREx job, and only one of them is the timeout.**
+`spherex._wait` bounds how long a job may **run** (`timeout`) separately from how
+long it may wait to **start** (`QUEUE_TIMEOUT`); the run budget begins only when the
+job leaves a queued phase. The two are separate because a single wall-clock budget
+would make the client's patience depend on how many jobs the caller submitted — the
+tail of a deep queue would be killed for the service being busy, discarding an
+extraction that had not begun. Relatedly, `DOCUMENTED_CONCURRENCY = 2` is what the
+service *runs* at once, not a ceiling: additional jobs queue rather than being
+refused, so both batch verbs print a notice above it and proceed.
+
+**`run_all` does not write the SPHEREx figure.** It calls `run_sed` without
+`spherex=`, so a galaxy measured through `run` or `batch` gets `<label>_sed.png`
+only. The SPHEREx figure is a deliberate second pass (`sed --spherex`), which means
+a missing `<label>_spherex_sed.png` reads as "not generated yet", never as "SPHEREx
+is absent".
+
 **Reconstruction runs under `contextlib.redirect_stdout`.** `reconstruct` redirects
 the pipeline's progress log to a buffer so a re-report prints the table alone. Because
 a dead band is reported by *printing*, its message lands in that buffer — so
@@ -1565,10 +1849,17 @@ stored vector against a seat list must length-check.
 alternation runs `solve_shapes` repeatedly and only the final call's timing survives.
 
 **Fetch options are part of the fit.** `reconstruct` replays `cutout_arcsec`,
-`BG_RMIN_AS`, and the Legacy `dr` / `bricks` flags, because brick coadds and viewer
-cutouts are different pixels on different grids. The sidecar does **not** record an
-HST program restriction, so a reconstruction of an HST measurement fetched under
-`--hst-proposal-id` re-selects its visit group by the provider's own ranking.
+`BG_RMIN_AS`, the Legacy `dr` / `bricks` flags and `hst_proposal_id`, because brick
+coadds and viewer cutouts are different pixels on different grids, and an
+unrestricted HST re-fetch can select a different visit group than the fit used.
+
+**One fetch option is recorded but not replayed: `--legacy-route`.** The sidecar
+carries `legacy.route` (the route asked for) and `image_sources` (the route that
+actually answered, read back from each image's own `FETCHSRC` header, so a cached
+image reports what really produced it). `reconstruct` does not pass the route
+through, so under `auto` a rebuild during a service outage can fall to the other
+service and get differently-framed pixels — which moves the empirical PSF-star fit
+and hence the flux. Pin the route for anything meant to be reproducible.
 
 **A stack's coverage is judged at the science aperture, twice.** The CFHT provider
 applies the same 95% rule at fetch time (driving the tile-edge mosaic) that
@@ -1595,7 +1886,7 @@ renamed — cached filenames are a downstream stability contract.
 python -m pytest tests/
 ```
 
-416 tests, **entirely offline**. No test performs network I/O: TAP clients, MAST
+511 tests, **entirely offline**. No test performs network I/O: TAP clients, MAST
 `Observations`, `requests`, and `astroquery` entry points are monkeypatched, and image
 fixtures are synthesized in `tmp_path`. There is no `conftest.py` and no pytest
 configuration — the suite runs from a bare invocation.
@@ -1610,7 +1901,7 @@ Coverage by area:
 | Background — bin statistics, rejection, mesh zeroing | `test_background.py`, `test_mesh_empap.py` |
 | Stamp and gates | `test_stamp.py` |
 | PSF resolution and kernel guards | `test_psf.py` |
-| Stars — confirmation, profile measurement, revert paths | `test_stars.py` |
+| Stars — confirmation, geometric routing, the masked/leashed split | `test_stars.py` |
 | Artifacts | `test_artifacts.py` |
 | Rendering primitives | `test_render.py` |
 | Scene catalogs — cache-first behavior, verified by a TAP stand-in that **raises on any contact** | `test_scene_catalogs.py` |
@@ -1618,7 +1909,12 @@ Coverage by area:
 | CLI — flag refusal, `run`/`measure` option parity, exit codes | `test_cli.py` |
 | Stage isolation and the SED dered warning | `test_run_stages.py` |
 | Overlay — style keying, WCS checks, marker de-duplication | `test_overlay.py` |
-| SPHEREx — configuration identity, tag stability, reuse rules, shape resolution | `test_spherex_config.py`, `test_spherex_shape.py` |
+| SPHEREx, one position — configuration identity, tag stability, reuse rules, shape resolution | `test_spherex_config.py`, `test_spherex_shape.py` |
+| SPHEREx, joint — the uploaded table and its request, the multi-source parse, position attribution, the shape-echo unit check, group identity, product writing | `test_spherex_group.py` |
+| Group configs — schema refusals, planning and companion seating, the sweep's resume/filter/failure isolation | `test_groups.py` |
+| Sweep scheduling and execution — census, grouping, boundary audits, the registry merge | `test_schedule.py`, `test_batch.py` |
+| Dereddening — the tier ladder and the IRSA column pairing | `test_dered.py` |
+| Absent bands and cutout extent | `test_absent_bands.py`, `test_cutout_extent.py` |
 | Schema, units, bands, provenance, retry | `test_schema.py`, `test_units.py`, `test_bands.py`, `test_provenance.py`, `test_retry.py` |
 | Tractor shape conversion | `test_legacy_shape.py` |
 | AllWISE row construction | `test_allwise.py` |

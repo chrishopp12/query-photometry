@@ -24,6 +24,13 @@ Usage:
                      [--legacy-route {auto,viewer,noirlab}]
     sedphot spherex  (--name NAME | --ra DEG --dec DEG) --out-dir DIR
                      [--model {psf,sersic}] [--sersic-params N AXR PA RE]
+    sedphot spherex-plan  --targets CSV --out CONFIG.json [--out-root DIR]
+                     [--blend-radius 45.0] [--model {psf,sersic}]
+                     [--no-companions] [--companion-flux-ratio 0.1]
+                     [--mjd-range START END]
+    sedphot spherex-batch --config CONFIG.json --report CSV
+                     [--workers 1] [--only ID ...] [--no-resume]
+                     [--log-dir DIR]
     sedphot plan     --targets CSV --out PLAN.json [--out-root DIR]
                      [--cutout-size 120.0] [--link-margin AS]
     sedphot batch    --plan PLAN.json --registry-dir DIR --report CSV
@@ -62,6 +69,16 @@ Examples:
         sedphot measure --name "M87" --all --aperture 12 \\
             --out-dir Galaxies/M87
 
+    Deblend a crowded field: group targets that sit within a few SPHEREx
+    pixels of each other, review the plan, then run the joint jobs. Each
+    science member still gets exactly one table in its own directory --
+    under a 'joint-' tag, so it coexists with any single-position
+    extraction rather than replacing it:
+        sedphot spherex-plan --targets targets.csv \\
+            --out spherex_groups.json --out-root . --blend-radius 45
+        sedphot spherex-batch --config spherex_groups.json \\
+            --report spherex_groups.report.csv --workers 2
+
     Pin the Legacy cutout service so a sample stays on one gridding.
     The routes do not frame identically, so under the default 'auto' a
     service outage silently splits a sample between them; pinning makes
@@ -79,6 +96,8 @@ import sys
 from .batch import DEFAULT_STOP_AFTER_FAILURES
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
+from .groups import (DEFAULT_BLEND_RADIUS_AS, DEFAULT_COMPANION_FLUX_RATIO,
+                     DOCUMENTED_CONCURRENCY)
 from .images import IMAGE_PROVIDERS
 from .images.legacy import LEGACY_ROUTES, ROUTE_AUTO
 from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
@@ -275,6 +294,47 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_spherex_plan(args: argparse.Namespace) -> None:
+    from .groups import plan_groups, write_config
+    from .schedule import read_targets
+
+    targets = read_targets(args.targets, out_root=args.out_root)
+    config = plan_groups(
+        targets,
+        blend_radius_as=args.blend_radius,
+        model=args.model,
+        companions=not args.no_companions,
+        companion_flux_ratio=args.companion_flux_ratio,
+        mjd_range=args.mjd_range,
+        bkg_size=args.bkg_size,
+        legacy_dr=args.legacy_dr,
+        cutout_arcsec=args.cutout_size,
+        description=args.description,
+    )
+    if args.data_root:
+        config['data_root'] = args.data_root
+    path, csv_path = write_config(config, args.out)
+    print(f"\nwrote {path}\n      {csv_path}")
+    print("Review the members before running -- a job's shapes are frozen, "
+          "and its product is never overwritten.")
+
+
+def _cmd_spherex_batch(args: argparse.Namespace) -> None:
+    from .groups import load_config, run_config
+
+    config = load_config(args.config)
+    summary = run_config(
+        config,
+        report_path=args.report,
+        workers=args.workers,
+        resume=not args.no_resume,
+        only=args.only,
+        log_dir=args.log_dir,
+    )
+    if summary['counts'].get('failed'):
+        sys.exit(1)
+
+
 def _cmd_sed(args: argparse.Namespace) -> None:
     run_sed(args.label, args.out_dir, spherex=args.spherex)
 
@@ -402,18 +462,19 @@ def _cmd_batch(args: argparse.Namespace) -> None:
     from .batch import run_sweep
 
     _check_measure_args(args, 'batch')
-    # IRSA runs at most two spectrophotometry jobs at a time. Whether a
-    # third queues or is refused is not established, and a sweep is the
-    # wrong place to find out: each job is a 20-60 minute server-side
-    # extraction, so a refusal wastes an hour per target and a silent
-    # queue makes --workers meaningless for this stage either way.
-    if args.spherex != 'off' and args.workers > SPHEREX_MAX_WORKERS:
-        sys.exit(f"sedphot batch: --spherex {args.spherex} with "
-                 f"--workers {args.workers} would submit up to "
-                 f"{args.workers} concurrent IRSA extractions; the service "
-                 f"admits {SPHEREX_MAX_WORKERS}. Re-run with --workers "
-                 f"{SPHEREX_MAX_WORKERS} or fewer, or sweep the photometry "
-                 f"with --spherex off and fetch the extractions separately.")
+    # IRSA runs two spectrophotometry jobs at a time and QUEUES the rest
+    # rather than refusing them, so this says so and continues. The
+    # caution that remains is not IRSA's: --workers here also sets the
+    # MEASUREMENT concurrency, which is bounded by what the image
+    # archives and the local filesystem tolerate.
+    if args.spherex != 'off' and args.workers > SPHEREX_DOCUMENTED_JOBS:
+        print(f"NOTE --spherex {args.spherex} with --workers {args.workers} "
+              f"submits more than the {SPHEREX_DOCUMENTED_JOBS} extractions "
+              f"the service runs at once; the rest queue rather than being "
+              f"refused. Note this also sets the MEASUREMENT concurrency, "
+              f"which is bounded by what the image archives and the local "
+              f"filesystem tolerate -- a limit that has bitten before and "
+              f"is unrelated to IRSA.")
     with open(args.plan, encoding='utf-8') as handle:
         plan = json.load(handle)
 
@@ -481,10 +542,12 @@ def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
                     ('--sersic-params', args.sersic_params),
                     ('--sersic-seeing', args.sersic_seeing))
                    if value is not None]
-    # Under `run`, the shape flags also declare the SPHEREx extraction
-    # shape, so they are meaningful with an aperture-mode measurement.
-    # run_all forwards all three to run_spherex, so all three are exempt.
-    if verb == 'run' and getattr(args, 'spherex', 'off') != 'off':
+    # A verb that also runs a SPHEREx extraction reads the shape flags
+    # twice: run_all forwards all three to run_spherex, where they declare
+    # the extraction shape whatever the measurement mode is. The exemption
+    # keys on that forwarding, not on a verb name -- naming the verbs is
+    # what left `batch` refusing flags it goes on to honor.
+    if getattr(args, 'spherex', 'off') != 'off':
         shape_flags = []
     if args.mode != 'sersic' and shape_flags:
         _usage_error(f"sedphot {verb}: {', '.join(shape_flags)} only applies "
@@ -540,10 +603,9 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
 # ------------------------------------
 # Parser
 # ------------------------------------
-# IRSA admits two concurrent spectrophotometry jobs. Behavior past that
-# is unverified -- they may queue or be refused -- so the batch verb caps
-# rather than discovering it mid-sweep.
-SPHEREX_MAX_WORKERS = 2
+# Spectrophotometry jobs the service RUNS at once. Additional jobs are
+# queued, not refused, so this is a notice rather than a ceiling.
+SPHEREX_DOCUMENTED_JOBS = 2
 
 
 def _add_spherex_job_args(parser_obj) -> None:
@@ -648,6 +710,75 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Legacy Surveys data release for a shape-fit "
                                 f"image [default: {LEGACY_DR_DEFAULT}]")
     p_spherex.set_defaults(func=_cmd_spherex)
+
+    p_sxplan = subparsers.add_parser(
+        "spherex-plan",
+        help="Group blended targets into joint SPHEREx jobs (writes a config)")
+    p_sxplan.add_argument('--targets', type=str, required=True,
+                          help="Target list CSV -- the same file `plan` and "
+                               "sed_fitting read (required)")
+    p_sxplan.add_argument('--out', type=str, required=True,
+                          help="Config JSON to write; a flat .csv of the "
+                               "members lands beside it (required)")
+    p_sxplan.add_argument('--out-root', type=str, default=None,
+                          help="Root the target list's dir column resolves "
+                               "against")
+    p_sxplan.add_argument('--data-root', type=str, default=None,
+                          help="data_root recorded in the config, relative to "
+                               "it [default: .]")
+    p_sxplan.add_argument('--blend-radius', type=float,
+                          default=DEFAULT_BLEND_RADIUS_AS,
+                          help="Targets within this of each other share a "
+                               "job; linking is transitive "
+                               f"[default: {DEFAULT_BLEND_RADIUS_AS:g}]")
+    p_sxplan.add_argument('--model', type=str, default='sersic',
+                          choices=('psf', 'sersic'),
+                          help="Source model for every job [default: sersic]")
+    p_sxplan.add_argument('--no-companions', action='store_true',
+                          help="Group targets only; do not seat catalog "
+                               "neighbors as ancillary members")
+    p_sxplan.add_argument('--companion-flux-ratio', type=float,
+                          default=DEFAULT_COMPANION_FLUX_RATIO,
+                          help="Seat a neighbor when its r flux is at least "
+                               "this fraction of the science member's "
+                               f"[default: {DEFAULT_COMPANION_FLUX_RATIO:g}]")
+    p_sxplan.add_argument('--bkg-size', type=float, default=15.0,
+                          help="Background estimation region, pixels, recorded "
+                               "in the config defaults [default: 15]")
+    p_sxplan.add_argument('--mjd-range', nargs=2, type=float, default=None,
+                          metavar=('MJD_START', 'MJD_END'),
+                          help="Visit window recorded in the config defaults")
+    p_sxplan.add_argument('--cutout-size', type=float, default=120.0,
+                          help="Stamp width the scene caches were built at "
+                               "[default: 120]")
+    p_sxplan.add_argument('--legacy-dr', type=str, default=LEGACY_DR_DEFAULT,
+                          choices=('dr10', 'dr9'),
+                          help="Data release for the scene catalogs "
+                               f"[default: {LEGACY_DR_DEFAULT}]")
+    p_sxplan.add_argument('--description', type=str, default=None,
+                          help="Free text recorded in the config")
+    p_sxplan.set_defaults(func=_cmd_spherex_plan)
+
+    p_sxbatch = subparsers.add_parser(
+        "spherex-batch",
+        help="Run the joint SPHEREx jobs in a group config")
+    p_sxbatch.add_argument('--config', type=str, required=True,
+                           help="Group config from spherex-plan (required)")
+    p_sxbatch.add_argument('--report', type=str, required=True,
+                           help="Per-group report CSV (required)")
+    p_sxbatch.add_argument('--workers', type=int, default=1,
+                           help=f"Concurrent jobs. The service runs "
+                                f"{DOCUMENTED_CONCURRENCY} at once and "
+                                f"queues the rest rather than refusing them, "
+                                f"so higher is allowed [default: 1]")
+    p_sxbatch.add_argument('--only', nargs='+', default=None,
+                           help="Run just these group ids")
+    p_sxbatch.add_argument('--no-resume', action='store_true',
+                           help="Re-run groups whose tables are already on "
+                                "disk (they are kept, not overwritten)")
+    p_sxbatch.add_argument('--log-dir', type=str, default=None,
+                           help="Per-group logs land here (line-buffered)")
+    p_sxbatch.set_defaults(func=_cmd_spherex_batch)
 
     p_sed = subparsers.add_parser(
         "sed", help="Combined SED plot from the tables already in out-dir")

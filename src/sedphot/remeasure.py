@@ -88,7 +88,7 @@ def _cog_source(mode: str, shape: str, fit_state: dict) -> tuple[str, str]:
 
 def remeasure(provenance_path: str | Path,
               aperture_arcsec: float | None = None,
-              mode: str = 'sersic',
+              mode: str = 'aperture',
               shape: str = 'forced',
               registry_path: str | None = None,
               write_qa: bool = False) -> pd.DataFrame:
@@ -130,6 +130,10 @@ def remeasure(provenance_path: str | Path,
     curve is a measurement of the pixels, not a rendering of a shape -- and
     anything but the default 'forced' says so on stdout, since a request
     that spans the grid boundary is meaningful on the far side.
+
+    mode defaults to 'aperture', matching both the `measure` and `remeasure`
+    CLI defaults: a bare re-report reproduces the quantity the measurement
+    produced rather than substituting a different estimator for it.
 
     Returns
     -------

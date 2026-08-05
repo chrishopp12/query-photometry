@@ -275,7 +275,8 @@ Correct output begins:
 
 \begin{cmd}\ttfamily\frenchspacing
 usage: sedphot [-h]\\
-\mbox{}~~~~~~~~~~~~~~~\{resolve,catalogs,measure,spherex,sed,overlay,remeasure,run\}\\
+\mbox{}~~~~~~~~~~~~~~~\{resolve,catalogs,measure,spherex,spherex-plan,\\
+\mbox{}~~~~~~~~~~~~~~~~spherex-batch,sed,plan,overlay,remeasure,run,batch\}\\
 \mbox{}~~~~~~~~~~~~~~~...\\
 \mbox{}\\
 Galaxy in, SED photometry out: multi-archive retrieval and measurement.
@@ -356,9 +357,11 @@ Everything else is identical.
 
 % ==========================================================
 \section{The verbs}
+\label{sec:verbs}
 % ==========================================================
 
-\texttt{sedphot} has eight commands.
+\texttt{sedphot} has twelve commands. The first eight work on one galaxy;
+the last four work on a list of them.
 
 \begin{longtable}{T{2.2cm} L{4.6cm} L{7.2cm}}
 \toprule
@@ -377,8 +380,11 @@ measure & Downloads survey images and measures the galaxy in every band.
 spherex & Requests a SPHEREx spectrophotometry table from IRSA. &
   \texttt{SPHEREx/table\_photometry.<tag>.csv} + sidecar,
   \texttt{SPHEREx/extractions.json} \\[2pt]
-sed & Draws the combined SED from tables already on disk. &
-  \texttt{<label>\_sed.png} \\[2pt]
+sed & Draws the combined SED from tables already on disk. With
+  \texttt{-{}-spherex}, draws the SPHEREx spectrum under the broadbands
+  as a second, separate figure. &
+  \texttt{<label>\_sed.png}, or \texttt{<label>\_spherex\_sed.png} under
+  \texttt{-{}-spherex} \\[2pt]
 overlay & Draws every archive's matched position on the HST color image.
   & \texttt{<label>\_overlay.png}, cached HST composite \\[2pt]
 remeasure & Re-reports fluxes from a finished measurement at a different
@@ -386,15 +392,42 @@ remeasure & Re-reports fluxes from a finished measurement at a different
   \texttt{-{}-write-qa} (figures). \\[2pt]
 run & \texttt{catalogs}, then \texttt{measure}, then optionally
   \texttt{spherex}, then \texttt{sed}. & Everything the stages above
-  write. \\
+  write, except the SPHEREx figure. \\
+\bottomrule
+\end{longtable}
+
+And four for a list of galaxies:
+
+\begin{longtable}{T{2.5cm} L{4.6cm} L{6.9cm}}
+\toprule
+\textbf{\normalfont Verb} & \textbf{What it does} & \textbf{What it writes} \\
+\midrule
+\endhead
+plan & Reads a list of targets and works out the order they can safely
+  be measured in. & \texttt{<plan>.json} and a \texttt{.csv} of the same
+  rows, for you to read \\[2pt]
+batch & Measures every target in a plan, several at once. &
+  Everything \texttt{run} writes, for each target, plus registry files,
+  a report and per-target logs \\[2pt]
+spherex-plan & Groups targets that sit close enough together on the sky
+  to contaminate one another into joint SPHEREx jobs. &
+  \texttt{<config>.json} and a \texttt{.csv} of every member, for you to
+  review \\[2pt]
+spherex-batch & Runs the joint SPHEREx jobs in a config. &
+  One SPHEREx table per galaxy, exactly as \texttt{spherex} writes,
+  plus a report and per-group logs \\
 \bottomrule
 \end{longtable}
 
 \texttt{-{}-out-dir} is \textbf{required} on \texttt{catalogs},
 \texttt{measure}, \texttt{spherex}, \texttt{sed}, \texttt{overlay}, and
-\texttt{run}. \texttt{resolve} takes no output directory because it writes
-nothing. \texttt{remeasure} takes a path to a finished measurement's JSON
-record instead.
+\texttt{run} --- the six verbs that write into one galaxy's directory.
+\texttt{resolve} takes no output directory because it writes nothing.
+\texttt{remeasure} takes a path to a finished measurement's JSON record
+instead. The four list verbs write in several places at once, so each
+output is named separately: \texttt{-{}-out} for a plan or config,
+\texttt{-{}-report} for a report, \texttt{-{}-registry-dir} for
+\texttt{batch}'s registries, \texttt{-{}-log-dir} for logs.
 
 % ==========================================================
 \section{Your first run}
@@ -696,12 +729,13 @@ sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
 \mbox{}~~~~-{}-integrated
 \end{cmd}
 
-And the fitted model's flux inside a chosen radius
-(\texttt{-{}-mode sersic} is the default):
+And the fitted model's flux inside a chosen radius. \texttt{-{}-mode} defaults
+to \texttt{aperture}, matching \texttt{measure}, so the model flux must be
+asked for explicitly:
 
 \begin{cmd}\ttfamily\frenchspacing
 sedphot remeasure M87/Photometry/M87\_measured.provenance.json \textbackslash\\
-\mbox{}~~~~-{}-aperture 20
+\mbox{}~~~~-{}-mode sersic -{}-aperture 20
 \end{cmd}
 
 Asking for an aperture \textbf{past} the stored grid in
@@ -811,7 +845,12 @@ Adjust the panel sizes (both are half-widths in arcseconds):
 
 Submits a forced-photometry job to the IRSA SPHEREx tool and writes the
 raw per-visit table. The job runs on IRSA's servers; the command polls
-until it finishes (up to an hour by default).
+until it finishes. A job typically takes twenty minutes to an hour, and
+the command waits up to three hours for one that is running. Waiting to
+\emph{start} is budgeted separately and generously (six hours), because the
+service runs two jobs at a time and queues the rest --- a job sitting in the
+queue has not begun, and abandoning it would throw away work that would have
+completed.
 
 The default source model is an elliptical S\'ersic profile whose shape is
 looked up in the Legacy Surveys Tractor catalog:
@@ -840,6 +879,71 @@ a wavelength-dependent way):
 
 Each distinct configuration gets its own tagged output file, so a PSF run
 and a S\'ersic run coexist. Nothing is ever overwritten.
+
+\subsection{Fetch SPHEREx for galaxies with close neighbors}
+\label{sec:joint}
+
+A SPHEREx pixel is about 6.2 arcseconds across --- far coarser than the
+optical images. A neighbor a few pixels away therefore has its light inside
+your target's measurement, and asking for the target on its own gives it
+\emph{all} of that light.
+
+The IRSA tool can fit several positions at once and divide the light between
+them. Two commands drive it: one to decide the groups, one to run them.
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot spherex-plan -{}-targets targets.csv -{}-out groups.json \textbackslash\\
+\mbox{}~~~~-{}-blend-radius 45
+\end{cmd}
+
+This reads the same target CSV that \texttt{plan} reads (its format is
+shown in section~\ref{sec:sweep}), groups targets
+within 45 arcseconds of one another, looks up each one's shape, and adds
+nearby catalog neighbors that are bright enough to matter. It works offline
+if the galaxies have been measured already, because the shapes come from the
+scene catalogs already cached in each galaxy's directory.
+
+\textbf{Read \texttt{groups.csv} before running anything.} It is written for
+exactly that purpose --- one row per source, with the group it belongs to,
+its position, its shape, and where that shape came from. Two things to check:
+
+\begin{itemize}
+\item \textbf{The \texttt{role} column.} \texttt{science} means this galaxy
+  gets its own SPHEREx table, in its own directory, exactly as if you had
+  run \texttt{spherex} on it alone. \texttt{ancillary} means the source is
+  only there to soak up light that would otherwise be counted as your
+  target's; its spectrum is filed with the group, not with a galaxy.
+\item \textbf{Blank shape columns.} A galaxy with no shape found is listed
+  in the config's \texttt{planning\_notes}. Fill the shape in by hand, or
+  plan with \texttt{-{}-model psf}.
+\end{itemize}
+
+Edit the file freely --- add a member, remove one, correct a shape. Then:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot spherex-batch -{}-config groups.json \textbackslash\\
+\mbox{}~~~~-{}-report groups\_report.csv -{}-log-dir logs
+\end{cmd}
+
+Each galaxy ends up with one SPHEREx table in its own directory, named with
+a \texttt{joint-} tag so it sits alongside any single-position table rather
+than replacing it. Nothing downstream needs to know a joint fit happened.
+
+\begin{warnbox}[Twenty sources per job --- and no warning past that]
+The IRSA tool takes the first twenty rows of an uploaded list and
+\textbf{silently discards the rest}. \texttt{sedphot} refuses a larger group
+rather than letting that happen, and says which neighbors it dropped when
+planning hits the limit. It also checks every shape against the tool's
+stated limits before submitting, because the tool does not check uploaded
+shapes at all --- it will happily fit an impossible galaxy and hand you a
+table that looks perfectly normal.
+\end{warnbox}
+
+If you interrupt a sweep, just run it again: a group whose galaxies already
+carry that exact extraction is skipped. \enquote{That exact extraction}
+includes the membership, so changing a group --- adding a neighbor, fixing a
+shape --- correctly re-runs it rather than reusing the old answer. The two
+are different measurements, and both are kept.
 
 \subsection{Process a list of galaxies one after another}
 
@@ -891,8 +995,69 @@ done < galaxies.txt
 
 \begin{warnbox}
 Run these one galaxy at a time, not in parallel. If you are also using
-\texttt{-{}-registry-update} (see section 11), running in parallel will
-corrupt the shared file.
+\texttt{-{}-registry-update} (see section~\ref{sec:registry}), running in
+parallel will corrupt the shared file. \texttt{batch}
+(section~\ref{sec:sweep}) is the supported way to measure several galaxies
+at once without that risk.
+\end{warnbox}
+
+These loops are fine for a handful of galaxies. For a real sample, use
+\texttt{plan} and \texttt{batch} instead --- they measure several galaxies
+at once \emph{safely}, which a loop cannot.
+
+\subsection{Measure a whole sample safely}
+\label{sec:sweep}
+
+The obstacle to running galaxies in parallel is the registry: it is a single
+shared file, and two galaxies writing it at the same time lose each other's
+entries. Running everything serially avoids that, but can turn a one-hour
+job into a day.
+
+\texttt{plan} and \texttt{batch} solve it properly. Start with a CSV of your
+targets --- a name column, \texttt{ra\_deg} and \texttt{dec\_deg}, and
+optionally \texttt{label} and \texttt{dir}:
+
+\begin{cmd}\ttfamily\frenchspacing
+name,ra\_deg,dec\_deg,dir\\
+NGC\_4889,195.033738,27.977025,galaxies/NGC\_4889\\
+NGC\_4874,194.898792,27.959528,galaxies/NGC\_4874
+\end{cmd}
+
+Work out the order:
+
+\cmdline{sedphot plan -{}-targets targets.csv -{}-out plan.json}
+
+This looks at every field, decides which galaxies produce a shape that some
+\emph{other} galaxy will read, and splits the sample in two. It writes
+\texttt{plan.json} and a \texttt{plan.csv} you can open in a spreadsheet.
+
+Then run it:
+
+\begin{cmd}\ttfamily\frenchspacing
+sedphot batch -{}-plan plan.json -{}-registry-dir registries \textbackslash\\
+\mbox{}~~~~-{}-report report.csv -{}-log-dir logs \textbackslash\\
+\mbox{}~~~~-{}-workers 3 -{}-images legacy cfht sdss panstarrs
+\end{cmd}
+
+\texttt{batch} runs in two passes. The first handles only the galaxies that
+share shapes, in small groups, and gives \emph{each group its own registry
+file} --- so two galaxies never write the same file, and the problem the
+warning above describes cannot occur. It then merges those files into one
+and freezes it. The second pass runs everything else at once against the
+frozen copy, writing nothing shared.
+
+\texttt{report.csv} gets one row per galaxy, rewritten as each finishes, and
+\texttt{logs/<label>.log} holds that galaxy's output line by line while it
+runs.
+
+\begin{warnbox}[Check the band count rather than the report]
+If a single band fails --- a dropped download, a slow disk --- the run logs
+it and carries on, and the galaxy still reports \texttt{ok}. The only way to
+notice is to count the rows in each galaxy's \texttt{\_measured.csv}. Do
+that at the end of every sweep. It matters more than it sounds: the
+reference band is measured first, so it is the one most likely to be lost,
+and without it the rest of that instrument's bands were measured against a
+different reference than the rest of your sample.
 \end{warnbox}
 
 % ==========================================================
@@ -970,7 +1135,7 @@ Give exactly one of \texttt{-{}-name} or the
 -{}-sky-rmin & arcsec & Boundary between target and sky. Sky is measured
   only outside it. Lower it for compact targets. & 15 \\[2pt]
 -{}-registry & path & JSON file of shared neighbor shapes to reuse
-  (section 11). & none \\[2pt]
+  (section~\ref{sec:more}). & none \\[2pt]
 -{}-registry-\newline update & (switch) & Also write this galaxy's results
   back into \texttt{-{}-registry}. Requires \texttt{-{}-registry}. &
   off \\[2pt]
@@ -991,10 +1156,24 @@ Give exactly one of \texttt{-{}-name} or the
   off \\[2pt]
 -{}-hst-\newline proposal-id & text & Restrict HST to one observing
   program. & none \\[2pt]
+-{}-legacy-route & \texttt{auto}, \texttt{viewer}, \texttt{noirlab} &
+  Which service supplies Legacy cutouts. \texttt{auto} tries one and falls
+  back to the other. See the warning below. & \texttt{auto} \\[2pt]
 -{}-dump-arrays & (switch) & Write raw per-band arrays under
   \texttt{<Instrument>/QA/} for debugging. & off \\
 \bottomrule
 \end{longtable}
+
+\begin{warnbox}[Pin the Legacy route for a sample you will compare]
+The two Legacy cutout services do not frame their images identically. Under
+\texttt{auto}, an outage at one of them silently sends some of your galaxies
+to the other, and the resampling shifts the measured star used for the PSF
+--- which moves the fluxes by around a percent. That is invisible in the
+output. For any set of galaxies meant to be compared with one another, name
+the route explicitly; a pinned route reports an outage as an error instead
+of quietly substituting. Both the route you asked for and the route that
+actually answered are recorded for every band.
+\end{warnbox}
 
 \begin{sloppypar}
 \texttt{-{}-sersic-from}, \texttt{-{}-sersic-params} and
@@ -1026,7 +1205,8 @@ them.
   This is IRSA's documented workaround for epochs whose metadata breaks
   the job. & none \\[2pt]
 -{}-poll & seconds & How often to ask IRSA whether the job is done. & 5 \\[2pt]
--{}-timeout & seconds & Give up after this long. & 3600 \\[2pt]
+-{}-timeout & seconds & Give up on a job that is still \emph{running}
+  after this long. & 10800 (3 h) \\[2pt]
 -{}-legacy-dr & \texttt{dr9} or \texttt{dr10} & Legacy release for the
   shape lookup or shape-fit image. & \texttt{dr9} \\
 \bottomrule
@@ -1041,9 +1221,23 @@ them.
 \endhead
 -{}-out-dir & path & Directory holding the tables. Required. & none \\[2pt]
 -{}-label & text & Which table family to plot. & inferred when the
-  directory holds exactly one \\
+  directory holds exactly one \\[2pt]
+-{}-spherex & (switch) & Also draw the SPHEREx spectrum under the
+  broadbands, as a \emph{separate} figure named
+  \texttt{<label>\_spherex\_sed.png}. The broadband-only figure is left
+  alone. & off \\
 \bottomrule
 \end{longtable}
+
+The SPHEREx figure draws the raw table exactly as IRSA returned it, with no
+quality cuts, which is deliberate: on a faint galaxy the red end visibly
+turns to noise, and seeing where that happens is useful. It is not what an
+SED fit would use.
+
+Note that \texttt{run} does \emph{not} write this figure --- it is always a
+second, deliberate step. A galaxy with no
+\texttt{<label>\_spherex\_sed.png} has simply not had one made yet; it does
+not mean the galaxy has no SPHEREx data.
 
 \subsection{\texttt{overlay}}
 
@@ -1077,7 +1271,9 @@ The first argument is positional: the path to a
 \endhead
 -{}-mode & \texttt{sersic} or \texttt{aperture} & \texttt{sersic} reports
   the fitted model's flux; \texttt{aperture} reports the measured,
-  neighbor-subtracted flux. & \texttt{sersic} \\[2pt]
+  neighbor-subtracted flux. Matches the \texttt{measure} default, so a bare
+  \texttt{remeasure} re-reports the same quantity the measurement produced.
+  & \texttt{aperture} \\[2pt]
 -{}-aperture & arcsec & Radius to report at. Matches the
   \texttt{measure} default, so a bare \texttt{remeasure} re-reports at the
   radius the measurement used. & 12 \\[2pt]
@@ -1092,7 +1288,8 @@ The first argument is positional: the path to a
   \texttt{forced} \\[2pt]
 -{}-registry & path & Registry file to fall back on when rebuilding past
   the stored radius grid. Unlike \texttt{measure}, \texttt{remeasure}
-  finds one on its own when you do not name it (section 11.2). & a
+  finds one on its own when you do not name it
+  (section~\ref{sec:registry}). & a
   \texttt{registry.json} beside the galaxy directory, if present
   \\[2pt]
 -{}-write-qa & (switch) & When rebuilding past the grid, write per-band
@@ -1108,28 +1305,154 @@ The first argument is positional: the path to a
 (\texttt{-{}-radius}, \texttt{-{}-dered}, \texttt{-{}-legacy-dr}) and
 every flag from \texttt{measure} \textbf{except}
 \texttt{-{}-instruments}, \texttt{-{}-all} and
-\texttt{-{}-dump-arrays}, plus:
+\texttt{-{}-dump-arrays}, which it replaces with its own archive
+selection, plus:
 
 \begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
 \toprule
 \textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
 \midrule
 \endhead
+-{}-catalogs & one or more names, or \texttt{all} / \texttt{none} &
+  Which catalog archives to query. \texttt{none} skips the catalog stage
+  entirely. & all \\[2pt]
+-{}-images & one or more names, or \texttt{all} / \texttt{none} & Which
+  survey images to fetch and measure. \texttt{none} skips the measurement
+  stage entirely. & all \\[2pt]
 -{}-skip & one or more names & Archives to leave out. Accepts both catalog
-  and image archive names. & none \\[2pt]
+  and image archive names, and applies to both stages. & none \\[2pt]
 -{}-spherex & \texttt{off}, \texttt{psf}, \texttt{sersic} & Also fetch
-  SPHEREx, with this source model. & off \\
+  SPHEREx, with this source model. & off \\[2pt]
+-{}-spherex-bkg-size & pixels & Background region for the SPHEREx job. & 15 \\[2pt]
+-{}-spherex-mjd-range & two numbers & Restrict the SPHEREx job to visits in
+  this MJD window. & none \\[2pt]
+-{}-spherex-timeout & seconds & Give up on a running SPHEREx job after this
+  long. & 10800 \\
 \bottomrule
 \end{longtable}
 
-\texttt{run} uses every archive that is not skipped, which is why it has
-no \texttt{-{}-instruments}.
+\texttt{run} selects archives with \texttt{-{}-catalogs} and
+\texttt{-{}-images} rather than \texttt{measure}'s \texttt{-{}-instruments},
+because it drives two stages that draw on different archives.
 
-One special case: \texttt{-{}-sersic-params} is normally refused under
-\texttt{-{}-mode aperture}, but under \texttt{run} with
-\texttt{-{}-spherex psf} or \texttt{-{}-spherex sersic} it is accepted,
-because there it also declares the shape SPHEREx extracts with. One shape
-per galaxy, shared by both stages.
+\begin{warnbox}[Name the image archives for any real campaign]
+\texttt{-{}-images} defaults to \emph{all}, and \texttt{hst} is in that
+set. A bare \texttt{run} therefore queries the Hubble archive for every
+target, which downloads hundreds of megabytes per galaxy and, for a typical
+ground-based target, measures nothing at all. Name what you want:
+\texttt{-{}-images legacy cfht sdss panstarrs}.
+\end{warnbox}
+
+One special case: the three shape flags are normally refused under
+\texttt{-{}-mode aperture}, because there they have nothing to act on. But
+whenever SPHEREx is switched on --- under \texttt{run} or \texttt{batch},
+with \texttt{-{}-spherex psf} or \texttt{-{}-spherex sersic} --- they are
+accepted, because they also declare the shape SPHEREx extracts with. One
+shape per galaxy, shared by both stages.
+
+\subsection{\texttt{plan}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-targets & path & CSV of targets. Required. & none \\[2pt]
+-{}-out & path & Plan JSON to write; a \texttt{.csv} of the same rows
+  lands beside it. Required. & none \\[2pt]
+-{}-out-root & path & Root that the CSV's \texttt{dir} column is taken
+  relative to. & the current directory \\[2pt]
+-{}-cutout-size & arcsec & Stamp width the plan is computed for. The sweep
+  must use the same one. & 120 \\[2pt]
+-{}-link-margin & arcsec & Extra separation required before two galaxies
+  are treated as independent. Larger is safer and slower. & 120 \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{batch}}
+
+Takes every measurement flag \texttt{measure} takes, minus the registry
+flags (the plan decides those), plus:
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-plan & path & Plan from \texttt{plan}. Required. & none \\[2pt]
+-{}-registry-dir & path & Where the per-group registries and the merged
+  one are written. Required. & none \\[2pt]
+-{}-report & path & Per-target report CSV. Required. & none \\[2pt]
+-{}-workers & number & Galaxies measured at once. & 4 \\[2pt]
+-{}-pass & \texttt{harvest}, \texttt{parallel}, \texttt{all} & Run only one
+  of the two passes. & \texttt{all} \\[2pt]
+-{}-no-groups & (switch) & Run the harvest pass as one sequence instead of
+  in parallel groups. Slower; the reference the grouped version is checked
+  against. & off \\[2pt]
+-{}-no-resume & (switch) & Re-measure galaxies that already have products.
+  & off \\[2pt]
+-{}-log-dir & path & Per-target logs land here, written line by line. &
+  none \\[2pt]
+-{}-stop-after-failures & number & Abandon the sweep after this many
+  galaxies fail. \texttt{0} disables. & 20 \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{spherex-plan}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-targets & path & CSV of targets --- the same file \texttt{plan} reads.
+  Required. & none \\[2pt]
+-{}-out & path & Config JSON to write; a \texttt{.csv} of every member
+  lands beside it. Required. & none \\[2pt]
+-{}-out-root & path & Root the CSV's \texttt{dir} column is relative to. &
+  the current directory \\[2pt]
+-{}-data-root & path & Root recorded \emph{in} the config, relative to the
+  config file. & \texttt{.} \\[2pt]
+-{}-blend-radius & arcsec & Targets closer than this share a job. Grouping
+  chains: A near B near C puts all three together. & 45 \\[2pt]
+-{}-model & \texttt{psf} or \texttt{sersic} & Source model for every job.
+  One model per job --- the tool has no per-source switch. &
+  \texttt{sersic} \\[2pt]
+-{}-no-companions & (switch) & Group targets only; do not add catalog
+  neighbors. & off \\[2pt]
+-{}-companion-flux-ratio & number & Add a neighbor when it is at least this
+  fraction of the target's brightness. & 0.1 \\[2pt]
+-{}-bkg-size & pixels & Background region recorded in the config. & 15 \\[2pt]
+-{}-mjd-range & two numbers & Visit window recorded in the config. & none \\[2pt]
+-{}-cutout-size & arcsec & Stamp width the scene catalogs were cached at. &
+  120 \\[2pt]
+-{}-legacy-dr & \texttt{dr9} or \texttt{dr10} & Catalog release the shapes
+  come from. & \texttt{dr9} \\[2pt]
+-{}-description & text & Free text recorded in the config. & none \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{spherex-batch}}
+
+\begin{longtable}{T{2.9cm} L{2.15cm} L{6.45cm} L{2.7cm}}
+\toprule
+\textbf{\normalfont Flag} & \textbf{Takes} & \textbf{What it does} & \textbf{Default} \\
+\midrule
+\endhead
+-{}-config & path & Config from \texttt{spherex-plan}. Required. & none \\[2pt]
+-{}-report & path & Per-group report CSV. Required. & none \\[2pt]
+-{}-workers & number & Jobs submitted at once. The service runs two at a
+  time and queues the rest rather than refusing them, so a larger number is
+  allowed --- the extras simply wait, and waiting does not count against a
+  job's run time. & 1 \\[2pt]
+-{}-only & one or more ids & Run just these groups, e.g. after editing
+  them. & all \\[2pt]
+-{}-no-resume & (switch) & Re-enter groups already on disk. Existing tables
+  are still never overwritten. & off \\[2pt]
+-{}-log-dir & path & Per-group logs land here, written line by line. &
+  none \\
+\bottomrule
+\end{longtable}
 
 % ==========================================================
 \section{What comes out}
@@ -1148,6 +1471,7 @@ A full run of one galaxy produces:
 \mbox{}~~~~+-{}- <label>\_measured.csv~~~~~~~~~~~~~~~~~~~~measured photometry\\
 \mbox{}~~~~+-{}- <label>\_measured.provenance.json\\
 \mbox{}~~~~+-{}- <label>\_sed.png~~~~~~~~~~~~~~~~~~~~~~~~~combined SED figure\\
+\mbox{}~~~~+-{}- <label>\_spherex\_sed.png~~~~~~~~~~~~~~~~~with SPHEREx (sed -{}-spherex)\\
 \mbox{}~~~~+-{}- <label>\_overlay.png~~~~~~~~~~~~~~~~~~~~~position check figure\\
 \mbox{}~~~~+-{}- coverage\_catalogs.json~~~~~~~~~~~~~~~~~~per-archive outcome\\
 \mbox{}~~~~+-{}- coverage\_measure.json~~~~~~~~~~~~~~~~~~~per-archive outcome\\
@@ -1163,6 +1487,27 @@ A full run of one galaxy produces:
 \mbox{}~~~~~~~~+-{}- table\_photometry.<tag>.csv\\
 \mbox{}~~~~~~~~+-{}- table\_photometry.<tag>.provenance.json\\
 \mbox{}~~~~~~~~+-{}- extractions.json
+\end{cmd}
+
+The \texttt{<tag>} on a SPHEREx table names the exact configuration it was
+extracted with. A table from a joint fit
+(section~\ref{sec:joint}) is tagged \texttt{joint-<model>-<hash>} instead of
+\texttt{<model>-<hash>}, so the two sit side by side in the same directory
+and nothing can confuse one for the other.
+
+The list verbs write outside any one galaxy:
+
+\begin{cmd}\ttfamily\frenchspacing
+plan.json, plan.csv~~~~~~~~~~~~~~~~~~~~~~from plan\\
+groups.json, groups.csv~~~~~~~~~~~~~~~~~~from spherex-plan\\
+report.csv~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~one row per galaxy or group\\
+logs/<name>.log~~~~~~~~~~~~~~~~~~~~~~~~~~one per galaxy or group\\
+registries/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~from batch\\
+\mbox{}~~~+-{}- group\_<n>.json~~~~~~~~~~~~~~~~~~~one per harvest group\\
+\mbox{}~~~+-{}- registry.json~~~~~~~~~~~~~~~~~~~~the merged, frozen copy\\
+spherex\_groups/~~~~~~~~~~~~~~~~~~~~~~~~~from spherex-batch\\
+\mbox{}~~~+-{}- joint\_photometry.<tag>.csv~~~~~~the whole joint table,\\
+\mbox{}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~and any ancillary spectra
 \end{cmd}
 
 \subsection{What each file is}
@@ -1192,7 +1537,7 @@ coverage\_catalogs.json,\newline coverage\_measure.json & Per-archive
 <Instrument>/*.fits & The downloaded images, cached. Deleting one forces a
   re-download on the next run. \\[2pt]
 <Instrument>/QA/\newline <Inst>\_<band>.png & The per-band diagnostic
-  figure (section 9). \texttt{<Inst>} is the instrument's short name,
+  figure (section~\ref{sec:qa}). \texttt{<Inst>} is the instrument's short name,
   which matches the directory everywhere except \texttt{PanSTARRS/},
   whose figures are named \texttt{PS1\_<band>.png}. \\[2pt]
 QA/growth\_curves.png & Enclosed flux against radius for every measured
@@ -1311,6 +1656,7 @@ scene=none & No catalog of neighboring sources was available; the galaxy
 
 % ==========================================================
 \section{Reading the QA figures}
+\label{sec:qa}
 % ==========================================================
 
 Two figures per measurement run, plus one per band.
@@ -1412,14 +1758,29 @@ the fix. The recurring ones:
 \midrule
 \endhead
 error: the following arguments are required: -{}-out-dir &
-  \texttt{-{}-out-dir} is required on every verb that writes. & Add
-  \texttt{-{}-out-dir <directory>}. \\[2pt]
+  \texttt{-{}-out-dir} is required on the six verbs that write into one
+  galaxy's directory. & Add \texttt{-{}-out-dir <directory>}. The list
+  verbs name their outputs differently --- see section~\ref{sec:verbs}.
+  \\[2pt]
 error: give -{}-instruments ... or -{}-all & \texttt{catalogs} and
   \texttt{measure} need to be told which archives to use. & Add
   \texttt{-{}-all}, or \texttt{-{}-instruments legacy sdss}. \\[2pt]
 Could not resolve 'X' with Sesame, NED, or SIMBAD & The name is not in any
   resolver. & Look the position up yourself and use \texttt{-{}-ra} /
   \texttt{-{}-dec}. \\[2pt]
+The run finished, but a galaxy has fewer bands than I asked for &
+  A band failed on its own --- a dropped download, a slow disk --- and the
+  run logged it and carried on. The galaxy still reports \texttt{ok}. &
+  Count the rows in \texttt{<label>\_measured.csv}. Re-run that galaxy;
+  cached images make it quick. This is why you check band counts rather
+  than the report. \\[2pt]
+A joint SPHEREx group failed with a shape disagreement &
+  The tool reported using a different shape from the one asked for, so
+  every member's flux is against an unknown model. & Nothing was written.
+  The raw table is kept beside the group as
+  \texttt{...unverified.csv} so the hour of computing is not lost. Check
+  the shape columns in your \texttt{groups.csv} and run the group again
+  with \texttt{-{}-only}. \\[2pt]
 -{}-registry-update needs -{}-registry PATH & You asked to write to a
   registry without naming one. & Add \texttt{-{}-registry <path>}, or drop
   \texttt{-{}-registry-update}. \\[2pt]
@@ -1511,6 +1872,7 @@ cannot infer -{}-label in ...: found stems [...] & The directory holds
 
 % ==========================================================
 \section{Getting more out of it}
+\label{sec:more}
 % ==========================================================
 
 Two features exist for cases the defaults do not cover. You will not need
@@ -1558,6 +1920,7 @@ at a specific neighbor, and only then. An unnecessary patch is a way to
 bias a measurement.
 
 \subsection{The cross-field registry --- shared neighbors}
+\label{sec:registry}
 
 When several galaxies in the same field are measured separately, a
 neighboring source may appear in more than one of them. Left alone, each
@@ -1584,9 +1947,13 @@ sedphot measure -{}-name "M87" -{}-all -{}-out-dir M87 \textbackslash\\
 Three things to know before using it:
 
 \begin{itemize}
-  \item \textbf{Run galaxies one at a time.} Updates are last-writer-wins
-        with no file locking. Two runs writing at once will corrupt the
-        file.
+  \item \textbf{Driving \texttt{measure} yourself, run galaxies one at a
+        time.} Updates are last-writer-wins with no file locking, so two
+        runs writing at once will corrupt the file. This is a limitation
+        of the flag, not of the package: \texttt{batch}
+        (section~\ref{sec:sweep}) measures many galaxies at once safely,
+        by giving each group of galaxies its own registry file and merging
+        them afterwards.
   \item \textbf{Order matters while the file fills.} A galaxy measured
         after its neighbor was registered gets that neighbor's shape
         frozen in rather than fitted fresh. Once every galaxy in a field
