@@ -896,7 +896,8 @@ sedphot spherex-plan -{}-targets targets.csv -{}-out groups.json \textbackslash\
 \mbox{}~~~~-{}-blend-radius 45
 \end{cmd}
 
-This reads the same target CSV that \texttt{plan} reads, groups targets
+This reads the same target CSV that \texttt{plan} reads (its format is
+shown in section~\ref{sec:sweep}), groups targets
 within 45 arcseconds of one another, looks up each one's shape, and adds
 nearby catalog neighbors that are bright enough to matter. It works offline
 if the galaxies have been measured already, because the shapes come from the
