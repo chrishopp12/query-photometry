@@ -74,7 +74,7 @@ Examples:
     science member still gets exactly one table in its own directory --
     under a 'joint-' tag, so it coexists with any single-position
     extraction rather than replacing it:
-        sedphot spherex-plan --targets sweep_targets.csv \\
+        sedphot spherex-plan --targets targets.csv \\
             --out spherex_groups.json --out-root . --blend-radius 45
         sedphot spherex-batch --config spherex_groups.json \\
             --report spherex_groups.report.csv --workers 2
