@@ -714,6 +714,44 @@ def _matching_existing_table(spherex_dir: Path, payload: dict,
     return None
 
 
+def find_table(spherex_dir: str | Path) -> Path | None:
+    """The one raw table a SPHEREx directory vouches for, config unknown.
+
+    _matching_existing_table answers "is THIS configuration already on
+    disk"; this answers "which table is the canonical one here", for a
+    caller that has no configuration to match against -- a figure, a
+    report. The evidence is the same and so is the standard: a directory
+    can also hold hand-named files predating this package, so only a
+    table with a provenance sidecar beside it is a candidate. A name is
+    a claim, a sidecar is the evidence.
+
+    Tagged names rank ahead of the pre-tag bare one, and ties break on
+    the sorted filename, so the choice never depends on directory order.
+
+    Parameters
+    ----------
+    spherex_dir : str or Path
+        <out-dir>/Photometry/SPHEREx.
+
+    Returns
+    -------
+    table : Path or None
+        The selected CSV, or None when the directory is absent or holds
+        no sidecar-backed table.
+    """
+    spherex_dir = Path(spherex_dir)
+    if not spherex_dir.is_dir():
+        return None
+    vouched = [path
+               for path in sorted(spherex_dir.glob("table_photometry*.csv"))
+               if path.with_suffix(".provenance.json").exists()]
+    tagged = [path for path in vouched if path.name != PRETAG_TABLE_NAME]
+    for candidates in (tagged, vouched):
+        if candidates:
+            return candidates[0]
+    return None
+
+
 def _index_extraction(spherex_dir: Path, tag: str, filename: str,
                       payload: dict, *, shape_origin=None, n_rows=None) -> None:
     """Record one extraction in the manifest (the tag decoder ring).

@@ -1,7 +1,8 @@
 """Pipeline drivers: run_all stage isolation (one dead stage cannot cost the
-others) and run_sed's extinction-scale guard."""
+others), run_sed's extinction-scale guard, and the SPHEREx figure."""
 import json
 
+import pandas as pd
 import pytest
 from astropy.coordinates import SkyCoord
 
@@ -90,7 +91,7 @@ def _sed_tables(tmp_path, monkeypatch, *, catalog_dered, measured_dered):
             match_dec=2.0, sep_arcsec=0.1, flags='', source=kind,
             dered_applied=dered)]).to_csv(phot / f"t_{kind}.csv", index=False)
     monkeypatch.setattr(qa, 'plot_sed',
-                        lambda frames, outpath, title='': outpath)
+                        lambda frames, outpath, **kwargs: outpath)
     return phot
 
 
@@ -115,6 +116,92 @@ def test_run_sed_is_quiet_when_both_tables_are_as_measured(tmp_path,
                 measured_dered=False)
     pipeline.run_sed('t', tmp_path)
     assert 'extinction' not in capsys.readouterr().out
+
+
+# ------------------------------------
+# run_sed --spherex: a second figure, never a replacement
+# ------------------------------------
+def _spherex_table(phot, name='table_photometry.csv', *, sidecar=True,
+                   n_rows=4):
+    """A raw per-exposure table under Photometry/SPHEREx, as fetch writes it."""
+    spherex_dir = phot / 'SPHEREx'
+    spherex_dir.mkdir(parents=True, exist_ok=True)
+    table = spherex_dir / name
+    pd.DataFrame({
+        'lambda': [0.75 + 0.5 * i for i in range(n_rows)],
+        'lambda_width': [0.02] * n_rows,
+        'flux': [100.0 + 10.0 * i for i in range(n_rows)],
+        'flux_err': [5.0] * n_rows,
+    }).to_csv(table, index=False)
+    if sidecar:
+        table.with_suffix('.provenance.json').write_text('{}')
+    return table
+
+
+def test_run_sed_spherex_writes_its_own_file_and_leaves_the_other_alone(
+        tmp_path, monkeypatch):
+    phot = _sed_tables(tmp_path, monkeypatch, catalog_dered=False,
+                       measured_dered=False)
+    _spherex_table(phot)
+    plain = pipeline.run_sed('t', tmp_path)
+    with_spherex = pipeline.run_sed('t', tmp_path, spherex=True)
+    assert plain.name == 't_sed.png'
+    assert with_spherex.name == 't_spherex_sed.png'
+
+
+def test_run_sed_spherex_passes_the_table_through_to_the_figure(
+        tmp_path, monkeypatch):
+    phot = _sed_tables(tmp_path, monkeypatch, catalog_dered=False,
+                       measured_dered=False)
+    _spherex_table(phot, n_rows=7)
+    seen = {}
+    monkeypatch.setattr(qa, 'plot_sed',
+                        lambda frames, outpath, **kwargs: (
+                            seen.update(kwargs), outpath)[1])
+    pipeline.run_sed('t', tmp_path, spherex=True)
+    assert len(seen['spherex']) == 7
+    assert pipeline.run_sed('t', tmp_path).name == 't_sed.png'
+    assert seen['spherex'] is None
+
+
+def test_run_sed_spherex_refuses_rather_than_naming_a_figure_it_cannot_fill(
+        tmp_path, monkeypatch, capsys):
+    """A <label>_spherex_sed.png with no SPHEREx in it is a lie on disk."""
+    phot = _sed_tables(tmp_path, monkeypatch, catalog_dered=False,
+                       measured_dered=False)
+    _spherex_table(phot, name='table_photometry-this.csv', sidecar=False)
+    assert pipeline.run_sed('t', tmp_path, spherex=True) is None
+    assert 'no sidecar-backed SPHEREx table' in capsys.readouterr().out
+    assert not (phot / 't_spherex_sed.png').exists()
+
+
+# ------------------------------------
+# plot_sed: spectrophotometry gets its wavelength from a column
+# ------------------------------------
+def _spherex_frame(waves=(0.75, 1.5, 3.0), flux=(100.0, 90.0, 80.0)):
+    return pd.DataFrame({'lambda': list(waves), 'flux': list(flux),
+                         'flux_err': [5.0] * len(waves)})
+
+
+def test_plot_sed_draws_spherex_whose_band_names_would_resolve_to_nothing(
+        tmp_path, capsys):
+    """The trap this argument exists for: wave_um('SPHEREx_000') is NaN, so
+    a spectrophotometry table routed through `frames` plots zero points."""
+    out = qa.plot_sed({}, tmp_path / 'sx.png', spherex=_spherex_frame())
+    assert out.exists()
+    assert 'nothing plottable' not in capsys.readouterr().out
+
+
+def test_plot_sed_reports_spherex_rows_it_cannot_draw(tmp_path, capsys):
+    qa.plot_sed({}, tmp_path / 'sx.png',
+                spherex=_spherex_frame(flux=(100.0, -3.0, 0.0)))
+    assert 'SPHEREx; no wavelength or flux <= 0): 2 of 3 visits' \
+        in capsys.readouterr().out
+
+
+def test_plot_sed_without_spherex_is_unchanged(tmp_path, capsys):
+    qa.plot_sed({}, tmp_path / 'plain.png')
+    assert 'nothing plottable' in capsys.readouterr().out
 
 
 # ------------------------------------

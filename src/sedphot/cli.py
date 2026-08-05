@@ -276,7 +276,7 @@ def _cmd_spherex(args: argparse.Namespace) -> None:
 
 
 def _cmd_sed(args: argparse.Namespace) -> None:
-    run_sed(args.label, args.out_dir)
+    run_sed(args.label, args.out_dir, spherex=args.spherex)
 
 
 def _cmd_plan(args: argparse.Namespace) -> None:
@@ -655,6 +655,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Galaxy directory holding the tables (required)")
     p_sed.add_argument('--label', type=str, default=None,
                        help="Output stem [default: inferred when unambiguous]")
+    p_sed.add_argument('--spherex', action='store_true',
+                       help="Draw the SPHEREx spectrophotometry under the "
+                            "broadbands and write <label>_spherex_sed.png; "
+                            "the broadband-only <label>_sed.png is left alone")
     p_sed.set_defaults(func=_cmd_sed)
 
     p_plan = subparsers.add_parser(

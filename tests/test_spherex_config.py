@@ -6,7 +6,7 @@ from astropy.coordinates import SkyCoord
 
 import sedphot.spherex as spherex_mod
 from sedphot.spherex import (PRETAG_TABLE_NAME, Sersic, config_payload,
-                             extraction_tag, fetch)
+                             extraction_tag, fetch, find_table)
 from sedphot.results import STATUS_ERROR, STATUS_OK
 
 COORD = SkyCoord(217.0, 56.9, unit='deg')
@@ -200,6 +200,63 @@ def test_pretag_table_without_sidecar_is_not_matched(monkeypatch, tmp_path):
     result = fetch(COORD, out_dir=tmp_path, model=SHAPE, mjd_range=MJD)
     assert result.status == STATUS_OK
     assert 'reused' not in result.meta
+
+
+# ------------------------------------
+# find_table: the canonical table, config unknown
+# ------------------------------------
+def test_find_table_takes_the_vouched_tagged_table(tmp_path):
+    spherex_dir = tmp_path / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    table = _write_tagged(spherex_dir, "sersic-abc123")
+    assert find_table(spherex_dir) == table
+
+
+def test_find_table_ignores_tables_no_sidecar_vouches_for(tmp_path):
+    # The real shape of a directory carrying hand-downloaded tables from
+    # before this package: they match the glob, nothing vouches for them.
+    spherex_dir = tmp_path / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    for orphan in ("table_photometry-this.csv",
+                   "table_photometry-this_sersic.csv",
+                   "table_photometry-this_sersic_27.csv"):
+        (spherex_dir / orphan).write_text("flux\n1\n")
+    assert find_table(spherex_dir) is None
+
+    table = _write_tagged(spherex_dir, "sersic-abc123")
+    assert find_table(spherex_dir) == table
+
+
+def test_find_table_prefers_a_tagged_table_over_the_pretag_name(tmp_path):
+    spherex_dir = tmp_path / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    pretag = spherex_dir / PRETAG_TABLE_NAME
+    pretag.write_text("flux\n1\n")
+    pretag.with_suffix(".provenance.json").write_text("{}")
+    tagged = _write_tagged(spherex_dir, "sersic-abc123")
+    assert find_table(spherex_dir) == tagged
+
+
+def test_find_table_falls_back_to_the_pretag_name(tmp_path):
+    spherex_dir = tmp_path / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    pretag = spherex_dir / PRETAG_TABLE_NAME
+    pretag.write_text("flux\n1\n")
+    pretag.with_suffix(".provenance.json").write_text("{}")
+    assert find_table(spherex_dir) == pretag
+
+
+def test_find_table_is_deterministic_across_several_tagged_tables(tmp_path):
+    spherex_dir = tmp_path / "SPHEREx"
+    spherex_dir.mkdir(parents=True)
+    for tag in ("sersic-ffffff", "psf-000000", "sersic-aaaaaa"):
+        _write_tagged(spherex_dir, tag)
+    # Sorted filename, not directory order.
+    assert find_table(spherex_dir).name == "table_photometry.psf-000000.csv"
+
+
+def test_find_table_is_none_without_a_directory(tmp_path):
+    assert find_table(tmp_path / "nope" / "SPHEREx") is None
 
 
 # ------------------------------------
