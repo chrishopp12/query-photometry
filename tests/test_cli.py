@@ -246,20 +246,29 @@ def test_run_spherex_config_defaults_are_explicit(monkeypatch):
     assert seen['spherex_timeout'] == 10800.0
 
 
-def test_batch_refuses_more_workers_than_irsa_admits(monkeypatch, tmp_path):
-    """IRSA runs two spectrophotometry jobs at a time. Whether a third
-    queues or is refused is unverified, and a sweep is the wrong place to
-    find out: each job is a 20-60 minute server-side extraction."""
+def test_batch_notes_more_workers_than_irsa_runs_at_once(monkeypatch,
+                                                        tmp_path, capsys):
+    """IRSA runs two spectrophotometry jobs at a time and QUEUES the
+    rest rather than refusing them, so this is a notice. It also warns
+    that --workers sets the measurement concurrency, which is bounded by
+    the archives and the local filesystem for unrelated reasons."""
+    import sedphot.batch as batch_mod
+    monkeypatch.setattr(batch_mod, 'run_sweep',
+                        lambda *a, **k: {'merge_problems': [],
+                                         'violations': [],
+                                         'aborted': False, 'n_failed': 0})
     plan = tmp_path / 'plan.json'
-    plan.write_text('{"harvest": [], "parallel": []}')
+    plan.write_text('{"targets": [], "cutout_arcsec": 120.0, '
+                    '"scene_radius_arcsec": 120.0}')
     monkeypatch.setattr(sys, 'argv', [
         'sedphot', 'batch', '--plan', str(plan),
         '--registry-dir', str(tmp_path / 'reg'),
         '--report', str(tmp_path / 'report.json'),
         '--spherex', 'sersic', '--workers', '4'])
-    with pytest.raises(SystemExit) as exc:
-        cli.main()
-    assert 'concurrent IRSA extractions' in str(exc.value.code)
+    cli.main()
+    printed = capsys.readouterr().out
+    assert 'queue rather than being refused' in printed
+    assert 'MEASUREMENT concurrency' in printed
 
 
 def test_batch_worker_cap_only_applies_when_spherex_is_on(monkeypatch,

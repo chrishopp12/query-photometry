@@ -34,8 +34,10 @@ Requirements:
 Notes:
   - The tool takes the first 20 rows of an uploaded list and drops the
     rest without an error, so a group over the cap is refused here.
-  - The service admits two concurrent jobs; the runner caps at that
-    rather than discovering the throttle mid-sweep.
+  - The service runs two jobs at once and QUEUES the rest rather than
+    refusing them, so --workers above that is a notice, not an error.
+    Queued time is budgeted separately from run time, which is what
+    keeps a deep queue from timing out its own tail.
   - A job is point-source or elliptical as a whole. Under the sersic
     model a point-like member is carried at a sub-threshold radius,
     which the tool reads as a point source.
@@ -57,9 +59,10 @@ from astropy.coordinates import SkyCoord
 from .catalogs.legacy import LEGACY_DR_DEFAULT, shape_from_tractor
 from .measure import recipe
 from .results import STATUS_OK
-from .spherex import (GROUP_SOURCES_MAX, GROUP_ROLES, ROLE_ANCILLARY,
-                      ROLE_SCIENCE, SPHEREX_POINT_SOURCE_REFF, GroupSource,
-                      Sersic, check_shape, fetch_group, group_config_payload,
+from .spherex import (GROUP_SOURCES_MAX, GROUP_ROLES, QUEUE_TIMEOUT,
+                      ROLE_ANCILLARY, ROLE_SCIENCE,
+                      SPHEREX_POINT_SOURCE_REFF, GroupSource, Sersic,
+                      check_shape, fetch_group, group_config_payload,
                       group_extraction_tag, group_is_complete,
                       sersic_from_shape)
 
@@ -88,7 +91,7 @@ POINT_LIKE_REFF_AS = 0.5
 MODELS = ("psf", "sersic")
 
 DEFAULT_KEYS = ("model", "bkg_size", "mjd_range", "poll", "timeout",
-                "tol_arcsec")
+                "queue_timeout", "tol_arcsec")
 CONFIG_KEYS = ("schema_version", "description", "data_root", "group_dir",
                "defaults", "groups", "planning_notes", "path")
 CONFIG_REQUIRED = ("schema_version", "groups")
@@ -107,8 +110,15 @@ REPORT_COLUMNS = ("group", "status", "tag", "n_members", "n_science",
 STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 
-# The service admits two concurrent spectrophotometry jobs.
-MAX_WORKERS = 2
+# Jobs the service is documented to RUN at once. It does not refuse the
+# rest -- it queues them -- so this is a notice, not a ceiling: above it
+# the extra jobs wait their turn. Measured behavior has exceeded it
+# (jobs submitted well past this ran concurrently under light load), so
+# treating it as a hard limit would forfeit throughput the service is
+# willing to give. What makes exceeding it safe is that queued time is
+# budgeted separately from run time (spherex.QUEUE_TIMEOUT); a single
+# wall-clock budget would kill the tail of a deep queue.
+DOCUMENTED_CONCURRENCY = 2
 
 
 # ------------------------------------
@@ -181,6 +191,7 @@ def load_config(path: str | Path) -> dict:
     defaults.setdefault("mjd_range", None)
     defaults.setdefault("poll", 5.0)
     defaults.setdefault("timeout", 10800.0)
+    defaults.setdefault("queue_timeout", QUEUE_TIMEOUT)
     defaults.setdefault("tol_arcsec", 1.0)
     if defaults["model"] not in MODELS:
         raise ValueError(f"{path}.defaults.model: {defaults['model']!r} is "
@@ -592,6 +603,7 @@ def _run_group(group: dict, config: dict, *, log_dir=None) -> dict:
             bkg_region_size=defaults["bkg_size"],
             mjd_range=tuple(mjd) if mjd else None,
             poll=defaults["poll"], timeout=defaults["timeout"],
+            queue_timeout=defaults["queue_timeout"],
             tol_arcsec=defaults["tol_arcsec"],
             on_job_url=job_url.append)
 
@@ -647,7 +659,8 @@ def run_config(
     report_path : str or Path
         One row per group lands here, rewritten as each finishes.
     workers : int
-        Concurrent jobs, capped at MAX_WORKERS. [default: 1]
+        Concurrent jobs. Above DOCUMENTED_CONCURRENCY the extras queue
+        server-side rather than being refused. [default: 1]
     resume : bool
         Skip a group whose science members already carry this exact
         extraction. [default: True]
@@ -663,12 +676,14 @@ def run_config(
     summary : dict
         Per-status counts and the report path.
     """
-    if workers > MAX_WORKERS:
-        raise ValueError(
-            f"--workers {workers} would submit {workers} concurrent IRSA "
-            f"extractions; the service admits {MAX_WORKERS}. Each job runs "
-            f"for tens of minutes, so discovering the throttle mid-sweep "
-            f"is expensive.")
+    if workers < 1:
+        raise ValueError(f"--workers {workers} must be at least 1")
+    if workers > DOCUMENTED_CONCURRENCY:
+        progress(
+            f"NOTE {workers} workers exceeds the {DOCUMENTED_CONCURRENCY} "
+            f"jobs the service is documented to run at once; the rest queue "
+            f"rather than being refused. Queued time is budgeted separately "
+            f"from run time, so a queued job is not killed for waiting.")
     report_path = Path(report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     if log_dir is not None:

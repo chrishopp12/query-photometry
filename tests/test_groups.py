@@ -7,11 +7,11 @@ import pytest
 from astropy.coordinates import SkyCoord
 
 import sedphot.groups as groups_mod
-from sedphot.groups import (MAX_WORKERS, link_groups, load_config,
+from sedphot.groups import (DOCUMENTED_CONCURRENCY, link_groups, load_config,
                             plan_groups, run_config, sources_for,
                             write_config)
 from sedphot.results import ProviderResult, STATUS_ERROR, STATUS_OK
-from sedphot.spherex import GROUP_SOURCES_MAX
+from sedphot.spherex import GROUP_SOURCES_MAX, QUEUE_TIMEOUT
 
 SHAPE = {"n": 4.06, "axis_ratio": 1.10, "pa_deg": 5.08, "reff_arcsec": 5.19}
 MJD = [60676.0001273, 61174.5063773]
@@ -320,12 +320,38 @@ def test_a_failing_group_does_not_stop_the_sweep(tmp_path, monkeypatch):
     assert "service outage" in (tmp_path / "report.csv").read_text()
 
 
-def test_the_worker_cap_refuses_rather_than_discovers(tmp_path, monkeypatch):
+def test_more_workers_than_the_service_runs_is_allowed(tmp_path, monkeypatch):
+    # The service QUEUES the extras rather than refusing them, so this is
+    # a notice. Refusing would forfeit throughput the service will give.
+    loaded = load_config(_write(tmp_path, _config()))
+    calls = _fake_run(monkeypatch)
+    said = []
+    run_config(loaded, report_path=tmp_path / "report.csv",
+               workers=DOCUMENTED_CONCURRENCY + 4, progress=said.append)
+    assert calls == ["g001"]
+    assert any("queue" in m for m in said)
+
+
+def test_zero_workers_is_refused(tmp_path, monkeypatch):
     loaded = load_config(_write(tmp_path, _config()))
     _fake_run(monkeypatch)
-    with pytest.raises(ValueError, match=f"admits {MAX_WORKERS}"):
-        run_config(loaded, report_path=tmp_path / "report.csv",
-                   workers=MAX_WORKERS + 1, progress=lambda m: None)
+    with pytest.raises(ValueError, match="at least 1"):
+        run_config(loaded, report_path=tmp_path / "report.csv", workers=0,
+                   progress=lambda m: None)
+
+
+def test_the_queue_budget_reaches_the_job(tmp_path, monkeypatch):
+    loaded = load_config(_write(tmp_path, _config()))
+    seen = {}
+
+    def fake(sources, *, group_id, **kwargs):
+        seen.update(kwargs)
+        return ProviderResult(provider='spherex', status=STATUS_OK,
+                              message="done", meta={'tag': 't'})
+    monkeypatch.setattr(groups_mod, 'fetch_group', fake)
+    run_config(loaded, report_path=tmp_path / "report.csv",
+               progress=lambda m: None)
+    assert seen['queue_timeout'] == QUEUE_TIMEOUT
 
 
 def test_per_group_logs_are_written(tmp_path, monkeypatch):

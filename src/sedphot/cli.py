@@ -97,7 +97,7 @@ from .batch import DEFAULT_STOP_AFTER_FAILURES
 from .catalogs import CATALOG_PROVIDERS
 from .catalogs.legacy import LEGACY_DR_DEFAULT
 from .groups import (DEFAULT_BLEND_RADIUS_AS, DEFAULT_COMPANION_FLUX_RATIO,
-                     MAX_WORKERS as GROUP_MAX_WORKERS)
+                     DOCUMENTED_CONCURRENCY)
 from .images import IMAGE_PROVIDERS
 from .images.legacy import LEGACY_ROUTES, ROUTE_AUTO
 from .pipeline import (run_all, run_catalogs, run_measure, run_overlay,
@@ -467,13 +467,14 @@ def _cmd_batch(args: argparse.Namespace) -> None:
     # wrong place to find out: each job is a 20-60 minute server-side
     # extraction, so a refusal wastes an hour per target and a silent
     # queue makes --workers meaningless for this stage either way.
-    if args.spherex != 'off' and args.workers > SPHEREX_MAX_WORKERS:
-        sys.exit(f"sedphot batch: --spherex {args.spherex} with "
-                 f"--workers {args.workers} would submit up to "
-                 f"{args.workers} concurrent IRSA extractions; the service "
-                 f"admits {SPHEREX_MAX_WORKERS}. Re-run with --workers "
-                 f"{SPHEREX_MAX_WORKERS} or fewer, or sweep the photometry "
-                 f"with --spherex off and fetch the extractions separately.")
+    if args.spherex != 'off' and args.workers > SPHEREX_DOCUMENTED_JOBS:
+        print(f"NOTE --spherex {args.spherex} with --workers {args.workers} "
+              f"submits more than the {SPHEREX_DOCUMENTED_JOBS} extractions "
+              f"the service runs at once; the rest queue rather than being "
+              f"refused. Note this also sets the MEASUREMENT concurrency, "
+              f"which is bounded by what the image archives and the local "
+              f"filesystem tolerate -- a limit that has bitten before and "
+              f"is unrelated to IRSA.")
     with open(args.plan, encoding='utf-8') as handle:
         plan = json.load(handle)
 
@@ -600,10 +601,9 @@ def _run_measure_from_args(args: argparse.Namespace, coord, label,
 # ------------------------------------
 # Parser
 # ------------------------------------
-# IRSA admits two concurrent spectrophotometry jobs. Behavior past that
-# is unverified -- they may queue or be refused -- so the batch verb caps
-# rather than discovering it mid-sweep.
-SPHEREX_MAX_WORKERS = 2
+# Spectrophotometry jobs the service RUNS at once. Additional jobs are
+# queued, not refused, so this is a notice rather than a ceiling.
+SPHEREX_DOCUMENTED_JOBS = 2
 
 
 def _add_spherex_job_args(parser_obj) -> None:
@@ -765,8 +765,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_sxbatch.add_argument('--report', type=str, required=True,
                            help="Per-group report CSV (required)")
     p_sxbatch.add_argument('--workers', type=int, default=1,
-                           help=f"Concurrent jobs; the service admits "
-                                f"{GROUP_MAX_WORKERS} [default: 1]")
+                           help=f"Concurrent jobs. The service runs "
+                                f"{DOCUMENTED_CONCURRENCY} at once and "
+                                f"queues the rest rather than refusing them, "
+                                f"so higher is allowed [default: 1]")
     p_sxbatch.add_argument('--only', nargs='+', default=None,
                            help="Run just these group ids")
     p_sxbatch.add_argument('--no-resume', action='store_true',

@@ -443,3 +443,51 @@ def test_a_science_member_needs_somewhere_to_write(tmp_path, monkeypatch):
     assert result.status == STATUS_ERROR
     assert "out_dir" in result.message
 
+
+# ------------------------------------
+# Queue time is budgeted apart from run time
+# ------------------------------------
+def _phases(sequence):
+    """A poll function returning each phase in turn, then holding."""
+    remaining = list(sequence)
+
+    def poll():
+        phase = remaining.pop(0) if remaining else sequence[-1]
+        return phase, []
+    return poll
+
+
+def test_a_queued_job_does_not_spend_the_run_budget(monkeypatch):
+    # A job that queues far longer than the run timeout, then runs
+    # briefly, must complete: it had not started, so it had consumed no
+    # extraction time. A single wall-clock budget would kill it -- and
+    # would do so more readily the more jobs the caller submitted.
+    clock = [0.0]
+    monkeypatch.setattr(spherex_mod.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(spherex_mod.time, 'sleep',
+                        lambda s: clock.__setitem__(0, clock[0] + 600))
+    poll = _phases(["QUEUED"] * 20 + ["EXECUTING", "COMPLETED"])
+    phase, _ = spherex_mod._wait(poll, interval=1, timeout=1800,
+                                 queue_timeout=36000)
+    assert phase == "COMPLETED"
+    assert clock[0] > 1800          # far past the run budget, still fine
+
+
+def test_a_job_that_never_starts_still_gives_up(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(spherex_mod.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(spherex_mod.time, 'sleep',
+                        lambda s: clock.__setitem__(0, clock[0] + 600))
+    with pytest.raises(TimeoutError, match="never started"):
+        spherex_mod._wait(_phases(["QUEUED"]), interval=1, timeout=1800,
+                          queue_timeout=3600)
+
+
+def test_a_job_that_runs_too_long_still_times_out(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(spherex_mod.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(spherex_mod.time, 'sleep',
+                        lambda s: clock.__setitem__(0, clock[0] + 600))
+    with pytest.raises(TimeoutError, match="still 'EXECUTING'"):
+        spherex_mod._wait(_phases(["EXECUTING"]), interval=1, timeout=1800,
+                          queue_timeout=36000)

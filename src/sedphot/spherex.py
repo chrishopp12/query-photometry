@@ -94,6 +94,17 @@ UWS_NS = {"uws": "http://www.ivoa.net/xml/UWS/v1.0",
 # UWS / Firefly phases that mean "still working".
 _PENDING = {"PENDING", "QUEUED", "EXECUTING", "RUN", "UNKNOWN", "HELD", "SUSPENDED"}
 
+# Of those, the ones that mean "has not started yet". A job waiting its
+# turn has consumed no extraction time, so it is timed against its own
+# budget: the service is allowed to be busy, and killing a job for the
+# depth of someone else's queue abandons work that would have run.
+_QUEUED = {"PENDING", "QUEUED", "HELD", "SUSPENDED"}
+
+# Default ceiling on time spent waiting to start. Generous, because the
+# service is documented to run two jobs at a time and queue the rest --
+# so a deep queue is normal operation, not a fault.
+QUEUE_TIMEOUT = 21600.0    # seconds
+
 SPHEREX_N_MAX = 6.0    # the tool rejects Sersic indices above 6
 SPHEREX_N_MIN = 0.5    # below this the tool is outside its tested range
 
@@ -994,8 +1005,15 @@ def split_group_table(frame, sources, *, tol_arcsec=1.0):
 # Orchestration
 # ------------------------------------
 def _wait(poll_fn, interval=5, timeout=10800, on_update=None, done=None,
-          max_poll_failures=5):
+          max_poll_failures=5, queue_timeout=QUEUE_TIMEOUT):
     """Poll poll_fn -> (phase, payload) until done, or raise on timeout.
+
+    Two budgets, because queueing and running fail differently. The
+    timeout bounds how long a job may RUN; queue_timeout bounds how long
+    it may wait to start. A single wall-clock budget makes the client's
+    patience depend on how many jobs the caller submitted -- the tail of
+    a deep queue would be killed for the service being busy, discarding
+    an extraction that had not begun and would have completed.
 
     Transient poll failures are tolerated up to max_poll_failures in a
     row: a long job is polled hundreds of times, and one dropped HTTP
@@ -1003,6 +1021,7 @@ def _wait(poll_fn, interval=5, timeout=10800, on_update=None, done=None,
     server-side.
     """
     t0 = time.time()
+    queued_since = None
     failures = 0
     while True:
         try:
@@ -1018,6 +1037,18 @@ def _wait(poll_fn, interval=5, timeout=10800, on_update=None, done=None,
                 raise TimeoutError(f"job unreachable after {timeout}s") from e
             time.sleep(interval)
             continue
+        if bool(phase) and phase.upper() in _QUEUED:
+            if queued_since is None:
+                queued_since = time.time()
+            waited = time.time() - queued_since
+            if queue_timeout and waited > queue_timeout:
+                raise TimeoutError(
+                    f"job still {phase!r} after {waited:.0f}s of queueing "
+                    f"(queue_timeout {queue_timeout:g}s); it never started")
+            # The run budget starts when the job does.
+            t0 = time.time()
+        else:
+            queued_since = None
         if on_update:
             on_update(phase, payload)
         if done is not None:
@@ -1034,7 +1065,8 @@ def _wait(poll_fn, interval=5, timeout=10800, on_update=None, done=None,
 def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
                             mjd_range=None, out_csv=None, session=None,
                             ff_session_id=None, poll=5, timeout=10800,
-                            verbose=True, on_job_url=None):
+                            verbose=True, on_job_url=None,
+                            queue_timeout=QUEUE_TIMEOUT):
     """End-to-end: submit -> wait -> download the per-exposure table.
 
     Parameters
@@ -1083,7 +1115,8 @@ def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
                                    ff_session_id=ff_session_id)
     log("submitted; firefly job", fjob)
     df = _await_result(session, fjob, uws_url, poll=poll, timeout=timeout,
-                       log=log, on_job_url=on_job_url)
+                       log=log, on_job_url=on_job_url,
+                       queue_timeout=queue_timeout)
     if out_csv:
         df.to_csv(out_csv, index=False)
         log("wrote", out_csv)
@@ -1091,7 +1124,7 @@ def fetch_spectrophotometry(ra, dec, model=None, bkg_region_size=15,
 
 
 def _await_result(session, fjob, uws_url, *, poll, timeout, log,
-                  on_job_url=None):
+                  on_job_url=None, queue_timeout=QUEUE_TIMEOUT):
     """Wait for a submitted job and return its result table.
 
     Shared by the single-position and joint paths: the difference
@@ -1103,7 +1136,7 @@ def _await_result(session, fjob, uws_url, *, poll, timeout, log,
     if not uws_url:
         _phase, uws_url = _wait(
             lambda: firefly_status(session, fjob)[:2],
-            interval=poll, timeout=timeout,
+            interval=poll, timeout=timeout, queue_timeout=queue_timeout,
             on_update=lambda p, _u: log("firefly", p),
             done=lambda _p, url: bool(url))
     if not uws_url:
@@ -1116,7 +1149,7 @@ def _await_result(session, fjob, uws_url, *, poll, timeout, log,
 
     phase, results = _wait(
         lambda: uws_status(session, uws_url),
-        interval=poll, timeout=timeout,
+        interval=poll, timeout=timeout, queue_timeout=queue_timeout,
         on_update=lambda p, _r: log("uws", p))
     if phase.upper() != "COMPLETED":
         # The service's own explanation, when it offers one: a phase alone
@@ -1145,7 +1178,8 @@ def fetch_group_spectrophotometry(sources, bkg_region_size=15,
                                   mjd_range=None, session=None,
                                   ff_session_id=None, poll=5, timeout=10800,
                                   verbose=True, on_job_url=None,
-                                  tol_arcsec=1.0):
+                                  tol_arcsec=1.0,
+                                  queue_timeout=QUEUE_TIMEOUT):
     """End-to-end joint extraction: upload -> submit -> wait -> split.
 
     Every member is fit simultaneously, so each member's flux depends on
@@ -1201,7 +1235,8 @@ def fetch_group_spectrophotometry(sources, bkg_region_size=15,
         mjd_range=mjd_range, ff_session_id=ff_session_id)
     log(f"submitted {len(sources)} source(s); firefly job {fjob}")
     frame = _await_result(session, fjob, uws_url, poll=poll, timeout=timeout,
-                          log=log, on_job_url=on_job_url)
+                          log=log, on_job_url=on_job_url,
+                          queue_timeout=queue_timeout)
     blocks, complaints = split_group_table(frame, sources,
                                            tol_arcsec=tol_arcsec)
     log(f"split into {len(blocks)} source table(s): "
@@ -1736,6 +1771,7 @@ def fetch_group(sources: list[GroupSource], *, group_id: str,
                 mjd_range: tuple | None = None,
                 poll: float = 5, timeout: float = 10800,
                 tol_arcsec: float = 1.0,
+                queue_timeout: float = QUEUE_TIMEOUT,
                 on_job_url=None) -> ProviderResult:
     """Run ONE joint extraction and write each science member its own table.
 
@@ -1771,6 +1807,11 @@ def fetch_group(sources: list[GroupSource], *, group_id: str,
     tol_arcsec : float
         Position match radius when attributing rows to members.
         [default: 1.0]
+    queue_timeout : float
+        Give up on a job that never starts. Separate from timeout so a
+        deep queue -- normal operation when many jobs are in flight --
+        cannot kill an extraction that has not begun.
+        [default: QUEUE_TIMEOUT]
     on_job_url : callable, optional
         Called with the UWS job URL as soon as it exists.
 
@@ -1826,7 +1867,7 @@ def fetch_group(sources: list[GroupSource], *, group_id: str,
         blocks, joint, echo = fetch_group_spectrophotometry(
             sources, bkg_region_size=bkg_region_size, mjd_range=mjd_range,
             poll=poll, timeout=timeout, tol_arcsec=tol_arcsec,
-            on_job_url=on_job_url)
+            queue_timeout=queue_timeout, on_job_url=on_job_url)
     except Exception as e:
         print(f"  [spherex] group {group_id} fetch failed: "
               f"{type(e).__name__}: {e}")
