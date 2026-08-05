@@ -542,10 +542,12 @@ def _check_measure_args(args: argparse.Namespace, verb: str) -> None:
                     ('--sersic-params', args.sersic_params),
                     ('--sersic-seeing', args.sersic_seeing))
                    if value is not None]
-    # Under `run`, the shape flags also declare the SPHEREx extraction
-    # shape, so they are meaningful with an aperture-mode measurement.
-    # run_all forwards all three to run_spherex, so all three are exempt.
-    if verb == 'run' and getattr(args, 'spherex', 'off') != 'off':
+    # A verb that also runs a SPHEREx extraction reads the shape flags
+    # twice: run_all forwards all three to run_spherex, where they declare
+    # the extraction shape whatever the measurement mode is. The exemption
+    # keys on that forwarding, not on a verb name -- naming the verbs is
+    # what left `batch` refusing flags it goes on to honor.
+    if getattr(args, 'spherex', 'off') != 'off':
         shape_flags = []
     if args.mode != 'sersic' and shape_flags:
         _usage_error(f"sedphot {verb}: {', '.join(shape_flags)} only applies "

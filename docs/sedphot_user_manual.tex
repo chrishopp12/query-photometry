@@ -1343,11 +1343,12 @@ ground-based target, measures nothing at all. Name what you want:
 \texttt{-{}-images legacy cfht sdss panstarrs}.
 \end{warnbox}
 
-One special case: \texttt{-{}-sersic-params} is normally refused under
-\texttt{-{}-mode aperture}, but under \texttt{run} with
-\texttt{-{}-spherex psf} or \texttt{-{}-spherex sersic} it is accepted,
-because there it also declares the shape SPHEREx extracts with. One shape
-per galaxy, shared by both stages.
+One special case: the three shape flags are normally refused under
+\texttt{-{}-mode aperture}, because there they have nothing to act on. But
+whenever SPHEREx is switched on --- under \texttt{run} or \texttt{batch},
+with \texttt{-{}-spherex psf} or \texttt{-{}-spherex sersic} --- they are
+accepted, because they also declare the shape SPHEREx extracts with. One
+shape per galaxy, shared by both stages.
 
 \subsection{\texttt{plan}}
 

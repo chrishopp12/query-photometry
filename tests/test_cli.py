@@ -288,3 +288,71 @@ def test_batch_worker_cap_only_applies_when_spherex_is_on(monkeypatch,
         '--report', str(tmp_path / 'report.json'),
         '--spherex', 'off', '--workers', '8'])
     cli.main()          # no SystemExit: 8 workers is fine without SPHEREx
+
+
+# ------------------------------------
+# The shape-flag exemption follows the SPHEREx stage, not a verb name
+# ------------------------------------
+@pytest.mark.parametrize('flag', [['--sersic-from', 'z'],
+                                  ['--sersic-seeing', '0.9'],
+                                  ['--sersic-params', '2', '1.5', '30', '3']])
+def test_batch_keeps_its_shape_flags_under_aperture_mode(flag, monkeypatch,
+                                                         tmp_path):
+    """`batch` forwards the shape flags to the same SPHEREx stage `run`
+    does, so refusing them refuses a flag that would be honored.
+
+    The exemption used to key on the verb NAME, which silently excluded
+    every verb added after `run` -- this is that defect, reopened by the
+    arrival of `batch`.
+    """
+    import sedphot.batch as batch_mod
+    monkeypatch.setattr(batch_mod, 'run_sweep',
+                        lambda *a, **k: {'merge_problems': [],
+                                         'violations': [],
+                                         'aborted': False, 'n_failed': 0})
+    plan = tmp_path / 'plan.json'
+    plan.write_text('{"targets": [], "cutout_arcsec": 120.0, '
+                    '"scene_radius_arcsec": 120.0}')
+    monkeypatch.setattr(sys, 'argv', [
+        'sedphot', 'batch', '--plan', str(plan),
+        '--registry-dir', str(tmp_path / 'reg'),
+        '--report', str(tmp_path / 'report.csv'),
+        '--mode', 'aperture', '--spherex', 'sersic'] + flag)
+    assert cli.main() is None
+
+
+@pytest.mark.parametrize('verb', ['run', 'batch'])
+def test_shape_flags_still_refused_when_spherex_is_off(verb, monkeypatch,
+                                                       tmp_path, capsys):
+    """The exemption is about the SPHEREx stage being ON. With it off, an
+    aperture-mode shape flag has nothing to act on and is still refused."""
+    plan = tmp_path / 'plan.json'
+    plan.write_text('{"targets": [], "cutout_arcsec": 120.0}')
+    argv = ['sedphot', verb, '--mode', 'aperture',
+            '--sersic-params', '2', '1.5', '30', '3']
+    argv += (TARGET if verb == 'run' else
+             ['--plan', str(plan), '--registry-dir', str(tmp_path / 'reg'),
+              '--report', str(tmp_path / 'report.csv')])
+    monkeypatch.setattr(sys, 'argv', argv)
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    assert 'only applies to --mode sersic' in capsys.readouterr().err
+
+
+def test_remeasure_defaults_agree_between_python_and_the_cli():
+    """A bare remeasure must re-report the quantity the measurement
+    produced, whichever way it is called.
+
+    Two defaults would hand a programmatic caller a different ESTIMATOR --
+    the fitted model's flux instead of the empirical neighbor-subtracted
+    one -- with nothing in the output to say so.
+    """
+    import inspect
+
+    from sedphot.remeasure import remeasure
+
+    python_default = inspect.signature(remeasure).parameters['mode'].default
+    cli_default = cli.build_parser().parse_args(
+        ['remeasure', 'x.provenance.json']).mode
+    assert python_default == cli_default == 'aperture'
