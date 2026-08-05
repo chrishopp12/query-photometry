@@ -17,6 +17,8 @@ Data products (written under <out-dir>/Photometry/):
                                         curve of growth
     QA/growth_curves.png                enclosed flux vs radius, all bands
     <label>_sed.png                     combined SED (catalog + measured)
+    <label>_spherex_sed.png             the same, plus the raw SPHEREx
+                                        spectrophotometry underneath
 
 The scene-panel directory belongs to the caller: pipeline writes them under
 each instrument, `remeasure --write-qa` under QA/remeasure_R<N>as/.
@@ -244,6 +246,7 @@ def plot_sed(
         outpath: str | Path,
         *,
         title: str = "",
+        spherex: pd.DataFrame | None = None,
 ) -> Path:
     """Combined SED: flux vs wavelength for every table given.
 
@@ -257,6 +260,15 @@ def plot_sed(
         Output PNG.
     title : str
         Figure title (the target label).
+    spherex : pandas.DataFrame, optional
+        Raw SPHEREx per-exposure table, as spherex.py writes it: 'lambda'
+        in micron, 'flux' and 'flux_err' in uJy. It cannot ride in
+        `frames` because a schema table carries wavelength in its band
+        NAME (wave_um is a lookup) and spectrophotometry carries it in a
+        column -- 'SPHEREx_000' resolves to NaN and would be dropped.
+        Drawn as a dense under-layer beneath the broadband markers, with
+        no quality cut: this is the table verbatim, and binning and
+        rejection belong to the SED machinery downstream.
 
     Returns
     -------
@@ -267,6 +279,29 @@ def plot_sed(
     fig, ax = plt.subplots(figsize=(10, 6.5))
     plotted = 0
     seen_instruments: list[str] = []
+    spherex_drawn = False
+    if spherex is not None and not spherex.empty:
+        sx_wave = spherex['lambda'].to_numpy(dtype=float)
+        sx_flux = spherex['flux'].to_numpy(dtype=float)
+        sx_err = spherex['flux_err'].to_numpy(dtype=float)
+        ok = np.isfinite(sx_wave) & np.isfinite(sx_flux) & (sx_flux > 0)
+        if not ok.all():
+            print(f"  [sed] not plotted (SPHEREx; no wavelength or "
+                  f"flux <= 0): {int((~ok).sum())} of {ok.size} visits")
+        if ok.any():
+            # Two vectorized calls rather than the per-point loop the
+            # broadbands use: this table is hundreds of visits deep
+            # where a schema frame is tens, and the bars go down in one
+            # neutral color so the dense scatter stays readable.
+            ax.errorbar(sx_wave[ok], sx_flux[ok],
+                        yerr=np.where(np.isfinite(sx_err[ok]), sx_err[ok], 0.0),
+                        fmt='none', ecolor='0.55', elinewidth=0.6, alpha=0.45,
+                        zorder=1)
+            ax.scatter(sx_wave[ok], sx_flux[ok],
+                       c=[_wave_color(w) for w in sx_wave[ok]],
+                       s=9, linewidths=0, alpha=0.85, zorder=2)
+            plotted += int(ok.sum())
+            spherex_drawn = True
     for label, df in frames.items():
         if df is None or df.empty:
             continue
@@ -294,11 +329,14 @@ def plot_sed(
                         mfc='none' if open_face else color,
                         mec=color if open_face else 'k',
                         mew=1.2 if open_face else 0.4,
-                        ecolor=color, elinewidth=1.0, capsize=2)
+                        ecolor=color, elinewidth=1.0, capsize=2, zorder=3)
             plotted += 1
     handles = [Line2D([], [], marker=INSTRUMENT_MARKER.get(inst, 'h'),
                       linestyle='', color='0.45', mec='k', label=inst)
                for inst in sorted(seen_instruments)]
+    if spherex_drawn:
+        handles.append(Line2D([], [], marker='.', linestyle='', color='0.45',
+                              label='SPHEREx (visits)'))
     handles += [
         Line2D([], [], marker='o', linestyle='', color='0.45', mec='k',
                label='catalog (filled)'),

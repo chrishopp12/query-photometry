@@ -893,7 +893,8 @@ def _resolve_label(label: str | None, phot_dir: Path) -> str:
 # ------------------------------------
 # Combined SED plot
 # ------------------------------------
-def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
+def run_sed(label: str | None, out_dir: str | Path, *,
+            spherex: bool = False) -> Path | None:
     """Combined SED figure from whatever schema tables exist in out_dir.
 
     Every table's rows land on one axis, so the figure warns when they do
@@ -907,23 +908,41 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
         <stem>_measured.csv family exists.
     out_dir : str or Path
         Galaxy directory.
+    spherex : bool
+        Draw the SPHEREx spectrophotometry under the broadbands and write
+        <label>_spherex_sed.png. A separate file, not a replacement: the
+        broadband-only figure stays the one every galaxy already carries.
+        Refuses rather than writing a SPHEREx-named figure with no
+        SPHEREx in it. [default: False]
 
     Returns
     -------
     figure_path : Path or None
-        The written PNG, or None when no tables were found.
+        The written PNG, or None when nothing was found to plot.
     """
     from .qa import plot_sed
+    from .spherex import find_table
 
     phot_dir = Path(out_dir) / "Photometry"
     label = _resolve_label(label, phot_dir)
+
+    spherex_frame = None
+    if spherex:
+        table = find_table(phot_dir / "SPHEREx")
+        if table is None:
+            print(f"  [sed] no sidecar-backed SPHEREx table under "
+                  f"{phot_dir / 'SPHEREx'}; nothing written")
+            return None
+        spherex_frame = pd.read_csv(table)
+        print(f"  [sed] SPHEREx from {table.name} "
+              f"({len(spherex_frame)} visits)")
 
     frames = {}
     for kind in ("catalog", "measured"):
         path = phot_dir / f"{label}_{kind}.csv"
         if path.exists():
             frames[kind] = pd.read_csv(path)
-    if not frames:
+    if not frames and spherex_frame is None:
         print(f"  [sed] no tables for {label!r} in {phot_dir}")
         return None
 
@@ -941,7 +960,10 @@ def run_sed(label: str | None, out_dir: str | Path) -> Path | None:
         print(f"  [sed] WARNING {detail} -- the plotted fluxes are NOT on a "
               f"common extinction scale")
 
-    out = plot_sed(frames, phot_dir / f"{label}_sed.png", title=label)
+    stem = f"{label}_spherex_sed.png" if spherex else f"{label}_sed.png"
+    out = plot_sed(frames, phot_dir / stem,
+                   title=f"{label} + SPHEREx" if spherex else label,
+                   spherex=spherex_frame)
     print(f"  [sed] wrote {out}")
     return out
 
